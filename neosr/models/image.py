@@ -924,8 +924,10 @@ class image(base):
                 # add original lq and gt to results folder, once
                 if self.opt["val"].get("save_lq", True):
                     save_lq_img_path = Path(v_folder) / img_name / f"{img_name}_lq.png"
-                    original_lq = tensor2img([visuals["lq"]])
-                    imwrite(original_lq, str(save_lq_img_path))
+
+                    if not Path.exists(save_lq_img_path):
+                        original_lq = tensor2img([visuals["lq"]])
+                        imwrite(original_lq, str(save_lq_img_path))
 
             # check for dataset option save_tb, to save images on tb_logger
             if self.is_train:
@@ -942,7 +944,7 @@ class image(base):
             if with_metrics:
                 # calculate metrics
                 for name, opt_ in self.opt["val"]["metrics"].items():
-                    with torch.inference_mode():
+                    with torch.no_grad():
                         self.metric_results[name] += calculate_metric(metric_data, opt_)  # type: ignore[reportOperatorIssue]
             if use_pbar:
                 pbar.update(1)  # type: ignore[reportPossiblyUnboundVariable]
@@ -953,7 +955,7 @@ class image(base):
 
         if with_metrics:
             for metric in self.metric_results:
-                self.metric_results[metric] = self.metric_results[metric] / _idx + 1  # type: ignore[reportPossiblyUnboundVariable]
+                self.metric_results[metric] /= _idx + 1  # type: ignore[reportPossiblyUnboundVariable]
                 # update the best metric result
                 self._update_best_metric_result(
                     dataset_name, metric, self.metric_results[metric], current_iter

@@ -34,8 +34,8 @@ from neosr.utils import (
 from neosr.utils.options import copy_opt_file, parse_options
 
 # minimum supported python version
-if sys.version_info.major != 3 or sys.version_info.minor != 12:
-    msg = f"{tc.red}Python version 3.12 is required.{tc.end}"
+if sys.version_info.major != 3 or sys.version_info.minor != 13:
+    msg = f"{tc.red}Python version 3.13 is required.{tc.end}"
     raise ValueError(msg)
 
 
@@ -126,7 +126,7 @@ def create_train_val_dataloader(
 def load_resume_state(opt: dict[str, Any]):
     resume_state_path = None
     if opt["auto_resume"]:
-        state_path = Path("experiments") / opt["name"] / "training_states"
+        state_path = opt["path"]["training_states"]
         if Path.is_dir(state_path):
             states = list(
                 scandir(state_path, suffix="state", recursive=False, full_path=False)
@@ -191,6 +191,7 @@ def train_pipeline(root_path: str) -> None:
         torch.set_float32_matmul_precision("medium")
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cuda.matmul.allow_fp16_accumulation = True
 
     # load resume states if necessary
     resume_state = load_resume_state(opt)

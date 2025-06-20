@@ -1,5 +1,5 @@
 
-name = "train_span"
+name = "train_microsr"
 model_type = "image"
 scale = 4
 use_amp = true
@@ -12,7 +12,7 @@ fast_matmul = true
 type = "paired"
 dataroot_gt = 'C:\datasets\gt\'
 dataroot_lq = 'C:\datasets\lq\'
-patch_size = 64
+patch_size = 32
 batch_size = 8
 #accumulate = 1
 augmentation = [ "none", "mixup", "cutmix", "resizemix", "cutblur" ]
@@ -41,8 +41,8 @@ val_freq = 1000
 #pretrain_network_d = 'experiments\pretrain_d.pth'
 
 [network_g]
-type = "span"
-#type = "span_fast"
+type = "microsr"
+#type = "microsr_light"
 
 [network_d]
 type = "metagan"
