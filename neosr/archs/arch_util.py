@@ -114,6 +114,23 @@ class DySample(nn.Module):
 
         return output
 
+def pixel_unshuffle_width(x, downscale_factor):
+    # _, _, h, w = x.shape
+    # assert w % downscale_factor == 0
+    # #nw = w // downscale_factor
+    # channels = []
+    # for i in range(downscale_factor):
+    #     channels.append(x[:, :, ::, i::downscale_factor])
+    # return torch.cat(channels, dim=1)
+    scale= downscale_factor
+    b, c, hh, hw = x.size()
+    out_channel = c * (scale)
+    assert hw % scale == 0
+    #h = hh // scale
+    w = hw // scale
+    x_view = x.view(b, c, hh, w, scale)
+    return x_view.permute(0, 1, 4, 2, 3).reshape(b, out_channel, hh, w)
+
 
 def drop_path(
     x, drop_prob: float = 0.0, training: bool = False, scale_by_keep: bool = True
@@ -164,3 +181,16 @@ to_2tuple = _ntuple(2)
 to_3tuple = _ntuple(3)
 to_4tuple = _ntuple(4)
 to_ntuple = _ntuple
+
+def normal_init(module, mean=0, std=1, bias=0):
+    if hasattr(module, 'weight') and module.weight is not None:
+        nn.init.normal_(module.weight, mean, std)
+    if hasattr(module, 'bias') and module.bias is not None:
+        nn.init.constant_(module.bias, bias)
+
+
+def constant_init(module, val, bias=0):
+    if hasattr(module, 'weight') and module.weight is not None:
+        nn.init.constant_(module.weight, val)
+    if hasattr(module, 'bias') and module.bias is not None:
+        nn.init.constant_(module.bias, bias)

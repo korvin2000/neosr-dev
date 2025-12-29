@@ -102,15 +102,16 @@ def build_dataloader(
             multiplier = 1 if num_gpu == 0 else num_gpu
             batch_size = dataset_opt["batch_size"] * multiplier
             num_workers *= multiplier
-        dataloader_args = {
-            "dataset": dataset,
-            "batch_size": batch_size,
-            "shuffle": False,
-            "num_workers": num_workers,
-            "sampler": sampler,
-            "prefetch_factor": 8,
-            "drop_last": True,
-        }
+            prefetch_factor = None if num_workers == 0 else 2
+            dataloader_args = {
+                "dataset": dataset,
+                "batch_size": batch_size,
+                "shuffle": False,
+                "num_workers": num_workers,
+                "sampler": sampler,
+                "prefetch_factor": prefetch_factor,
+                "drop_last": True,
+            }
         if sampler is None:
             dataloader_args["shuffle"] = True
         dataloader_args["worker_init_fn"] = (
@@ -128,8 +129,14 @@ def build_dataloader(
             "num_workers": 0,
         }
     else:
-        msg = f"Wrong dataset phase: {phase}. Supported ones are 'train', 'val' and 'test'."
-        raise ValueError(msg)
+        raise ValueError(
+            f"Wrong dataset phase: {phase}. Supported ones are 'train', 'val' and 'test'.")
+
+        dataloader_args['pin_memory'] = dataset_opt.get('pin_memory', True)
+        if dataset_opt.get('num_worker_per_gpu', 'auto') == 'auto' or None:
+            num_workers = psutil.cpu_count(logical=False)
+        default_persistent = True if num_workers > 0 else False
+        dataloader_args['persistent_workers'] = dataset_opt.get('persistent_workers', default_persistent)
 
     dataloader_args["pin_memory"] = dataset_opt.get("pin_memory", False)
     dataloader_args["persistent_workers"] = dataset_opt.get("persistent_workers", False)

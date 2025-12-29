@@ -105,8 +105,11 @@ class otf(image):  # type: ignore[reportGeneralTypeIssues]
             ori_h, ori_w = self.gt.size()[2:4]
 
             # ----------------------- The first degradation process ----------------------- #
+
+
             # blur
             out = filter2D(self.gt, self.kernel1)
+
             # random resize
             updown_type = random.choices(
                 ["up", "down", "keep"],
@@ -124,6 +127,7 @@ class otf(image):  # type: ignore[reportGeneralTypeIssues]
                 scale = 1
             mode = random.choice(["area", "bilinear", "bicubic"])
             out = F.interpolate(out, scale_factor=scale, mode=mode)
+
             # add noise
             gray_noise_prob = self.opt["datasets"]["train"].get("gray_noise_prob", None)
             if rng.uniform() < self.opt["datasets"]["train"].get(  # type: ignore[attr-defined]
@@ -139,20 +143,19 @@ class otf(image):  # type: ignore[reportGeneralTypeIssues]
             else:
                 out = random_add_poisson_noise_pt(
                     out,
-                    scale_range=self.opt["datasets"]["train"].get(
-                        "poisson_scale_range", None
-                    ),
+                    scale_range=self.opt['poisson_scale_range'],
                     gray_prob=gray_noise_prob,
                     clip=True,
-                    rounds=False,
-                )
+                    rounds=False)
+
+
             # JPEG compression
-            jpeg_p = out.new_zeros(out.size(0)).uniform_(  # type: ignore[attr-defined]
-                *self.opt["datasets"]["train"].get("jpeg_range", None)
-            )
-            # clamp to [0, 1], otherwise JPEGer will result in unpleasant artifacts
-            out = torch.clamp(out, 0, 1)
-            out = self.jpeger(out, quality=jpeg_p)
+            if self.opt.get('jpeg_compress', True):
+               jpeg_p = out.new_zeros(out.size(0)).uniform_(*self.opt['jpeg_range'])
+
+               # clamp to [0, 1], otherwise JPEGer will result in unpleasant artifacts
+               out = torch.clamp(out, 0, 1)
+               out = self.jpeger(out, quality=jpeg_p)
 
             # ----------------------- The second degradation process ----------------------- #
             # blur
@@ -201,13 +204,10 @@ class otf(image):  # type: ignore[reportGeneralTypeIssues]
             else:
                 out = random_add_poisson_noise_pt(
                     out,
-                    scale_range=self.opt["datasets"]["train"].get(
-                        "poisson_scale_range2", None
-                    ),
+                    scale_range=self.opt['poisson_scale_range2'],
                     gray_prob=gray_noise_prob,
                     clip=True,
-                    rounds=False,
-                )
+                    rounds=False)
 
             # JPEG compression + the final sinc filter
             # We also need to resize images to desired sizes. We group [resize back + sinc filter] together
@@ -226,11 +226,11 @@ class otf(image):  # type: ignore[reportGeneralTypeIssues]
                 )
                 out = filter2D(out, self.sinc_kernel)
                 # JPEG compression
-                jpeg_p = out.new_zeros(out.size(0)).uniform_(  # type: ignore[attr-defined]
-                    *self.opt["datasets"]["train"].get("jpeg_range2", None)
-                )
-                out = torch.clamp(out, 0, 1)
-                out = self.jpeger(out, quality=jpeg_p)
+                if self.opt.get('jpeg_compress', True):
+                    jpeg_p = out.new_zeros(out.size(0)).uniform_(
+                        *self.opt['jpeg_range2'])
+                    out = torch.clamp(out, 0, 1)
+                    out = self.jpeger(out, quality=jpeg_p)
             else:
                 # JPEG compression
                 jpeg_p = out.new_zeros(out.size(0)).uniform_(  # type: ignore[attr-defined]
@@ -246,6 +246,7 @@ class otf(image):  # type: ignore[reportGeneralTypeIssues]
                     mode=mode,
                 )
                 out = filter2D(out, self.sinc_kernel)
+
 
             # clamp and round
             self.lq = torch.clamp((out * 255.0).round(), 0, 255) / 255.0

@@ -7,6 +7,7 @@ from typing import Any
 from neosr.utils import get_root_logger, scandir
 from neosr.utils.registry import MODEL_REGISTRY
 
+
 __all__ = ["build_model"]
 
 # automatically scan and import model modules for registry
@@ -34,4 +35,10 @@ def build_model(opt: dict[str, Any]) -> Callable | object:
     model = MODEL_REGISTRY.get(opt["model_type"])(opt)  # type: ignore[operator]
     logger = get_root_logger()
     logger.info(f"Using model [{model.__class__.__name__}].")
+    total_params = sum(p.numel() for p in model.net_g.parameters())
+    logger.info(f'[{model.__class__.__name__}] generator parameters: {total_params:,d}')
+    if model.net_d is not None:
+        total_params = sum(p.numel() for p in model.net_d.parameters())
+        logger.info(f'[{model.__class__.__name__}] discriminator parameters: {total_params:,d}')
+
     return model

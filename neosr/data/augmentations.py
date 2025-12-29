@@ -221,7 +221,7 @@ def apply_augment(
         "cutblur",
     ),
     prob: tuple[float, float, float, float, float] = (0.1, 0.3, 0.2, 0.7, 0.8),
-    multi_prob: float = 0.3,
+    multi_prob: float = 0.3
 ) -> tuple[Tensor, Tensor]:
     r"""Applies Augmentations.
 
@@ -289,4 +289,5 @@ def apply_augment(
             F.interpolate(img_lq, scale_factor=1 / scale, mode="bicubic"), 0, 1
         )
 
-    return img_gt, img_lq
+
+return img_gt, img_lq

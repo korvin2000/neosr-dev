@@ -75,7 +75,7 @@ class single(data.Dataset):
             img_lq = imfrombytes(img_bytes, float32=True)
         except AttributeError:
             raise AttributeError(lq_path)
-
+            
         # BGR to RGB, HWC to CHW, numpy to tensor
         img_lq = img2tensor(img_lq, bgr2rgb=True, float32=True, color=self.color)
         # normalize

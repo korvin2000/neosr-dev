@@ -945,7 +945,7 @@ class UpsampleOneStep(nn.Sequential):
         flops = h * w * self.num_feat * 3 * 9
         return flops
 
-
+@ARCH_REGISTRY.register()
 class srformer(nn.Module):
     r"""SRFormer
         A PyTorch implement of : `SRFormer: Permuted Self-Attention for Single Image Super-Resolution`, based on Swin Transformer.
@@ -990,6 +990,7 @@ class srformer(nn.Module):
         img_size=64,
         patch_size=1,
         in_chans=3,
+        out_chans=3,
         embed_dim=60,
         depths=(6, 6, 6, 6),
         num_heads=(6, 6, 6, 6),
@@ -1012,7 +1013,7 @@ class srformer(nn.Module):
     ):
         super(srformer, self).__init__()
         num_in_ch = in_chans
-        num_out_ch = in_chans
+        num_out_ch = out_chans
         num_feat = 64
         self.img_range = img_range
         if in_chans == 3:

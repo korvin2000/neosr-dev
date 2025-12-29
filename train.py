@@ -32,6 +32,7 @@ from neosr.utils import (
     tc,
 )
 from neosr.utils.options import copy_opt_file, parse_options
+from torchprofile import profile_macs
 
 # minimum supported python version
 if sys.version_info.major != 3 or sys.version_info.minor != 13:
@@ -242,6 +243,17 @@ def train_pipeline(root_path: str) -> None:
     # create model
     model = build_model(opt)
 
+    input_size= opt.get('input_size')
+    if input_size is not None:
+        inputs = torch.randn(1, input_size['in_channels'], input_size['size'], input_size['size'])
+        macs = profile_macs(model.net_g, inputs)
+        logger.info(f'Generator MACs: {macs:,d}')
+        if model.net_d is not None:
+            inputs = torch.randn(1, input_size['out_channels'], input_size['size'], input_size['size'])
+            macs = profile_macs(model.net_d, inputs)
+            logger.info(f'Discriminator MACs: {macs:,d}')
+
+
     if resume_state:  # resume training
         # handle optimizers and schedulers
         model.resume_training(resume_state)  # type: ignore[reportAttributeAccessIssue,attr-defined]
@@ -316,6 +328,9 @@ def train_pipeline(root_path: str) -> None:
     iter_timer = AvgTimer()
     start_time = time.time()
 
+    # logging file with only losses
+    log_path = osp.join(opt["root_path"], "experiments", opt["name"])
+
     try:
         for epoch in range(start_epoch, total_epochs + 1):
             train_sampler.set_epoch(epoch)  # type: ignore[attr-defined]
@@ -335,6 +350,8 @@ def train_pipeline(root_path: str) -> None:
                 model.update_learning_rate(  # type: ignore[reportFunctionMemberAccess,attr-defined]
                     current_iter, warmup_iter=opt["train"].get("warmup_iter", -1)
                 )
+                model.update_loss_weights(current_iter)
+
                 iter_timer.record()
                 if current_iter == 1:
                     # reset start time in msg_logger for more accurate eta_time
@@ -349,13 +366,26 @@ def train_pipeline(root_path: str) -> None:
 
                 if current_iter_log % print_freq == 0:
                     log_vars = {"epoch": epoch, "iter": current_iter_log}
-                    log_vars.update({"lrs": model.get_current_learning_rate()})  # type: ignore[reportFunctionMemberAccess,attr-defined]
+                    log_vars.update({"lrs": model.get_current_learning_rate()})
+                    log_vars.update({"gan_weight": model.get_current_gan_weight()})
                     log_vars.update({
                         "time": iter_timer.get_avg_time()
                         # "data_time": data_timer.get_avg_time(),
                     })
+                    iter_time = log_vars['time']
+
                     log_vars.update(model.get_current_log())  # type: ignore[reportFunctionMemberAccess,attr-defined]
                     msg_logger(log_vars)
+
+                    # iters per second
+                    iter_time = iter_time * 100
+                    iter_time = 100 / iter_time
+                    accumulate = opt["datasets"]["train"].get("accumulate", 1)
+                    iter_time = iter_time / accumulate
+                    if iter_time < 0.5 and "debug" not in opt["name"]:
+                        logger.info("Interrupted, saving latest models.")
+                        model.save(epoch, int(current_iter_log))
+                        sys.exit(0)
 
                 # save models and training states
                 if current_iter_log % save_checkpoint_freq == 0:
@@ -418,10 +448,15 @@ def train_pipeline(root_path: str) -> None:
                 tb_logger,
                 opt["val"].get("save_img", True),
             )
+
     if tb_logger:
+        logger.info('Closing Logger')
         tb_logger.close()
+        logger.info('Logger Closed')
 
 
 if __name__ == "__main__":
     root_path = Path.resolve(Path(__file__) / osp.pardir)
+    torch.multiprocessing.set_start_method('spawn')
+    #torch.multiprocessing.Queue(200)
     train_pipeline(str(root_path))

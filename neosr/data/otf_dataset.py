@@ -94,17 +94,20 @@ class otf(data.Dataset):
         # a list for each kernel probability
         self.kernel_prob = opt.get("kernel_prob")
         self.blur_sigma = opt.get("blur_sigma")
+        self.blur_sigmay = opt.get("blur_sigmay", self.blur_sigma)
         # betag used in generalized Gaussian blur kernels
         self.betag_range = opt.get("betag_range")
         # betap used in plateau blur kernels
         self.betap_range = opt.get("betap_range")
         self.sinc_prob = opt.get("sinc_prob")  # the probability for sinc filters
 
+        self.rotation = opt.get('rotation', [-math.pi, math.pi])
         # blur settings for the second degradation
         self.blur_kernel_size2 = opt.get("blur_kernel_size2")
         self.kernel_list2 = opt.get("kernel_list2")
         self.kernel_prob2 = opt.get("kernel_prob2")
         self.blur_sigma2 = opt.get("blur_sigma2")
+        self.blur_sigmay2 = opt.get('blur_sigmay2', self.blur_sigma2)
         self.betag_range2 = opt.get("betag_range2")
         self.betap_range2 = opt.get("betap_range2")
         self.sinc_prob2 = opt.get("sinc_prob2")
@@ -206,8 +209,7 @@ class otf(data.Dataset):
                 self.kernel_prob,
                 kernel_size,
                 self.blur_sigma,
-                self.blur_sigma,
-                [-math.pi, math.pi],
+                self.blur_sigmay, self.rotation,
                 self.betag_range,
                 self.betap_range,
                 noise_range=None,
@@ -230,8 +232,7 @@ class otf(data.Dataset):
                 self.kernel_prob2,
                 kernel_size,
                 self.blur_sigma2,
-                self.blur_sigma2,
-                [-math.pi, math.pi],
+                self.blur_sigmay2, self.rotation,
                 self.betag_range2,
                 self.betap_range2,
                 noise_range=None,

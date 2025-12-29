@@ -42,6 +42,9 @@ class gan_loss(nn.Module):
             msg = f"GAN type {self.gan_type} is not implemented."
             raise NotImplementedError(msg)
 
+    def update_loss_weight(self, weight):
+        self.loss_weight = weight
+
     def get_target_label(self, net_output: Tensor, target_is_real: bool) -> Tensor:
         """Get target label.
 
