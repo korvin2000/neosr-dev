@@ -1,0 +1,23 @@
+model = "gpt-5.2-codex-xmas"
+model_reasoning_effort = "high"
+approval_policy = "never"
+promt_techniques=chain of thought; program of thought; tree of thoughs (ToT);contrastive reasoning; Chain of Draft (CoD); Chain-Of-Reasoning (CoR); Self-Refine; Chain Of Verification
+
+[code]
+optimize = "speed"
+reliability = "high"
+comments = "medium"
+
+[project]
+language = "python"
+machine_learning_library = "PyTorch"
+documenation = "Markdown"
+
+[formatting]
+quote-style = "double"
+indent-style = "space"
+indent = 4
+max_line_length = 88
+split-on-trailing-comma = false
+skip-magic-trailing-comma = true
+line-ending = "lf"
