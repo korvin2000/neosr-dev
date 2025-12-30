@@ -9,6 +9,7 @@ import re
 import sys
 import time
 from os import path as osp
+from os import popen
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Union
 
@@ -224,7 +225,8 @@ def generate_calib_data(opt, calib_iters: int) -> data.DataLoader:
         num_samples,
         opt.get('in_chans', 3),
         opt['datasets']['train']['patch_size'],
-        opt['datasets']['train']['patch_size']
+        opt['datasets']['train']['patch_size'],
+        device="cpu",
     ) * 0.5 + 0.25
 
     # Build dataset wrapper
@@ -503,6 +505,7 @@ def train_pipeline(project_root: str) -> None:
 
     # logging file with only losses
     log_path = osp.join(opt["root_path"], "experiments", opt["name"])
+    current_iter_log = 0
 
     try:
         for epoch in range(start_epoch, total_epochs + 1):
