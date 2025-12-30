@@ -118,6 +118,32 @@ class base:
     def get_current_log(self) -> dict[str, Any]:
         return self.log_dict
 
+    def update_loss_weights(self, current_iter: int) -> None:
+        """Update loss weights during training.
+
+        This is a no-op hook for models that do not support scheduled
+        loss-weight updates. Sub-classes can override this to implement
+        custom scheduling without requiring train.py to guard attribute
+        access.
+
+        Args:
+        ----
+            current_iter (int): Current training iteration.
+        """
+
+    def get_current_gan_weight(self) -> float:
+        """Return the current GAN loss weight if available.
+
+        Returns a floating-point weight for logging. Models without a GAN
+        criterion expose a safe default of ``0.0`` so that training
+        instrumentation does not raise ``AttributeError`` when logging.
+        """
+
+        cri_gan = getattr(self, "cri_gan", None)
+        if cri_gan is not None and hasattr(cri_gan, "loss_weight"):
+            return float(cri_gan.loss_weight)
+        return 0.0
+
     def model_to_device(self, net: nn.Module) -> nn.Module:
         """Model to device. It also warps models with DistributedDataParallel
         or DataParallel.
