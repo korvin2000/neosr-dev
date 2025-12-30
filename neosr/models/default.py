@@ -108,16 +108,19 @@ class default():
         # for amp
         self.use_amp = self.opt.get('use_amp', False) is True
         self.amp_dtype = torch.bfloat16 if self.opt.get('bfloat16', False) is True else torch.float16
-        self.gradscaler = torch.cuda.amp.GradScaler(enabled = self.use_amp, init_scale=2.**5)
+        amp_scaling_enabled = self.use_amp and self.amp_dtype == torch.float16
+        self.gradscaler = torch.cuda.amp.GradScaler(
+            enabled=amp_scaling_enabled, init_scale=2.0 ** 5 if amp_scaling_enabled else 1.0
+        )
 
         # LQ matching for Color/Luma losses
         self.match_lq = self.opt['train'].get('match_lq', False)
         
         # initialise counter of how many batches has to be accumulated
         self.n_accumulated = 0
-        self.accum_iters = self.opt["datasets"]["train"].get("accumulate", 1) 
-        if self.accum_iters == 0 or self.accum_iters == None:
-            self.accum_ters = 1
+        self.accum_iters = self.opt["datasets"]["train"].get("accumulate", 1) or 1
+        if self.accum_iters < 1:
+            self.accum_iters = 1
 
         # define losses
         if train_opt.get('loss_interaction') == True:
@@ -328,9 +331,7 @@ class default():
 
         # increment accumulation counter
         self.n_accumulated += 1
-        # reset accumulation counter
-        if self.n_accumulated >= self.accum_iters:
-            self.n_accumulated = 0
+        accumulate_reached = self.n_accumulated >= self.accum_iters
 
         with torch.autocast(device_type='cuda', dtype=self.amp_dtype, enabled=self.use_amp):
 
@@ -441,7 +442,7 @@ class default():
         l_g_total = l_g_total / self.accum_iters
         self.gradscaler.scale(l_g_total).backward()
 
-        if (self.n_accumulated) % self.accum_iters == 0:
+        if accumulate_reached:
             # gradient clipping on generator
             if self.gradclip:
                 self.gradscaler.unscale_(self.optimizer_g)
@@ -483,7 +484,7 @@ class default():
                 self.gradscaler.scale(l_d_fake).backward()
 
             # clip and step() discriminator
-            if (self.n_accumulated) % self.accum_iters == 0:
+            if accumulate_reached:
                 # gradient clipping on discriminator
                 if self.gradclip:
                     self.gradscaler.unscale_(self.optimizer_d)
@@ -497,11 +498,12 @@ class default():
         
 
         # update gradscaler and zero grads
-        if (self.n_accumulated) % self.accum_iters == 0:
+        if accumulate_reached:
             self.gradscaler.update()
             self.optimizer_g.zero_grad(set_to_none=True)
             if self.net_d is not None:
                 self.optimizer_d.zero_grad(set_to_none=True)
+            self.n_accumulated = 0
 
         # error if NaN
         if torch.isnan(l_g_total):
