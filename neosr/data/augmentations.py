@@ -289,5 +289,4 @@ def apply_augment(
             F.interpolate(img_lq, scale_factor=1 / scale, mode="bicubic"), 0, 1
         )
 
-
-return img_gt, img_lq
+    return img_gt, img_lq
