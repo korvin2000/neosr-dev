@@ -11,9 +11,13 @@ from neosr.utils.registry import MODEL_REGISTRY
 __all__ = ["build_model"]
 
 # automatically scan and import model modules for registry
-# scan all the files under the 'models' folder and collect files
+# scan all the python files under the 'models' folder and collect files
 model_folder = Path(Path(__file__).resolve()).parent
-model_filenames = [Path(Path(v).name).stem for v in scandir(str(model_folder))]
+model_filenames = [
+    Path(v).stem
+    for v in scandir(str(model_folder), suffix=".py")
+    if Path(v).stem != "__init__"
+]
 
 # import all the model modules
 _model_modules = [
