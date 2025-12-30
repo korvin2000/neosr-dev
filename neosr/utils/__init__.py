@@ -5,6 +5,7 @@ from neosr.utils.color_util import (
     ycbcr2bgr,
     ycbcr2rgb,
 )
+from neosr.data.file_client import FileClient
 from neosr.utils.diffjpeg import DiffJPEG  # type: ignore[attr-defined]
 from neosr.utils.img_util import (
     crop_border,
@@ -48,6 +49,8 @@ __all__ = [
     "check_disk_space",
     "check_resume",
     "crop_border",
+    # file client
+    "FileClient",
     "get_root_logger",
     "get_time_str",
     "imfrombytes",
