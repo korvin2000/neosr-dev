@@ -1,5 +1,5 @@
 <div align="center">
-<img src="https://github.com/neosr-project/neosr/assets/132400428/54e8f7fa-8705-4ea3-8b6e-c6227117044d?sanitize=true" width="480"></img>
+<img src="./licenses/assets/neosr.jpg" alt="NEOSR Logo" width="600"></img>
 
 <a href="https://discord.gg/NN2HGtJ3d6"><img src="https://github.com/neosr-project/neosr/assets/132400428/4bd54b1d-4639-4940-b9c7-b3f212aea5c8?sanitize=true" width="100"></img></a><br>
 Join our <a href="https://discord.gg/NN2HGtJ3d6">Discord</a>
