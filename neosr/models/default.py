@@ -14,7 +14,6 @@ from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 
 from neosr.archs import build_network
 from neosr.losses import build_loss
-from neosr.optimizers import build_optimizer
 from neosr.losses.wavelet_guided import wavelet_guided
 from neosr.losses.loss_util import get_refined_artifact_map
 from neosr.data.augmentations import apply_augment
