@@ -1,0 +1,525 @@
+{
+  "Ultra light": [
+    {
+      "architecture": "superultracompact",
+      "avg_sec_per_image": 0.001125,
+      "avg_vram_gb": 0.105,
+      "weighted_score": 0.058256
+    },
+    {
+      "architecture": "sebica_mini",
+      "avg_sec_per_image": 0.004825,
+      "avg_vram_gb": 0.1225,
+      "weighted_score": 0.069546
+    },
+    {
+      "architecture": "ultracompact",
+      "avg_sec_per_image": 0.0036,
+      "avg_vram_gb": 0.125,
+      "weighted_score": 0.07037
+    },
+    {
+      "architecture": "compact",
+      "avg_sec_per_image": 0.0067,
+      "avg_vram_gb": 0.1275,
+      "weighted_score": 0.07314
+    },
+    {
+      "architecture": "sebica",
+      "avg_sec_per_image": 0.005525,
+      "avg_vram_gb": 0.14,
+      "weighted_score": 0.079486
+    },
+    {
+      "architecture": "rtmosr_ul",
+      "avg_sec_per_image": 0.0018,
+      "avg_vram_gb": 0.163333,
+      "weighted_score": 0.090643
+    },
+    {
+      "architecture": "artcnn_r8f48",
+      "avg_sec_per_image": 0.0075,
+      "avg_vram_gb": 0.165,
+      "weighted_score": 0.094125
+    },
+    {
+      "architecture": "rtmosr_l",
+      "avg_sec_per_image": 0.002033,
+      "avg_vram_gb": 0.19,
+      "weighted_score": 0.105415
+    },
+    {
+      "architecture": "spanplus_sts",
+      "avg_sec_per_image": 0.006325,
+      "avg_vram_gb": 0.215,
+      "weighted_score": 0.121096
+    }
+  ],
+  "Light": [
+    {
+      "architecture": "artcnn_r8f64",
+      "avg_sec_per_image": 0.010375,
+      "avg_vram_gb": 0.215,
+      "weighted_score": 0.122919
+    },
+    {
+      "architecture": "plksr_tiny",
+      "avg_sec_per_image": 0.025,
+      "avg_vram_gb": 0.2375,
+      "weighted_score": 0.141875
+    },
+    {
+      "architecture": "safmn",
+      "avg_sec_per_image": 0.0226,
+      "avg_vram_gb": 0.2575,
+      "weighted_score": 0.151795
+    },
+    {
+      "architecture": "seemore_t",
+      "avg_sec_per_image": 0.030075,
+      "avg_vram_gb": 0.265,
+      "weighted_score": 0.159284
+    },
+    {
+      "architecture": "spanplus_st",
+      "avg_sec_per_image": 0.01015,
+      "avg_vram_gb": 0.315,
+      "weighted_score": 0.177818
+    },
+    {
+      "architecture": "plksr",
+      "avg_sec_per_image": 0.076075,
+      "avg_vram_gb": 0.2625,
+      "weighted_score": 0.178609
+    },
+    {
+      "architecture": "rtmosr",
+      "avg_sec_per_image": 0.0036,
+      "avg_vram_gb": 0.325,
+      "weighted_score": 0.18037
+    },
+    {
+      "architecture": "realplksr_tiny",
+      "avg_sec_per_image": 0.0401,
+      "avg_vram_gb": 0.3125,
+      "weighted_score": 0.18992
+    },
+    {
+      "architecture": "mosr_t",
+      "avg_sec_per_image": 0.017275,
+      "avg_vram_gb": 0.345,
+      "weighted_score": 0.197524
+    },
+    {
+      "architecture": "artcnn_r16f96",
+      "avg_sec_per_image": 0.04895,
+      "avg_vram_gb": 0.325,
+      "weighted_score": 0.200778
+    },
+    {
+      "architecture": "lmlt_tiny",
+      "avg_sec_per_image": 0.033975,
+      "avg_vram_gb": 0.3575,
+      "weighted_score": 0.211914
+    },
+    {
+      "architecture": "realplksr",
+      "options": "pixelshuffle layer_norm=True",
+      "avg_sec_per_image": 0.1108,
+      "avg_vram_gb": 0.34,
+      "weighted_score": 0.23686
+    }
+  ],
+  "Medium": [
+    {
+      "architecture": "man_tiny",
+      "avg_sec_per_image": 0.027975,
+      "avg_vram_gb": 0.4125,
+      "weighted_score": 0.239464
+    },
+    {
+      "architecture": "realplksr",
+      "options": "pixelshuffle layer_norm=False",
+      "avg_sec_per_image": 0.1643,
+      "avg_vram_gb": 0.41,
+      "weighted_score": 0.299435
+    },
+    {
+      "architecture": "mosr",
+      "avg_sec_per_image": 0.104675,
+      "avg_vram_gb": 0.47,
+      "weighted_score": 0.305604
+    },
+    {
+      "architecture": "lmlt_base",
+      "avg_sec_per_image": 0.062925,
+      "avg_vram_gb": 0.54,
+      "weighted_score": 0.325316
+    },
+    {
+      "architecture": "span_s",
+      "avg_sec_per_image": 0.009975,
+      "avg_vram_gb": 0.585,
+      "weighted_score": 0.326239
+    },
+    {
+      "architecture": "span",
+      "avg_sec_per_image": 0.012175,
+      "avg_vram_gb": 0.635,
+      "weighted_score": 0.354729
+    },
+    {
+      "architecture": "man_light",
+      "avg_sec_per_image": 0.164175,
+      "avg_vram_gb": 0.5125,
+      "weighted_score": 0.355754
+    },
+    {
+      "architecture": "esrgan_lite",
+      "avg_sec_per_image": 0.058425,
+      "avg_vram_gb": 0.6025,
+      "weighted_score": 0.357666
+    },
+    {
+      "architecture": "ditn_real",
+      "avg_sec_per_image": 0.030225,
+      "avg_vram_gb": 0.715,
+      "weighted_score": 0.406851
+    },
+    {
+      "architecture": "spanplus_s",
+      "avg_sec_per_image": 0.010625,
+      "avg_vram_gb": 0.77,
+      "weighted_score": 0.428281
+    },
+    {
+      "architecture": "rcan_unshuffle",
+      "avg_sec_per_image": 0.1097,
+      "avg_vram_gb": 0.715,
+      "weighted_score": 0.442615
+    },
+    {
+      "architecture": "lmlt_large",
+      "avg_sec_per_image": 0.0913,
+      "avg_vram_gb": 0.75,
+      "weighted_score": 0.453585
+    },
+    {
+      "architecture": "rcan",
+      "avg_sec_per_image": 0.1703,
+      "avg_vram_gb": 0.79,
+      "weighted_score": 0.511135
+    },
+    {
+      "architecture": "eimn_a",
+      "avg_sec_per_image": 0.11945,
+      "avg_vram_gb": 0.87,
+      "weighted_score": 0.532253
+    },
+    {
+      "architecture": "eimn_l",
+      "avg_sec_per_image": 0.136375,
+      "avg_vram_gb": 0.87,
+      "weighted_score": 0.539869
+    },
+    {
+      "architecture": "realplksr",
+      "options": "dysample layer_norm=True",
+      "avg_sec_per_image": 0.114375,
+      "avg_vram_gb": 0.9125,
+      "weighted_score": 0.553344
+    },
+    {
+      "architecture": "craft",
+      "avg_sec_per_image": 0.170775,
+      "avg_vram_gb": 0.875,
+      "weighted_score": 0.558099
+    },
+    {
+      "architecture": "safmn_l",
+      "avg_sec_per_image": 0.1994,
+      "avg_vram_gb": 0.865,
+      "weighted_score": 0.56548
+    },
+    {
+      "architecture": "spanplus",
+      "avg_sec_per_image": 0.014525,
+      "avg_vram_gb": 1.0725,
+      "weighted_score": 0.596411
+    },
+    {
+      "architecture": "realplksr",
+      "options": "dysample layer_norm=False",
+      "avg_sec_per_image": 0.1678,
+      "avg_vram_gb": 0.9475,
+      "weighted_score": 0.596635
+    }
+  ],
+  "Medium heavy": [
+    {
+      "architecture": "moesr2",
+      "avg_sec_per_image": 0.251325,
+      "avg_vram_gb": 0.8975,
+      "weighted_score": 0.606721
+    },
+    {
+      "architecture": "realcugan",
+      "avg_sec_per_image": 0.025367,
+      "avg_vram_gb": 1.146667,
+      "weighted_score": 0.642082
+    },
+    {
+      "architecture": "elan_light",
+      "avg_sec_per_image": 0.103975,
+      "avg_vram_gb": 1.095,
+      "weighted_score": 0.649039
+    },
+    {
+      "architecture": "omnisr",
+      "avg_sec_per_image": 0.1274,
+      "avg_vram_gb": 1.1675,
+      "weighted_score": 0.699455
+    },
+    {
+      "architecture": "realesrgan",
+      "options": "use_pixel_unshuffle=True",
+      "avg_sec_per_image": 0.160375,
+      "avg_vram_gb": 1.22,
+      "weighted_score": 0.743169
+    },
+    {
+      "architecture": "esrgan",
+      "options": "use_pixel_unshuffle=True",
+      "avg_sec_per_image": 0.160375,
+      "avg_vram_gb": 1.22,
+      "weighted_score": 0.743169
+    },
+    {
+      "architecture": "hit_sir",
+      "avg_sec_per_image": 0.188675,
+      "avg_vram_gb": 1.3125,
+      "weighted_score": 0.806779
+    },
+    {
+      "architecture": "esrgan",
+      "options": "use_pixel_unshuffle=False",
+      "avg_sec_per_image": 0.2678,
+      "avg_vram_gb": 1.265,
+      "weighted_score": 0.81626
+    },
+    {
+      "architecture": "hit_sng",
+      "avg_sec_per_image": 0.210275,
+      "avg_vram_gb": 1.3125,
+      "weighted_score": 0.816499
+    },
+    {
+      "architecture": "hit_srf",
+      "avg_sec_per_image": 0.2354,
+      "avg_vram_gb": 1.3125,
+      "weighted_score": 0.827805
+    },
+    {
+      "architecture": "flexnet",
+      "avg_sec_per_image": 0.28885,
+      "avg_vram_gb": 1.2875,
+      "weighted_score": 0.838108
+    },
+    {
+      "architecture": "scunet",
+      "avg_sec_per_image": 0.079625,
+      "avg_vram_gb": 1.57,
+      "weighted_score": 0.899331
+    },
+    {
+      "architecture": "scunet_aaf6aa",
+      "avg_sec_per_image": 0.079625,
+      "avg_vram_gb": 1.57,
+      "weighted_score": 0.899331
+    },
+    {
+      "architecture": "metaflexnet",
+      "avg_sec_per_image": 0.149975,
+      "avg_vram_gb": 1.78,
+      "weighted_score": 1.046489
+    },
+    {
+      "architecture": "elan",
+      "avg_sec_per_image": 0.4652,
+      "avg_vram_gb": 1.6175,
+      "weighted_score": 1.098965
+    },
+    {
+      "architecture": "man",
+      "avg_sec_per_image": 0.7876,
+      "avg_vram_gb": 1.5175,
+      "weighted_score": 1.189045
+    },
+    {
+      "architecture": "swin2sr_s",
+      "avg_sec_per_image": 0.97335,
+      "avg_vram_gb": 1.4225,
+      "weighted_score": 1.220383
+    },
+    {
+      "architecture": "swinir_s",
+      "avg_sec_per_image": 0.9496,
+      "avg_vram_gb": 1.5225,
+      "weighted_score": 1.264695
+    },
+    {
+      "architecture": "emt",
+      "avg_sec_per_image": 0.269025,
+      "avg_vram_gb": 2.4875,
+      "weighted_score": 1.489186
+    },
+    {
+      "architecture": "dctlsa",
+      "avg_sec_per_image": 0.142,
+      "avg_vram_gb": 2.7375,
+      "weighted_score": 1.569525
+    },
+    {
+      "architecture": "srformer_light",
+      "avg_sec_per_image": 0.9669,
+      "avg_vram_gb": 2.3325,
+      "weighted_score": 1.71798
+    },
+    {
+      "architecture": "swinir_m",
+      "avg_sec_per_image": 1.419075,
+      "avg_vram_gb": 2.6125,
+      "weighted_score": 2.075459
+    }
+  ],
+  "Heavy": [
+    {
+      "architecture": "swin2sr_m",
+      "avg_sec_per_image": 1.5945,
+      "avg_vram_gb": 2.48,
+      "weighted_score": 2.081525
+    },
+    {
+      "architecture": "dwt_s",
+      "avg_sec_per_image": 1.474925,
+      "avg_vram_gb": 2.6225,
+      "weighted_score": 2.106091
+    },
+    {
+      "architecture": "dat_light",
+      "avg_sec_per_image": 1.5647,
+      "avg_vram_gb": 2.6825,
+      "weighted_score": 2.17949
+    },
+    {
+      "architecture": "dat_s",
+      "avg_sec_per_image": 1.762275,
+      "avg_vram_gb": 2.815,
+      "weighted_score": 2.341274
+    },
+    {
+      "architecture": "atd_light",
+      "avg_sec_per_image": 0.988,
+      "avg_vram_gb": 4.455,
+      "weighted_score": 2.89485
+    },
+    {
+      "architecture": "swinir_l",
+      "avg_sec_per_image": 2.1295,
+      "avg_vram_gb": 3.53,
+      "weighted_score": 2.899775
+    },
+    {
+      "architecture": "swin2sr_l",
+      "avg_sec_per_image": 2.4536,
+      "avg_vram_gb": 3.37,
+      "weighted_score": 2.95762
+    },
+    {
+      "architecture": "srformer",
+      "avg_sec_per_image": 3.4883,
+      "avg_vram_gb": 3.62,
+      "weighted_score": 3.560735
+    },
+    {
+      "architecture": "dat_2",
+      "avg_sec_per_image": 3.4577,
+      "avg_vram_gb": 3.8925,
+      "weighted_score": 3.69684
+    },
+    {
+      "architecture": "dat",
+      "avg_sec_per_image": 3.49785,
+      "avg_vram_gb": 3.9125,
+      "weighted_score": 3.725907
+    },
+    {
+      "architecture": "atd",
+      "avg_sec_per_image": 2.848625,
+      "avg_vram_gb": 6.4,
+      "weighted_score": 4.801881
+    },
+    {
+      "architecture": "drct",
+      "avg_sec_per_image": 5.334625,
+      "avg_vram_gb": 6.25,
+      "weighted_score": 5.838081
+    }
+  ],
+  "Ultra heavy": [
+    {
+      "architecture": "dwt",
+      "avg_sec_per_image": 6.398425,
+      "avg_vram_gb": 5.5525,
+      "weighted_score": 5.933166
+    },
+    {
+      "architecture": "hat_s",
+      "avg_sec_per_image": 1.55905,
+      "avg_vram_gb": 9.8225,
+      "weighted_score": 6.103948
+    },
+    {
+      "architecture": "grl_t",
+      "avg_sec_per_image": 2.764125,
+      "avg_vram_gb": 9.2825,
+      "weighted_score": 6.349231
+    },
+    {
+      "architecture": "hat_m",
+      "avg_sec_per_image": 1.800775,
+      "avg_vram_gb": 10.265,
+      "weighted_score": 6.456099
+    },
+    {
+      "architecture": "grl_s",
+      "avg_sec_per_image": 2.90145,
+      "avg_vram_gb": 9.665,
+      "weighted_score": 6.621403
+    },
+    {
+      "architecture": "hat_l",
+      "avg_sec_per_image": 3.445275,
+      "avg_vram_gb": 10.3825,
+      "weighted_score": 7.260749
+    },
+    {
+      "architecture": "drct_l",
+      "avg_sec_per_image": 10.657775,
+      "avg_vram_gb": 6.385,
+      "weighted_score": 8.307749
+    },
+    {
+      "architecture": "drct_xl",
+      "avg_sec_per_image": 12.494825,
+      "avg_vram_gb": 6.4325,
+      "weighted_score": 9.160546
+    },
+    {
+      "architecture": "grl_b",
+      "avg_sec_per_image": 5.832075,
+      "avg_vram_gb": 13.1925,
+      "weighted_score": 9.880309
+    }
+  ]
+}
