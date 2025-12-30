@@ -232,7 +232,7 @@ def calculate_topiq(
     if isinstance(img, Tensor) and isinstance(img2, Tensor):
         img, img2 = img.unsqueeze_(0), img2.unsqueeze_(0)
         # to cuda
-        device = torch.device("cuda")
+        device = torch.device("cuda") # get cuda device
         img, img2 = img.to(device), img2.to(device)
 
     loss = topiq()  # type: ignore[reportCallIssue]
