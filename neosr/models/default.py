@@ -7,7 +7,6 @@ from os import path as osp
 import numpy as np
 
 import torch
-import pytorch_optimizer
 from tqdm import tqdm
 from torch.nn.parallel import DataParallel, DistributedDataParallel
 from torch.nn import functional as F
@@ -20,6 +19,11 @@ from neosr.losses.wavelet_guided import wavelet_guided
 from neosr.losses.loss_util import get_refined_artifact_map
 from neosr.data.augmentations import apply_augment
 from neosr.metrics import calculate_metric
+
+try:
+    import pytorch_optimizer
+except ImportError:  # pragma: no cover - optional dependency
+    pytorch_optimizer = None
 
 from neosr.utils import get_root_logger, imwrite, tensor2img
 from neosr.utils.dist_util import master_only
@@ -250,10 +254,19 @@ class default():
         elif optim_type in {'NAdam', 'nadam'}:
             optimizer = torch.optim.NAdam(params, lr, **kwargs)
         elif optim_type in {'Adan', 'adan'}:
+            if pytorch_optimizer is None:
+                msg = "pytorch-optimizer is required for Adan. Install it with `pip install pytorch-optimizer`."
+                raise ImportError(msg)
             optimizer = pytorch_optimizer.Adan(params, lr, **kwargs)
         elif optim_type in {'Lamb', 'lamb'}:
+            if pytorch_optimizer is None:
+                msg = "pytorch-optimizer is required for Lamb. Install it with `pip install pytorch-optimizer`."
+                raise ImportError(msg)
             optimizer = pytorch_optimizer.Lamb(params, lr, **kwargs)
         elif optim_type in {'Lion', 'lion'}:
+            if pytorch_optimizer is None:
+                msg = "pytorch-optimizer is required for Lion. Install it with `pip install pytorch-optimizer`."
+                raise ImportError(msg)
             optimizer = pytorch_optimizer.Lion(params, lr, **kwargs)
         else:
             raise NotImplementedError(
