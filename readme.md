@@ -46,6 +46,75 @@ neosr-update
 
 For manual installation (recommended for cloud env) details, see our [Installation Instructions](https://github.com/neosr-project/neosr/wiki/Installation-Instructions) wiki.
 
+### 🛠️ manual dependency management (uv + conda)
+
+The project uses [`uv`](https://docs.astral.sh/uv/) with the lockfile `uv.lock` and the `uv_build` backend defined in `pyproject.toml` to keep dependencies reproducible. The steps below show how to set up, update, and run the code without the helper scripts.
+
+> [!NOTE]
+> Python 3.13 is required. If you prefer virtualenv instead of conda, replace the environment creation step with your preferred tool but keep using `uv` for installs.
+
+**Linux (e.g., Arch Linux)**
+
+1. Install Miniforge (minimal conda). Follow the [official installer](https://github.com/conda-forge/miniforge) or download and run:
+   ```bash
+   wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh
+   bash Miniforge3-Linux-x86_64.sh -b -p "$HOME/miniforge3"
+   source "$HOME/miniforge3/etc/profile.d/conda.sh"
+   conda config --set auto_activate_base false
+   ```
+2. Create and activate a Python 3.13 environment:
+   ```bash
+   conda create -y -n neosr python=3.13
+   conda activate neosr
+   ```
+3. Install `uv` and ensure it is on your `PATH`:
+   ```bash
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   export PATH="$HOME/.local/bin:$PATH"
+   ```
+4. Install project dependencies from the lockfile:
+   ```bash
+   uv sync --locked
+   ```
+5. Update dependencies later (optional):
+   ```bash
+   uv lock --upgrade           # refresh uv.lock to the latest compatible versions
+   uv sync --locked            # apply updated lockfile to the env
+   ```
+6. Run training or testing scripts manually:
+   ```bash
+   uv run python train.py options/your_config.toml
+   uv run python test.py options/your_config.toml
+   ```
+
+**Windows (PowerShell)**
+
+1. Install [Miniforge for Windows](https://github.com/conda-forge/miniforge) and open a Miniforge prompt.
+2. Create and activate the environment:
+   ```ps1
+   conda create -y -n neosr python=3.13
+   conda activate neosr
+   ```
+3. Install `uv`:
+   ```ps1
+   powershell -ExecutionPolicy Bypass -c "irm https://astral.sh/uv/install.ps1 | iex"
+   $env:Path = "$env:UserProfile\.local\bin;$env:Path"
+   ```
+4. Install dependencies (uses the bundled PyTorch CUDA 12.8 wheels configured in `pyproject.toml`):
+   ```ps1
+   uv sync --locked
+   ```
+5. Update dependencies later:
+   ```ps1
+   uv lock --upgrade
+   uv sync --locked
+   ```
+6. Run training or testing:
+   ```ps1
+   uv run python train.py options/your_config.toml
+   uv run python test.py options/your_config.toml
+   ```
+
 ## ⏩ quick start
 
 Start training by running:
