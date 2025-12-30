@@ -225,7 +225,8 @@ def generate_calib_data(opt, calib_iters: int) -> data.DataLoader:
         num_samples,
         opt.get('in_chans', 3),
         opt['datasets']['train']['patch_size'],
-        opt['datasets']['train']['patch_size']
+        opt['datasets']['train']['patch_size'],
+        device="cpu"
     ) * 0.5 + 0.25
 
     # Build dataset wrapper
