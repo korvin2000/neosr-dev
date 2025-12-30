@@ -7,7 +7,8 @@ from torchvision.transforms.functional import normalize
 
 from neosr.data.single_dataset import single
 from neosr.data.data_util import paths_from_lmdb
-from neosr.utils import FileClient, imfrombytes, img2tensor, scandir
+from neosr.data.file_client import FileClient
+from neosr.utils import imfrombytes, img2tensor, scandir
 from neosr.utils.registry import DATASET_REGISTRY
 
 
