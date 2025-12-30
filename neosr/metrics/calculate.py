@@ -1,7 +1,11 @@
 import cv2
 import numpy as np
 import torch
-import pyiqa
+
+try:
+    import pyiqa
+except ImportError:  # pragma: no cover - optional dependency
+    pyiqa = None
 
 from neosr.metrics.metric_util import reorder_image, to_y_channel
 from neosr.losses.dists_loss import dists
@@ -156,8 +160,15 @@ def calculate_dists(img, img2, **kwargs):
 @METRIC_REGISTRY.register()
 def calculate_ilniqe(img, **kwargs):
 
+    if pyiqa is None:
+        msg = (
+            "pyiqa is required for the ILNIQE metric. Install it with "
+            "`pip install pyiqa` or remove the ilniqe metric from the config."
+        )
+        raise ImportError(msg)
+
     # to 3 channel
-    if(len(img.shape)<3):
+    if len(img.shape) < 3:
         img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
     # to tensor
     img = img2tensor(img, bgr2rgb=True, float32=True, color=True)
@@ -169,7 +180,7 @@ def calculate_ilniqe(img, **kwargs):
     device = torch.device("cuda")
     img = img.to(device)
     iqa_metric = pyiqa.create_metric('ilniqe', device=device)
-    
+
     loss = iqa_metric(img)
 
     return loss.cpu().numpy().mean()
