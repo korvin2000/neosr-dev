@@ -10,7 +10,8 @@ from torch.utils import data
 
 from neosr.data.degradations import circular_lowpass_kernel, random_mixed_kernels
 from neosr.data.transforms import basic_augment
-from neosr.utils import FileClient, get_root_logger, imfrombytes, img2tensor, scandir
+from neosr.data.file_client import FileClient
+from neosr.utils import get_root_logger, imfrombytes, img2tensor, scandir
 from neosr.utils.registry import DATASET_REGISTRY
 from neosr.utils.rng import rng
 
