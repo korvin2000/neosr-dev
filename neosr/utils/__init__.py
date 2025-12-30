@@ -5,7 +5,7 @@ from neosr.utils.color_util import (
     ycbcr2bgr,
     ycbcr2rgb,
 )
-from neosr.utils.diffjpeg import DiffJPEG  # type: ignore[attr-defined]
+from neosr.utils.diffjpeg import DiffJPEG, filter2D  # type: ignore[attr-defined]
 from neosr.utils.img_util import (
     crop_border,
     imfrombytes,
@@ -38,6 +38,7 @@ __all__ = [
     "AvgTimer",
     # diffjpeg
     "DiffJPEG",
+    "filter2D",
     # logger.py
     "MessageLogger",
     # registry
