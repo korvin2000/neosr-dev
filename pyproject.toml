@@ -26,7 +26,6 @@ dependencies = [
     "onnxruntime-gpu>=1.22.0",
     "opencv-python-headless>=4.11.0.86",
     "pytorch-optimizer>=2.16.0",
-    "pyiqa>=0.2.8",
     "pywavelets>=1.8.0",
     "scipy>=1.15.3",
     "tb-nightly>=2.20.0a",

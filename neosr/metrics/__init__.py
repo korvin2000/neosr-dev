@@ -20,7 +20,8 @@ from neosr.metrics.calculate import (
 )
 from neosr.utils.registry import METRIC_REGISTRY
 
-__all__ = ["calculate_dists", "calculate_psnr", "calculate_ssim", "calculate_topiq", "calculate_ilniqe"]
+#__all__ = ["calculate_dists", "calculate_psnr", "calculate_ssim", "calculate_topiq", "calculate_ilniqe"]
+__all__ = ["calculate_dists", "calculate_psnr", "calculate_ssim", "calculate_topiq"]
 
 
 def calculate_metric(data, opt: dict[str, Any]) -> float:
