@@ -3,6 +3,7 @@
 # model building, optimization, logging, validation, and checkpoint management.
 
 import datetime
+import importlib
 import logging
 import math
 import re
@@ -36,7 +37,6 @@ from neosr.utils import (
     tc,
 )
 from neosr.utils.options import copy_opt_file, parse_options
-from torchprofile import profile_macs
 
 # Ensure a supported Python version (3.10+)
 if sys.version_info < (3, 10):
@@ -77,6 +77,27 @@ def init_tb_loggers(opt: Dict[str, Any]) -> Union[Any, None]:
         tb_logger_log_dir = Path(opt["root_path"]) / "experiments" / "tb_logger" / opt["name"]
         tb_logger = init_tb_logger(log_dir=tb_logger_log_dir)
     return tb_logger
+
+
+def get_profile_macs():
+    """Return the torchprofile ``profile_macs`` function when available.
+
+    Raises a clear error with installation guidance when the optional
+    dependency is missing. Import is deferred to avoid a hard dependency
+    when MAC computation is not requested.
+    """
+
+    if importlib.util.find_spec("torchprofile") is None:
+        msg = (
+            "torchprofile is required to compute MACs. Install it with "
+            "`pip install torchprofile` or remove `input_size` from the configuration "
+            "to skip MAC reporting."
+        )
+        raise ModuleNotFoundError(msg)
+
+    from torchprofile import profile_macs
+
+    return profile_macs
 
 
 def create_train_val_dataloader(
@@ -381,6 +402,7 @@ def train_pipeline(project_root: str) -> None:
 
     input_size = opt.get('input_size')
     if input_size is not None:
+        profile_macs = get_profile_macs()
         inputs = torch.randn(1, input_size['in_channels'], input_size['size'], input_size['size'])
         macs = profile_macs(model.net_g, inputs)
         logger.info(f'Generator MACs: {macs:,d}')
