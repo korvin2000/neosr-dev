@@ -25,7 +25,7 @@ def _single_tensor_adan(
     weight_decay: float,
     eps: float,
     no_prox: bool,
-    clip_global_grad_norm: Tensor,
+    clip_global_grad_norm: Tensor | float,
 ) -> None:
     for i, param in enumerate(params):
         grad = grads[i]
@@ -82,7 +82,7 @@ def _multi_tensor_adan(
     weight_decay: float,
     eps: float,
     no_prox: bool,
-    clip_global_grad_norm: Tensor,
+    clip_global_grad_norm: Tensor | float,
 ) -> None:
     if len(params) == 0:
         return
@@ -159,7 +159,6 @@ class adan(Optimizer):
         max_grad_norm: float = 0.0,
         no_prox: bool = True,
         foreach: bool = True,
-        **kwargs,  # noqa: ARG002
     ) -> None:
         if not max_grad_norm >= 0.0:
             msg = f"Invalid Max grad norm: {max_grad_norm}"
@@ -192,31 +191,16 @@ class adan(Optimizer):
         super().__init__(params, defaults)
 
     @torch.no_grad()
-    def restart_opt(self) -> None:
-        for group in self.param_groups:
-            group["step"] = 0
-            for p in group["params"]:
-                if p.requires_grad:
-                    state = self.state[p]
-                    # State initialization
-
-                    # Exponential moving average of gradient values
-                    state["exp_avg"] = torch.zeros_like(p)
-                    # Exponential moving average of squared gradient values
-                    state["exp_avg_sq"] = torch.zeros_like(p)
-                    # Exponential moving average of gradient difference
-                    state["exp_avg_diff"] = torch.zeros_like(p)
-
-    @torch.no_grad()
     def step(self, closure: Callable[..., Any] | None = None) -> float:  # type: ignore[reportIncompatibleMethodOverride,override]
         """Performs a single optimization step."""
-        loss = closure() if closure is not None else 0.0
+        loss = 0.0
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
 
         if self.defaults["max_grad_norm"] > 0:
             device = self.param_groups[0]["params"][0].device
-            global_grad_norm = torch.zeros(1, device=device)
-
-            max_grad_norm = torch.tensor(self.defaults["max_grad_norm"], device=device)
+            global_grad_norm = torch.zeros((), device=device)
             for group in self.param_groups:
                 for p in group["params"]:
                     if p.grad is not None:
@@ -225,10 +209,12 @@ class adan(Optimizer):
 
             global_grad_norm = torch.sqrt(global_grad_norm)
 
-            clip_global_grad_norm = torch.clamp(
-                max_grad_norm / (global_grad_norm + group["eps"]),  # type: ignore[reportPossiblyUnboundVariable]
+            # stays a 0-dim tensor and max_grad_norm a python float:
+            # .item() or torch.tensor(..., device=cuda) would force a host sync every step
+            clip_global_grad_norm: Tensor | float = torch.clamp(
+                self.defaults["max_grad_norm"] / (global_grad_norm + self.param_groups[-1]["eps"]),
                 max=1.0,
-            ).item()
+            )
         else:
             clip_global_grad_norm = 1.0
 

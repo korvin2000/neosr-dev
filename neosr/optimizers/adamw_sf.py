@@ -53,7 +53,7 @@ class adamw_sf(Optimizer):
         warmup_steps: float = 0.0,
         r: float = 0.0,
         weight_lr_power: float = 2.0,
-        schedule_free: bool = True,  # noqa: ARG002
+        schedule_free: bool = True,
         foreach: bool = True,
     ) -> None:
         defaults = {
@@ -69,8 +69,22 @@ class adamw_sf(Optimizer):
             "weight_lr_power": weight_lr_power,
             "weight_decay": weight_decay,
             "foreach": foreach,
+            "schedule_free": schedule_free,
         }
         super().__init__(params, defaults)
+
+    def add_param_group(self, param_group: dict[str, Any]) -> None:
+        # validate the effective options: groups may override the constructor defaults
+        group = {**self.defaults, **param_group}
+        if not group["schedule_free"]:
+            msg = "adamw_sf is always schedule-free, use adamw for schedule_free=false"
+            raise ValueError(msg)
+        # eval() divides by beta1
+        beta1 = group["betas"][0]
+        if not 0.0 < beta1 < 1.0:
+            msg = f"Invalid beta parameter at index 0: {beta1}"
+            raise ValueError(msg)
+        super().add_param_group(param_group)
 
     def eval(self) -> None:
         for group in self.param_groups:

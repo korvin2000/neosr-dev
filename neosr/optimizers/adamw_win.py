@@ -45,25 +45,6 @@ class adamw_win(Optimizer):
         max_grad_norm: float = 0.0,
         acceleration_mode: str = "win2",
     ) -> None:
-        if not lr >= 0.0:
-            msg = f"Invalid learning rate: {lr}"
-            raise ValueError(msg)
-        if not eps >= 0.0:
-            msg = f"Invalid epsilon value: {eps}"
-            raise ValueError(msg)
-        if not 0.0 <= betas[0] < 1.0:
-            msg = f"Invalid beta parameter at index 0: {betas[0]}"
-            raise ValueError(msg)
-        if not 0.0 <= betas[1] < 1.0:
-            msg = f"Invalid beta parameter at index 1: {betas[1]}"
-            raise ValueError(msg)
-        if reckless_steps[0] < 0.0:
-            msg = f"Invalid reckless_steps parameter at index 0: {reckless_steps[0]}"
-            raise ValueError(msg)
-        if reckless_steps[1] < 0.0:
-            msg = f"Invalid reckless_steps parameter at index 1: {reckless_steps[1]}"
-            raise ValueError(msg)
-
         defaults = {
             "lr": lr,
             "betas": betas,
@@ -77,6 +58,30 @@ class adamw_win(Optimizer):
 
         super().__init__(params, defaults)
 
+    def add_param_group(self, param_group: dict[str, Any]) -> None:
+        # validate the effective options: groups may override the constructor defaults
+        group = {**self.defaults, **param_group}
+        if not group["lr"] >= 0.0:
+            msg = f"Invalid learning rate: {group['lr']}"
+            raise ValueError(msg)
+        if not group["eps"] >= 0.0:
+            msg = f"Invalid epsilon value: {group['eps']}"
+            raise ValueError(msg)
+        betas, reckless_steps = group["betas"], group["reckless_steps"]
+        for i, beta in enumerate(betas):
+            if not 0.0 <= beta < 1.0:
+                msg = f"Invalid beta parameter at index {i}: {beta}"
+                raise ValueError(msg)
+        for i, step in enumerate(reckless_steps):
+            if step < 0.0:
+                msg = f"Invalid reckless_steps parameter at index {i}: {step}"
+                raise ValueError(msg)
+        # win2 divides by reckless_steps[0]
+        if group["acceleration_mode"] == "win2" and reckless_steps[0] <= 0.0:
+            msg = f"win2 requires reckless_steps[0] > 0: {reckless_steps[0]}"
+            raise ValueError(msg)
+        super().add_param_group(param_group)
+
     @torch.no_grad()
     def step(self, closure: Callable[..., Any] | None = None) -> float:  # type: ignore[reportIncompatibleMethodOverride,override]
         """Performs a single optimization step.
@@ -87,14 +92,15 @@ class adamw_win(Optimizer):
                 and returns the loss.
 
         """
-        loss = closure() if closure is not None else 0.0
+        loss = 0.0
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
 
         # whether perform gradient clip
         if self.defaults["max_grad_norm"] > 1e-8:
             device = self.param_groups[0]["params"][0].device
-            global_grad_norm = torch.zeros(1, device=device)
-
-            max_grad_norm = torch.tensor(self.defaults["max_grad_norm"], device=device)
+            global_grad_norm = torch.zeros((), device=device)
             for group in self.param_groups:
                 for p in group["params"]:
                     if p.grad is not None:
@@ -102,8 +108,9 @@ class adamw_win(Optimizer):
                         global_grad_norm.add_(grad.pow(2).sum())
 
             global_grad_norm = torch.sqrt(global_grad_norm)
+            # 0-dim tensor and python float: torch.tensor(..., device=cuda) would sync
             clip_global_grad_norm = torch.clamp(
-                max_grad_norm / (global_grad_norm + group["eps"]),  # type: ignore[reportPossiblyUnboundVariable]
+                self.defaults["max_grad_norm"] / (global_grad_norm + self.param_groups[-1]["eps"]),
                 max=1.0,
             )
 
@@ -175,6 +182,8 @@ class adamw_win(Optimizer):
 
                 # Win and Win2 acceleration for parameter update
                 if "win" in group["acceleration_mode"]:
+                    # lr_y = beta3 * lr_x and lr_z = beta4 * lr_x, so the lr ratios
+                    # are written as beta ratios (no division by lr, lr=0 stays finite)
                     beta3, beta4 = group["reckless_steps"]
                     # compute parameter update
                     update = (exp_avg / denom) / bias_correction1
@@ -185,30 +194,27 @@ class adamw_win(Optimizer):
                     state["x"].data.mul_(1.0 / (1 + lr_x * group["weight_decay"]))
 
                     lr_y = beta3 * group["lr"]
-                    gamma = 1.0 / (1.0 + lr_y / lr_x + lr_y * group["weight_decay"])
+                    gamma = 1.0 / (1.0 + beta3 + lr_y * group["weight_decay"])
                     if group["acceleration_mode"] == "win":
                         # update y
-                        p.mul_(gamma).add_(
-                            state["x"], alpha=(lr_y / lr_x) * gamma
-                        ).add_(update, alpha=-lr_y * gamma)
+                        p.mul_(gamma).add_(state["x"], alpha=beta3 * gamma).add_(
+                            update, alpha=-lr_y * gamma
+                        )
 
                     elif group["acceleration_mode"] == "win2":
                         # update y
                         state["y"].data.mul_(gamma).add_(
-                            state["x"], alpha=(lr_y / lr_x) * gamma
+                            state["x"], alpha=beta3 * gamma
                         ).add_(update, alpha=-lr_y * gamma)
 
                         # update z
                         lr_z = beta4 * group["lr"]
                         gamma = 1.0 / (
-                            1.0
-                            + lr_z / lr_x
-                            + lr_z / lr_y
-                            + lr_z * group["weight_decay"]
+                            1.0 + beta4 + beta4 / beta3 + lr_z * group["weight_decay"]
                         )
                         p.mul_(gamma).add_(update, alpha=-lr_z * gamma)
-                        p.add_(state["x"], alpha=(lr_z / lr_x) * gamma).add_(
-                            state["y"], alpha=(lr_z / lr_y) * gamma
+                        p.add_(state["x"], alpha=beta4 * gamma).add_(
+                            state["y"], alpha=(beta4 / beta3) * gamma
                         )
 
                 else:  # vanilla AdamW optimizer
