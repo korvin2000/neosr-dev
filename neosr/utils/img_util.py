@@ -99,8 +99,11 @@ def tensor2img(
 
     result = []
     for tensor_ in tensor:
-        n_tensor = tensor_.squeeze(0).float().detach().cpu().clamp_(*min_max)
-        n_tensor = (tensor_ - min_max[0]) / (min_max[1] - min_max[0])
+        if tensor_.dim() == 4:
+            tensor_ = tensor_.squeeze(0)
+        # out-of-place clamp: .float()/.cpu() alias an fp32 CPU input
+        n_tensor = tensor_.detach().float().cpu().clamp(*min_max)
+        n_tensor = (n_tensor - min_max[0]) / (min_max[1] - min_max[0])
 
         n_dim = n_tensor.dim()
         if n_dim == 4:

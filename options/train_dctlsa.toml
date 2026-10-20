@@ -85,6 +85,7 @@ loss_weight = 1.0
 type = "ldl_loss"
 loss_weight = 1.0
 
+[train.fdl_opt]
 type = "fdl_loss"
 model = "dinov2" # "vgg", "resnet", "effnet"
 loss_weight = 0.75

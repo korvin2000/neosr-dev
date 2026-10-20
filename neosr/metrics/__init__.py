@@ -6,22 +6,18 @@ from neosr.metrics.calculate import (
     calculate_psnr,
     calculate_ssim,
     calculate_topiq,
+    release_metric_nets,
 )
 from neosr.utils.registry import METRIC_REGISTRY
 
-from copy import deepcopy
-from typing import Any
-
-from neosr.metrics.calculate import (
-    calculate_dists,
-    calculate_psnr,
-    calculate_ssim,
-    calculate_topiq,
-)
-from neosr.utils.registry import METRIC_REGISTRY
-
-#__all__ = ["calculate_dists", "calculate_psnr", "calculate_ssim", "calculate_topiq", "calculate_ilniqe"]
-__all__ = ["calculate_dists", "calculate_psnr", "calculate_ssim", "calculate_topiq"]
+__all__ = [
+    "calculate_dists",
+    "calculate_metric",
+    "calculate_psnr",
+    "calculate_ssim",
+    "calculate_topiq",
+    "release_metric_nets",
+]
 
 
 def calculate_metric(data, opt: dict[str, Any]) -> float:

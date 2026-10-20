@@ -1,11 +1,10 @@
 import copy
 from pathlib import Path
-from urllib import request
 
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torchvision.models import ResNet50_Weights, resnet50
+from torchvision.models import resnet50
 
 from neosr.utils.registry import LOSS_REGISTRY
 
@@ -104,9 +103,8 @@ class TransformerDecoder(nn.Module):
 class resnet_features(nn.Module):
     def __init__(self):
         super().__init__()
-        # load pretrained
-        model = resnet50(weights=ResNet50_Weights.DEFAULT)
-        model.eval()
+        # no ImageNet download: the TOPIQ checkpoint carries the backbone weights
+        model = resnet50(weights=None)
 
         self.conv1 = model.conv1
         self.bn1 = model.bn1
@@ -177,8 +175,12 @@ class topiq(nn.Module):
         self.fix_bn(self.semantic_model)
         feature_dim_list = [64, 256, 512, 1024, 2048]
 
-        self.default_mean = torch.tensor(default_mean).view(1, 3, 1, 1)
-        self.default_std = torch.tensor(default_std).view(1, 3, 1, 1)
+        self.register_buffer(
+            "default_mean", torch.tensor(default_mean).view(1, 3, 1, 1), persistent=False
+        )
+        self.register_buffer(
+            "default_std", torch.tensor(default_std).view(1, 3, 1, 1), persistent=False
+        )
 
         # define self-attention and cross scale attention blocks
         ca_layers = sa_layers = num_attn_layers
@@ -259,22 +261,20 @@ class topiq(nn.Module):
         self._init_linear(self.attn_blks)
         self._init_linear(self.attn_pool)
 
-        # load topiq_fr weights
+        # load topiq_fr weights: a local copy if present, else the torch hub cache
         model_path = Path(__file__).parent / "topiq_fr_weights.pth"
-        try:
-            if not model_path.exists():
-                url = "https://huggingface.co/chaofengc/IQA-PyTorch-Weights/resolve/main/cfanet_fr_kadid_res50-2c4cc61d.pth?download=true"
-                request.urlretrieve(url, model_path)  # noqa: S310
-        except:
-            msg = "Could not download TOPIQ weights."
-            raise ValueError(msg)
-
-        checkpoint = torch.load(model_path, map_location="cuda", weights_only=True)
+        if model_path.exists():
+            checkpoint = torch.load(model_path, map_location="cpu", weights_only=True)
+        else:
+            url = "https://huggingface.co/chaofengc/IQA-PyTorch-Weights/resolve/main/cfanet_fr_kadid_res50-2c4cc61d.pth"
+            checkpoint = torch.hub.load_state_dict_from_url(
+                url, map_location="cpu", weights_only=True
+            )
         self.load_state_dict(checkpoint["params"], strict=True)
         self.eval()
 
     def preprocess(self, x):
-        return (x - self.default_mean.to(x)) / self.default_std.to(x)
+        return (x - self.default_mean) / self.default_std
 
     def fix_bn(self, model):
         for m in model.modules():

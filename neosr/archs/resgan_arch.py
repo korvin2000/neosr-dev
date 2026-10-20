@@ -1,36 +1,9 @@
-import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.nn.utils import spectral_norm
 
 from neosr.utils.registry import ARCH_REGISTRY
 
-class simam_module(torch.nn.Module):
-    def __init__(self, channels = None, e_lambda = 1e-4):
-        super(simam_module, self).__init__()
-
-        self.activaton = nn.Sigmoid()
-        self.e_lambda = e_lambda
-
-    def __repr__(self):
-        s = self.__class__.__name__ + '('
-        s += ('lambda=%f)' % self.e_lambda)
-        return s
-
-    @staticmethod
-    def get_module_name():
-        return "simam"
-
-    def forward(self, x):
-
-        _, _, h, w = x.size()
-        
-        n = w * h - 1
-
-        x_minus_mu_square = (x - x.mean(dim=[2,3], keepdim=True)).pow(2)
-        y = x_minus_mu_square / (4 * (x_minus_mu_square.sum(dim=[2,3], keepdim=True) / n + self.e_lambda)) + 0.5
-
-        return x * self.activaton(y)
 
 @ARCH_REGISTRY.register()
 class resgan(nn.Module):
@@ -38,6 +11,10 @@ class resgan(nn.Module):
 
     def __init__(self, num_in_ch=3, num_feat=64, skip_connection=True, upscale=True, attention=False):
         super().__init__()
+        if attention:
+            # simam was built but never applied in forward; no reference placement exists
+            msg = "resgan: attention=True is not supported."
+            raise ValueError(msg)
         self.skip_connection = skip_connection
 
         norm = spectral_norm
@@ -59,11 +36,6 @@ class resgan(nn.Module):
         self.linear = nn.Linear(16, 1)
         self.act = nn.LeakyReLU(negative_slope=0.2)
 
-        if attention:
-            self.attention = simam_module()
-        else:
-            self.attention = nn.Identity()
-
     def forward(self, x):
         # downsample
         # x is NxNxC
@@ -77,7 +49,7 @@ class resgan(nn.Module):
         x1residual = F.interpolate(x1, scale_factor=0.5, mode='bilinear')
         x2 = x2+x1residual
         # x2 is N/4xN/4xF
-        x3 = self.act(self.conv2(x2))
+        x3 = self.act(self.conv3(x2))
         x2residual = F.interpolate(x2, scale_factor=0.5, mode='bilinear')
         x3 = x3+x2residual
         # x3 is N/8xN/8xF

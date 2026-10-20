@@ -4,13 +4,22 @@ import cv2
 import numpy as np
 import torch
 from cv2.typing import MatLike
-from torch import Tensor
+from torch import Tensor, nn
 
 from neosr.losses.dists_loss import dists_loss
 from neosr.metrics.metric_util import reorder_image, to_y_channel
 from neosr.metrics.topiq import topiq
 from neosr.utils.img_util import img2tensor
 from neosr.utils.registry import METRIC_REGISTRY
+
+
+def _crop(img: np.ndarray, crop_border: int) -> np.ndarray:
+    if crop_border < 0:
+        msg = f"crop_border must be >= 0, got {crop_border}."
+        raise ValueError(msg)
+    if crop_border == 0:
+        return img
+    return img[crop_border:-crop_border, crop_border:-crop_border, ...]
 
 
 @METRIC_REGISTRY.register()
@@ -45,12 +54,11 @@ def calculate_psnr(
     if input_order not in {"HWC", "CHW"}:
         msg = f'Wrong input_order {input_order}. Supported input_orders are "HWC" and "CHW"'
         raise ValueError(msg)
-    img = reorder_image(img, input_order=input_order)
-    img2 = reorder_image(img2, input_order=input_order)
-
-    if crop_border != 0:
-        img = img[crop_border:-crop_border, crop_border:-crop_border, ...]
-        img2 = img2[crop_border:-crop_border, crop_border:-crop_border, ...]
+    img = _crop(reorder_image(img, input_order=input_order), crop_border)
+    img2 = _crop(reorder_image(img2, input_order=input_order), crop_border)
+    if img.size == 0:
+        msg = f"PSNR input is empty after cropping {crop_border} px."
+        raise ValueError(msg)
 
     if test_y_channel:
         img = to_y_channel(img)
@@ -143,12 +151,11 @@ def calculate_ssim(
     if input_order not in {"HWC", "CHW"}:
         msg = f'Wrong input_order {input_order}. Supported input_orders are "HWC" and "CHW"'
         raise ValueError(msg)
-    img = reorder_image(img, input_order=input_order)
-    img2 = reorder_image(img2, input_order=input_order)
-
-    if crop_border != 0:
-        img = img[crop_border:-crop_border, crop_border:-crop_border, ...]
-        img2 = img2[crop_border:-crop_border, crop_border:-crop_border, ...]
+    img = _crop(reorder_image(img, input_order=input_order), crop_border)
+    img2 = _crop(reorder_image(img2, input_order=input_order), crop_border)
+    if min(img.shape[:2]) < 11:
+        msg = f"SSIM needs at least 11x11 px after cropping {crop_border} px, got {img.shape[:2]}."
+        raise ValueError(msg)
 
     if test_y_channel:
         img = to_y_channel(img)
@@ -165,75 +172,93 @@ def calculate_ssim(
     return ssim_result
 
 
-@METRIC_REGISTRY.register()
-def calculate_dists(
-    img: np.ndarray | Tensor,
-    img2: np.ndarray | Tensor,
-    **kwargs,  # noqa: ARG001
+# Building DISTS/TOPIQ costs far more than one forward pass, so each network is
+# built once per (name, device) and reused. Call release_metric_nets() after
+# validation to free the weights during training.
+_metric_nets: dict[tuple[str, torch.device], nn.Module] = {}
+_metric_builders = {"dists": lambda: dists_loss(as_loss=False), "topiq": topiq}
+
+
+def release_metric_nets() -> None:
+    _metric_nets.clear()
+
+
+def _metric_net(name: str, device: torch.device) -> nn.Module:
+    net = _metric_nets.get((name, device))
+    if net is None:
+        net = _metric_builders[name]().to(device).eval().requires_grad_(False)
+        _metric_nets[name, device] = net
+    return net
+
+
+def _calculate_net_metric(
+    name: str,
+    img: np.ndarray,
+    img2: np.ndarray,
+    device: torch.device | str | None,
 ) -> float:
-    """Calculates DISTS metric.
-
-    Args:
-    ----
-        img (np.ndarray): Images with range [0, 255] with order 'HWC'.
-        img2 (np.ndarray): Images with range [0, 255] with order 'HWC'.
-
-    Returns:
-    -------
-        float: SSIM result.
-
-    """
     assert img.shape == img2.shape, (
         f"Image shapes are different: {img.shape}, {img2.shape}."
     )
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device(device)
+    if device.type == "cuda" and device.index is None:
+        # "cuda" and "cuda:N" must share one cache entry and follow the current device
+        device = torch.device("cuda", torch.cuda.current_device())
+    if img.ndim == 2:  # grayscale: both networks expect 3 channels
+        img, img2 = (np.repeat(i[..., None], 3, axis=2) for i in (img, img2))
+    net = _metric_net(name, device)
+    # BGR uint8 HWC -> RGB [0, 1] NCHW
+    x, y = (
+        cast("Tensor", t).div(255).unsqueeze(0).to(device)
+        for t in img2tensor([img, img2])
+    )
+    with torch.inference_mode():
+        return net(x, y).item()
 
-    # satisfy mypy
-    img, img2 = cast("Tensor", img2tensor([img, img2]))
-    # normalize to [0, 1]
-    img, img2 = img / 255, img2 / 255
-    # add dim
-    if isinstance(img, Tensor) and isinstance(img2, Tensor):
-        img, img2 = img.unsqueeze_(0), img2.unsqueeze_(0)
-        # to cuda
-        device = torch.device("cuda")
-        img, img2 = img.to(device), img2.to(device)
 
-    loss = dists_loss(as_loss=False)  # type: ignore[reportCallIssue]
-    return loss.forward(img, img2)
+@METRIC_REGISTRY.register()
+def calculate_dists(
+    img: np.ndarray,
+    img2: np.ndarray,
+    device: torch.device | str | None = None,
+    **kwargs,  # noqa: ARG001
+) -> float:
+    """Calculate the DISTS metric (lower is better).
+
+    Args:
+    ----
+        img (np.ndarray): Images with range [0, 255] with order 'HWC' (BGR).
+        img2 (np.ndarray): Images with range [0, 255] with order 'HWC' (BGR).
+        device: Device to run on. Default: cuda if available, else cpu.
+
+    Returns:
+    -------
+        float: DISTS result.
+
+    """
+    return _calculate_net_metric("dists", img, img2, device)
 
 
 @METRIC_REGISTRY.register()
 def calculate_topiq(
-    img: np.ndarray | Tensor,
-    img2: np.ndarray | Tensor,
+    img: np.ndarray,
+    img2: np.ndarray,
+    device: torch.device | str | None = None,
     **kwargs,  # noqa: ARG001
 ) -> float:
-    """Calculates TOPIQ metric.
+    """Calculate the full-reference TOPIQ metric (higher is better).
 
     Args:
     ----
-        img (np.ndarray): Images with range [0, 255] with order 'HWC'.
-        img2 (np.ndarray): Images with range [0, 255] with order 'HWC'.
+        img (np.ndarray): Images with range [0, 255] with order 'HWC' (BGR).
+        img2 (np.ndarray): Images with range [0, 255] with order 'HWC' (BGR).
+        device: Device to run on. Default: cuda if available, else cpu.
 
     Returns:
     -------
-        float: SSIM result.
+        float: TOPIQ result.
 
     """
-    assert img.shape == img2.shape, (
-        f"Image shapes are different: {img.shape}, {img2.shape}."
-    )
-
-    # satisfy mypy
-    img, img2 = cast("Tensor", img2tensor([img, img2]))
-    # normalize to [0, 1]
-    img, img2 = img / 255, img2 / 255
-    # add dim
-    if isinstance(img, Tensor) and isinstance(img2, Tensor):
-        img, img2 = img.unsqueeze_(0), img2.unsqueeze_(0)
-        # to cuda
-        device = torch.device("cuda")
-        img, img2 = img.to(device), img2.to(device)
-
-    loss = topiq()  # type: ignore[reportCallIssue]
-    return loss.forward(img, img2)
+    return _calculate_net_metric("topiq", img, img2, device)

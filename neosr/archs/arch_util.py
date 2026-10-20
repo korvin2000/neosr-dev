@@ -127,8 +127,8 @@ class DySample(nn.Module):
         offset = self.offset(x) * self.scope(x).sigmoid() * 0.5 + self.init_pos
         B, _, H, W = offset.shape
         offset = offset.view(B, 2, -1, H, W)
-        coords_h = torch.arange(H) + 0.5
-        coords_w = torch.arange(W) + 0.5
+        coords_h = torch.arange(H, device=x.device) + 0.5
+        coords_w = torch.arange(W, device=x.device) + 0.5
 
         coords = (
             torch.stack(torch.meshgrid([coords_w, coords_h], indexing="ij"))
@@ -136,11 +136,10 @@ class DySample(nn.Module):
             .unsqueeze(1)
             .unsqueeze(0)
             .type(x.dtype)
-            .to(x.device, non_blocking=True)
         )
-        normalizer = torch.tensor(
-            [W, H], dtype=x.dtype, device=x.device, pin_memory=True
-        ).view(1, 2, 1, 1, 1)
+        normalizer = torch.tensor([W, H], dtype=x.dtype, device=x.device).view(
+            1, 2, 1, 1, 1
+        )
         coords = 2 * (coords + offset) / normalizer - 1
 
         coords = (
