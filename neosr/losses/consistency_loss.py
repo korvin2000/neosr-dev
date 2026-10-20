@@ -20,6 +20,7 @@ class consistency_loss(nn.Module):
         criterion (str): loss type. Default: 'huber'
         avgpool (bool): apply downscaling after conversion. Default: False
         scale (int): value used by avgpool. Default: 4
+        cosim (bool): add the luma/chroma cosine-similarity term near convergence. Default: True
         loss_weight (float): weight for colorloss. Default: 1.0
 
     """
@@ -39,8 +40,14 @@ class consistency_loss(nn.Module):
         self.saturation = saturation
         self.brightness = brightness
         self.loss_weight = loss_weight
-        self.mean = torch.tensor((0.5, 0.5)).view(1, 2, 1, 1)
-        self.similarity = nn.CosineSimilarity(dim=1, eps=1e-20)
+        self.register_buffer(
+            "mean", torch.tensor((0.5, 0.5)).view(1, 2, 1, 1), persistent=False
+        )
+        # Y row of sRGB -> XYZ
+        self.register_buffer(
+            "luma", torch.tensor([0.2126, 0.7152, 0.0722]), persistent=False
+        )
+        self.similarity = nn.CosineSimilarity(dim=1)
 
         if self.use_blur:
             self.blur = GaussianBlur(21, 3)
@@ -129,15 +136,16 @@ class consistency_loss(nn.Module):
         img = self.lin_rgb(img)
 
         # convert to luma - Y axis of sRGB > XYZ standard
-        img = img @ torch.tensor([0.2126, 0.7152, 0.0722])
+        img = img @ self.luma.to(img.dtype)
 
         # convert Y to L* (from CIELAB L*a*b*)
         # NOTE: will convert from range [0, 1] to range [0, 100]
+        knee = 216 / 24389
         img = torch.where(
-            img <= (216 / 24389),
-            img * (img * (24389 / 27)),
-            # torch workaround for cube-root in negative numbers
-            img.sign() * img.abs().pow(1 / 3) * 116 - 16,
+            img <= knee,
+            img * (24389 / 27),
+            # clamp so the unused branch has a finite cube-root gradient
+            img.clamp_min(knee).pow(1 / 3) * 116 - 16,
         )
 
         # normalize to [0, 1] range again and clamp
@@ -180,13 +188,11 @@ class consistency_loss(nn.Module):
         )
 
         if self.cosim:
-            # cosine-similarity
             cosim_chroma = 1 - self.similarity(input_chroma, target_chroma).mean()
             cosim_luma = 1 - self.similarity(input_luma, target_luma).mean()
-            # hardcoded lambda for now, as values above 0.5 causes instability
-            cosim = (0.5 * cosim_chroma) + (0.5 * cosim_luma)
-            # set threshold to avoid instability on early iters
-            if cosim < 1e-3:
-                loss = loss + cosim
+            # fixed 0.5 weights (higher values destabilise); only added once small, so
+            # early iterations are unaffected - torch.where avoids a host sync
+            cosim = 0.5 * cosim_chroma + 0.5 * cosim_luma
+            loss = loss + torch.where(cosim < 1e-3, cosim, 0.0)
 
         return loss * self.loss_weight

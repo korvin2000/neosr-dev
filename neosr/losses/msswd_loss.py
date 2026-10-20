@@ -6,9 +6,10 @@ from neosr.utils.registry import LOSS_REGISTRY
 
 
 class GaussianPyramid(nn.Module):
-    def __init__(self, num_scale=5):
+    def __init__(self, num_scale=5, channels=3):
         super().__init__()
         self.num_scale = num_scale
+        self.register_buffer("kernel", self.gauss_kernel(channels), persistent=False)
 
     def gauss_kernel(self, channels=3):
         kernel = torch.tensor([
@@ -38,8 +39,7 @@ class GaussianPyramid(nn.Module):
         return F.conv2d(img, kernel, groups=img.shape[1])
 
     def forward(self, img):
-        kernel = self.gauss_kernel()
-        kernel = kernel.to(img.device)
+        kernel = self.kernel.to(img.dtype)
         img_pyramid = [img]
         for _n in range(self.num_scale - 1):
             img = self.conv_gauss(img, kernel)
@@ -48,20 +48,25 @@ class GaussianPyramid(nn.Module):
         return img_pyramid
 
 
-def color_space_transform(input_color):
+# linear-rgb to xyz, assumes d65
+# https://www.image-engineering.de/library/technotes/958-how-to-convert-between-srgb-and-ciexyz
+RGB2XYZ = (
+    (10135552 / 24577794, 8788810 / 24577794, 4435075 / 24577794),
+    (2613072 / 12288897, 8788810 / 12288897, 887015 / 12288897),
+    (1425312 / 73733382, 8788810 / 73733382, 70074185 / 73733382),
+)
+# inverse D65 reference illuminant
+INV_ILLUMINANT = (1.052156925, 1.000000000, 0.918357670)
+
+
+def color_space_transform(input_color, rgb2xyz, inv_illuminant):
     """
     Transforms inputs between different color spaces
     :param input_color: tensor of colors to transform (with NxCxHxW layout)
+    :param rgb2xyz: (3, 3) RGB2XYZ tensor
+    :param inv_illuminant: (3,) INV_ILLUMINANT tensor
     :return: transformed tensor (with NxCxHxW layout)
     """
-    dim = input_color.size()
-    device = input_color.device
-    # Assume D65 standard illuminant
-    inv_reference_illuminant = torch.tensor([
-        [[1.052156925]],
-        [[1.000000000]],
-        [[0.918357670]],
-    ]).to(device)
     # srgb to linear-rgb
     limit = 0.04045
     transformed_color = torch.where(
@@ -70,28 +75,11 @@ def color_space_transform(input_color):
         input_color / 12.92,
     )  # clamp to stabilize training
 
-    # linear-rgb to xyz, assumes d65
-    # https://www.image-engineering.de/library/technotes/958-how-to-convert-between-srgb-and-ciexyz
-    a11 = 10135552 / 24577794
-    a12 = 8788810 / 24577794
-    a13 = 4435075 / 24577794
-    a21 = 2613072 / 12288897
-    a22 = 8788810 / 12288897
-    a23 = 887015 / 12288897
-    a31 = 1425312 / 73733382
-    a32 = 8788810 / 73733382
-    a33 = 70074185 / 73733382
-
-    A = torch.Tensor([[a11, a12, a13], [a21, a22, a23], [a31, a32, a33]])
-
-    transformed_color = transformed_color.view(
-        dim[0], dim[1], dim[2] * dim[3]
-    )  # NC(HW)
-    transformed_color = torch.matmul(A.to(device), transformed_color)
-    transformed_color = transformed_color.view(dim[0], dim[1], dim[2], dim[3])
-
-    # xyz to cie lab
-    transformed_color = torch.mul(transformed_color, inv_reference_illuminant)
+    # linear-rgb to xyz, then xyz to cie lab
+    transformed_color = torch.einsum(
+        "ij,njhw->nihw", rgb2xyz.to(transformed_color.dtype), transformed_color
+    )
+    transformed_color = transformed_color * inv_illuminant.view(1, 3, 1, 1)
     delta = 6 / 29
     delta_square = delta * delta
     delta_cube = delta * delta_square
@@ -128,32 +116,32 @@ class msswd_loss(nn.Module):
         self.patch_size = patch_size
         self.stride = stride
         self.c = c
-        self.sample_projections()
-        self.gaussian_pyramid = GaussianPyramid(num_scale)
+        self.gaussian_pyramid = GaussianPyramid(num_scale, c)
+        self.register_buffer("rgb2xyz", torch.tensor(RGB2XYZ), persistent=False)
+        self.register_buffer(
+            "inv_illuminant", torch.tensor(INV_ILLUMINANT), persistent=False
+        )
 
-    def sample_projections(self):
-        # Sample random normalized projections
-        rand = torch.randn(self.num_proj, self.c * self.patch_size**2)
+    def sample_projections(self, x):
+        # Sample random normalized projections, on x's device and dtype
+        rand = torch.randn(
+            self.num_proj, self.c * self.patch_size**2, device=x.device, dtype=x.dtype
+        )
         rand = rand / torch.linalg.vector_norm(
             rand, dim=1, keepdim=True
         )  # normalize to unit directions
-        self.rand = rand.reshape(
-            self.num_proj, self.c, self.patch_size, self.patch_size
-        )
+        return rand.reshape(self.num_proj, self.c, self.patch_size, self.patch_size)
 
-    def forward_once(self, x, y, reset_projections=True):
-        if reset_projections:
-            self.sample_projections()
-
-        self.rand = self.rand.to(x.device)
+    def forward_once(self, x, y):
+        rand = self.sample_projections(x)
         # Project patches
         pad_num = self.patch_size // 2
         x = F.pad(x, pad=(pad_num, pad_num, pad_num, pad_num), mode="reflect")
         y = F.pad(y, pad=(pad_num, pad_num, pad_num, pad_num), mode="reflect")
-        projx = F.conv2d(x, self.rand, stride=self.stride).reshape(
+        projx = F.conv2d(x, rand, stride=self.stride).reshape(
             x.shape[0], self.num_proj, -1
         )
-        projy = F.conv2d(y, self.rand, stride=self.stride).reshape(
+        projy = F.conv2d(y, rand, stride=self.stride).reshape(
             y.shape[0], self.num_proj, -1
         )
         # Sort and compute L1 loss
@@ -170,11 +158,14 @@ class msswd_loss(nn.Module):
         y_pyramid = self.gaussian_pyramid(y)
         for n in range(self.num_scale):
             # Image preprocessing
-            x_single = color_space_transform(x_pyramid[n])
-            y_single = color_space_transform(y_pyramid[n])
-            swd = self.forward_once(x_single, y_single)
+            x_single = color_space_transform(
+                x_pyramid[n], self.rgb2xyz, self.inv_illuminant
+            )
+            y_single = color_space_transform(
+                y_pyramid[n], self.rgb2xyz, self.inv_illuminant
+            )
+            ms_swd = ms_swd + self.forward_once(x_single, y_single)
 
-        ms_swd = ms_swd + swd
         ms_swd = ms_swd / self.num_scale
         # decrease magnitude to balance with other losses
         ms_swd = ms_swd.mean() * 0.1

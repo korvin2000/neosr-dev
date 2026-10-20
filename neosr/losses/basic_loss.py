@@ -165,16 +165,16 @@ class chc_loss(nn.Module):
             msg = f"Unsupported reduction mode: {reduction}. Supported ones are: {_reduction_modes}"
             raise ValueError(msg)
 
-        # Loss params
+        if criterion not in {"l1", "huber"}:
+            msg = f"{criterion} not implemented."
+            raise NotImplementedError(msg)
+
         self.loss_weight = loss_weight
+        self.reduction = reduction
         self.criterion = criterion
-
-        # CoSim
-        self.similarity = nn.CosineSimilarity(dim=1, eps=1e-20)
+        self.similarity = nn.CosineSimilarity(dim=1)
         self.loss_lambda = loss_lambda  # 5/255 = 0.019607
-
-        # Clip
-        self.clip_min = clip_min  # 1/255 = 0.03921
+        self.clip_min = clip_min  # 1/255 = 0.003921
         self.clip_max = clip_max
 
     def forward(
@@ -189,31 +189,19 @@ class chc_loss(nn.Module):
             target (Tensor): of shape (N, C, H, W). Ground truth tensor.
 
         """
-        cosine_term = (1 - self.similarity(pred, target)).mean()
+        # at least fp32: the 1e-12 charbonnier eps and the cosine eps underflow in
+        # fp16/bf16 -> NaN grads; fp64 inputs keep their precision
+        dtype = torch.promote_types(pred.dtype, torch.float32)
+        pred, target = pred.to(dtype), target.to(dtype)
+        diff = pred - target
+        # absolute or pseudo-huber (charbonnier)
+        loss = diff.abs() if self.criterion == "l1" else torch.sqrt(diff**2 + 1e-12)
+        if self.loss_lambda:
+            loss = loss + self.loss_lambda * (1 - self.similarity(pred, target)).mean()
+        loss = torch.clamp(loss, self.clip_min, self.clip_max)
 
-        # absolute mean
-        if self.criterion == "l1":
-            loss = torch.mean(
-                torch.clamp(
-                    (torch.abs(pred - target) + self.loss_lambda * cosine_term),
-                    self.clip_min,
-                    self.clip_max,
-                )
-            )
-        # pseudo-huber (charbonnier)
-        elif self.criterion == "huber":
-            loss = torch.mean(
-                torch.clamp(
-                    (
-                        torch.sqrt((pred - target) ** 2 + 1e-12)
-                        + self.loss_lambda * cosine_term
-                    ),
-                    self.clip_min,
-                    self.clip_max,
-                )
-            )
-        else:
-            msg = f"{self.criterion} not implemented."
-            raise NotImplementedError(msg)
-
+        if self.reduction == "mean":
+            loss = loss.mean()
+        elif self.reduction == "sum":
+            loss = loss.sum()
         return self.loss_weight * loss

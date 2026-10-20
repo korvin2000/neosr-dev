@@ -1,5 +1,3 @@
-import math
-
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
@@ -148,8 +146,9 @@ class mssim_loss(nn.Module):
         ms_components = []
         for i, w in enumerate((0.0448, 0.2856, 0.3001, 0.2363, 0.1333)):
             ssim, cs = self._ssim(x, y)
-            ssim = ssim.mean()
-            cs = cs.mean()
+            # reduce per (N, C) and clamp: negative (anti-correlated) bases give NaN in **w
+            ssim = ssim.mean((2, 3)).clamp_min(1e-6)
+            cs = cs.mean((2, 3)).clamp_min(1e-6)
 
             if i == 4:
                 ms_components.append(ssim**w)
@@ -159,4 +158,4 @@ class mssim_loss(nn.Module):
                 x = F.avg_pool2d(x, kernel_size=2, stride=2, padding=padding)
                 y = F.avg_pool2d(y, kernel_size=2, stride=2, padding=padding)
 
-        return math.prod(ms_components)  # equ 7 in ref2
+        return torch.stack(ms_components).prod(0).mean()  # equ 7 in ref2

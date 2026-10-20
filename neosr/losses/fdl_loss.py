@@ -183,7 +183,7 @@ class dinov2(nn.Module):
                     trust_repo="check",
                     verbose=False,
                 )
-                .to("cuda", memory_format=torch.channels_last, non_blocking=True)
+                .to(memory_format=torch.channels_last)
                 .eval()
             )
 
@@ -269,8 +269,8 @@ class fdl_loss(nn.Module):
         loss_weight=1.0,
     ):
         super().__init__()
-        self.model_name = model
         model = model.lower()
+        self.model_name = model
 
         if model == "resnet":
             self.model = ResNet()
@@ -289,9 +289,7 @@ class fdl_loss(nn.Module):
         self.stride = stride
 
         for i in range(len(self.model.chns)):
-            rand = torch.randn(
-                num_proj, self.model.chns[i], patch_size, patch_size, device="cuda"
-            )
+            rand = torch.randn(num_proj, self.model.chns[i], patch_size, patch_size)
             rand = rand / rand.view(rand.shape[0], -1).norm(dim=1).unsqueeze(
                 1
             ).unsqueeze(2).unsqueeze(3)

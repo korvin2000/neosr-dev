@@ -51,41 +51,19 @@ NAMES: dict[str, list[str]] = {
 }
 
 
-def insert_bn(names: list[str]) -> list[str]:
-    """Insert bn layer after each conv.
-
-    Args:
-    ----
-        names (list): The list of layer names.
-
-    Returns:
-    -------
-        list: The list of layer names with bn layers.
-
-    """
-    names_bn = []
-    for name in names:
-        names_bn.append(name)
-        if "conv" in name:
-            position = name.replace("conv", "")
-            names_bn.append("bn" + position)
-    return names_bn
-
-
 @ARCH_REGISTRY.register()
 class VGGFeatureExtractor(nn.Module):
     """VGG network for feature extraction.
 
     In this implementation, we allow users to choose whether use normalization
-    in the input feature and the type of vgg network. Note that the pretrained
-    path must fit the vgg type.
+    in the input feature. Only vgg19 is supported.
 
     Args:
     ----
         layer_name_list (list[str]): Forward function returns the corresponding
             features according to the layer_name_list.
             Example: {'relu1_1', 'relu2_1', 'relu3_1'}.
-        vgg_type (str): Set the type of vgg network. Default: 'vgg19'.
+        vgg_type (str): Must be 'vgg19'. Default: 'vgg19'.
         use_input_norm (bool): If True, normalize the input image. Importantly,
             the input feature must in the range [0, 1]. Default: True.
         range_norm (bool): If True, norm images with range [-1, 1] to [0, 1].
@@ -114,24 +92,23 @@ class VGGFeatureExtractor(nn.Module):
         self.use_input_norm = use_input_norm
         self.range_norm = range_norm
 
-        self.names = NAMES[vgg_type.replace("_bn", "")]
-        if "bn" in vgg_type:
-            self.names = insert_bn(self.names)
+        # other types never got matching weights (crash or silently vgg19 weights)
+        if vgg_type != "vgg19":
+            msg = f"VGGFeatureExtractor supports only vgg19, got '{vgg_type}'"
+            raise ValueError(msg)
+        self.names = NAMES[vgg_type]
 
         # only borrow layers that will be used to avoid unused params
-        max_idx = 0
-        for v in layer_name_list:
-            idx = self.names.index(v)
-            max_idx = max(idx, max_idx)
+        max_idx = max(self.names.index(v) for v in layer_name_list)
 
         if Path(VGG_PRETRAIN_PATH).exists():
-            vgg_net = getattr(vgg, vgg_type)
+            vgg_net = vgg.vgg19(weights=None)
             state_dict = torch.load(
-                VGG_PRETRAIN_PATH, map_location=torch.device("cuda"), weights_only=True
+                VGG_PRETRAIN_PATH, map_location="cpu", weights_only=True
             )
             vgg_net.load_state_dict(state_dict)
         else:
-            vgg_net = getattr(vgg, vgg_type)(weights=VGG19_Weights.DEFAULT)
+            vgg_net = vgg.vgg19(weights=VGG19_Weights.DEFAULT)
 
         features = vgg_net.features[: max_idx + 1]
 
@@ -144,6 +121,9 @@ class VGGFeatureExtractor(nn.Module):
                 # in some cases, we may want to change the default stride
                 modified_net[k] = nn.MaxPool2d(kernel_size=2, stride=pooling_stride)
             else:
+                if isinstance(v, nn.ReLU):
+                    # in-place relu would overwrite the returned conv features
+                    v.inplace = False
                 modified_net[k] = v  # type: ignore[assignment]
 
         self.vgg_net = nn.Sequential(modified_net)
@@ -158,25 +138,12 @@ class VGGFeatureExtractor(nn.Module):
                 param.requires_grad = True
 
         if self.use_input_norm:
-            """
-            ImageNet values:
-                mean = [0.485, 0.456, 0.406]
-                std = [0.229, 0.224, 0.225]
-            """
-
-            # I changed these to ImageNet values, I favor quality over training stability here.
-            # This ensures that the VGG network with its trained model is operating in its intended feature space, leading to more semantically meaningful features.
-            # musls reasoning is still sound. Using ImageNet values on a very different dataset can cause training instability, and a more general normalization like [0.5, 0.5, 0.5] can help stabilize training, even if the features are slightly less "correct."
-
-            # the mean is for image with range [0, 1]
+            # ImageNet stats, for images with range [0, 1]
             self.register_buffer(
-               #"mean", torch.tensor([0.5, 0.5, 0.5], device="cuda").view(1, 3, 1, 1)
-                "mean", torch.tensor([0.485, 0.456, 0.406], device="cuda").view(1, 3, 1, 1)
+                "mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
             )
-            # the std is for image with range [0, 1]
             self.register_buffer(
-                #"std", torch.tensor([0.25, 0.25, 0.25], device="cuda").view(1, 3, 1, 1)
-                "std", torch.tensor([0.229, 0.224, 0.225], device="cuda").view(1, 3, 1, 1)
+                "std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
             )
 
     def forward(self, x: Tensor) -> dict[str, Tensor]:
@@ -200,6 +167,6 @@ class VGGFeatureExtractor(nn.Module):
         for key, layer in self.vgg_net._modules.items():
             x = layer(x)
             if key in self.layer_name_list:
-                output[key] = x.clone()
+                output[key] = x
 
         return output

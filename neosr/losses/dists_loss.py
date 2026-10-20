@@ -12,26 +12,18 @@ from neosr.utils.registry import LOSS_REGISTRY
 
 class L2pooling(nn.Module):
     def __init__(
-        self,
-        filter_size: int = 5,
-        stride: int = 2,
-        channels: int = 64,
-        as_loss: bool = True,
+        self, filter_size: int = 5, stride: int = 2, channels: int = 64
     ) -> None:
         super().__init__()
         self.padding = (filter_size - 2) // 2
         self.stride = stride
         self.channels = channels
         a = np.hanning(filter_size)[1:-1]
-        g = torch.Tensor(a[:, None] * a[None, :])
+        g = torch.tensor(a[:, None] * a[None, :], dtype=torch.float32)
         g = g / torch.sum(g)
         self.register_buffer(
             "filter", g[None, None, :, :].repeat((self.channels, 1, 1, 1))
         )
-
-        if as_loss is False:
-            # send to cuda
-            self.filter: Tensor = self.filter.cuda()
 
     def forward(self, x: Tensor) -> Tensor:
         x = x**2
@@ -76,21 +68,18 @@ class dists_loss(nn.Module):
         self.stage5 = torch.nn.Sequential()
         for x in range(4):
             self.stage1.add_module(str(x), vgg_pretrained_features[x])  # type: ignore[reportIndexIssue]
-        self.stage2.add_module(str(4), L2pooling(channels=64, as_loss=as_loss))
+        self.stage2.add_module(str(4), L2pooling(channels=64))
         for x in range(5, 9):
             self.stage2.add_module(str(x), vgg_pretrained_features[x])  # type: ignore[reportIndexIssue]
-        self.stage3.add_module(str(9), L2pooling(channels=128, as_loss=as_loss))
+        self.stage3.add_module(str(9), L2pooling(channels=128))
         for x in range(10, 16):
             self.stage3.add_module(str(x), vgg_pretrained_features[x])  # type: ignore[reportIndexIssue]
-        self.stage4.add_module(str(16), L2pooling(channels=256, as_loss=as_loss))
+        self.stage4.add_module(str(16), L2pooling(channels=256))
         for x in range(17, 23):
             self.stage4.add_module(str(x), vgg_pretrained_features[x])  # type: ignore[reportIndexIssue]
-        self.stage5.add_module(str(23), L2pooling(channels=512, as_loss=as_loss))
+        self.stage5.add_module(str(23), L2pooling(channels=512))
         for x in range(24, 30):
             self.stage5.add_module(str(x), vgg_pretrained_features[x])  # type: ignore[reportIndexIssue]
-
-        for param in self.parameters():
-            param.requires_grad = False
 
         self.chns = [3, 64, 128, 256, 512, 512]
         self.register_parameter(
@@ -102,32 +91,39 @@ class dists_loss(nn.Module):
         self.alpha.data.normal_(0.1, 0.01)
         self.beta.data.normal_(0.1, 0.01)
 
+        # after alpha/beta: they are fixed DISTS weights, not trained
+        for param in self.parameters():
+            param.requires_grad = False
+
+        # ImageNet input normalisation of the reference DISTS (alpha/beta were fitted on it)
+        self.register_buffer(
+            "mean",
+            torch.tensor([0.485, 0.456, 0.406]).view(1, -1, 1, 1),
+            persistent=False,
+        )
+        self.register_buffer(
+            "std",
+            torch.tensor([0.229, 0.224, 0.225]).view(1, -1, 1, 1),
+            persistent=False,
+        )
+
         # load dists weights
         if load_weights:
             model_path = Path(__file__).parent / "dists_weights.pth"
-            try:
-                if not model_path.exists():
-                    url = "https://huggingface.co/neosr/models/resolve/main/dists_weights.pth?download=true"
+            if not model_path.exists():
+                url = "https://huggingface.co/neosr/models/resolve/main/dists_weights.pth?download=true"
+                try:
                     request.urlretrieve(url, model_path)  # noqa: S310
-            except:
-                msg = "Could not download DISTS weights."
-                raise ValueError(msg)
+                except OSError as err:
+                    msg = "Could not download DISTS weights."
+                    raise ValueError(msg) from err
 
-            weights = torch.load(
-                model_path, map_location=torch.device("cuda"), weights_only=True
-            )
-
-            if weights is not None:
-                self.alpha.data = weights["alpha"]
-                self.beta.data = weights["beta"]
-
-            if as_loss is False:
-                # send to cuda
-                self.alpha.data = self.alpha.data.cuda()
-                self.beta.data = self.beta.data.cuda()
+            weights = torch.load(model_path, map_location="cpu", weights_only=True)
+            self.alpha.data = weights["alpha"]
+            self.beta.data = weights["beta"]
 
     def forward_once(self, x: Tensor) -> list[Tensor]:
-        h = x
+        h = (x - self.mean) / self.std
         h = self.stage1(h)
         h_relu1_2 = h
         h = self.stage2(h)

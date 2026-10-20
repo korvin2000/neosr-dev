@@ -1,4 +1,3 @@
-import torch
 from torch import Tensor, nn
 
 from neosr.utils.registry import LOSS_REGISTRY
@@ -17,22 +16,16 @@ class ncc_loss(nn.Module):
         super().__init__()
         self.loss_weight = loss_weight
 
-    def _cc(self, net_output: Tensor, gt: Tensor):
-        # reshape
-        net_output_reshaped = net_output.view(net_output.shape[1], -1)
-        gt_reshaped = gt.view(gt.shape[1], -1)
-        # calculate mean
-        mean_net_output = torch.mean(net_output_reshaped, 1).unsqueeze(1)
-        mean_gt = torch.mean(gt_reshaped, 1).unsqueeze(1)
-        # cross-correlation
-        cc = torch.sum(
-            (net_output_reshaped - mean_net_output) * (gt_reshaped - mean_gt), 1
-        ) / torch.sqrt(
-            torch.sum((net_output_reshaped - mean_net_output) ** 2, 1)
-            * torch.sum((gt_reshaped - mean_gt) ** 2, 1)
-        )
-        return torch.mean(cc)
+    def _cc(self, net_output: Tensor, gt: Tensor) -> Tensor:
+        # correlate per (N, C); flatten() also handles channels_last
+        a = net_output.flatten(2).float()
+        b = gt.flatten(2).float()
+        da = a - a.mean(2, keepdim=True)
+        db = b - b.mean(2, keepdim=True)
+        # clamp: a constant channel would give 0/0
+        denom = ((da**2).sum(2) * (db**2).sum(2)).clamp_min(1e-8).sqrt()
+        return ((da * db).sum(2) / denom).mean()
 
-    def forward(self, net_output: Tensor, gt: Tensor):
+    def forward(self, net_output: Tensor, gt: Tensor) -> Tensor:
         cc_value = self._cc(net_output, gt)
         return (1 - ((cc_value + 1) * 0.5)) * self.loss_weight

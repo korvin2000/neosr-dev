@@ -89,15 +89,16 @@ class ldl_loss(nn.Module):
         """
         residual_sr = torch.sum(torch.abs(img_gt - img_output), 1, keepdim=True)
 
+        # fp32 + clamp: d(var**0.2)/dvar is inf at zero variance (constant residual)
         patch_level_weight = torch.var(
-            residual_sr.clone(), dim=(-1, -2, -3), keepdim=True
-        ) ** (1 / 5)
-        pixel_level_weight = self.get_local_weights(residual_sr.clone())
+            residual_sr.float(), dim=(-1, -2, -3), keepdim=True
+        ).clamp_min(1e-12) ** (1 / 5)
+        pixel_level_weight = self.get_local_weights(residual_sr)
         return patch_level_weight * pixel_level_weight
 
     def forward(self, net_output: Tensor, gt: Tensor) -> Tensor:
         overall_weight = self.get_refined_artifact_map(gt, net_output)
-        self.output = torch.mul(overall_weight, net_output)
-        self.gt = torch.mul(overall_weight, gt)
-
-        return self.criterion(self.output, self.gt) * self.loss_weight
+        return (
+            self.criterion(overall_weight * net_output, overall_weight * gt)
+            * self.loss_weight
+        )

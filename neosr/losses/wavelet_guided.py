@@ -62,10 +62,10 @@ def prep_filt_afb2d(
     h0_row = h0_col if h0_row is None else np.array(h0_row[::-1]).ravel()
     h1_row = h1_col if h1_row is None else np.array(h1_row[::-1]).ravel()
 
-    h0_col_tensor: Tensor = torch.tensor(h0_col, device="cuda").reshape((1, 1, -1, 1))
-    h1_col_tensor: Tensor = torch.tensor(h1_col, device="cuda").reshape((1, 1, -1, 1))
-    h0_row_tensor: Tensor = torch.tensor(h0_row, device="cuda").reshape((1, 1, 1, -1))
-    h1_row_tensor: Tensor = torch.tensor(h1_row, device="cuda").reshape((1, 1, 1, -1))
+    h0_col_tensor: Tensor = torch.tensor(h0_col).reshape((1, 1, -1, 1))
+    h1_col_tensor: Tensor = torch.tensor(h1_col).reshape((1, 1, -1, 1))
+    h0_row_tensor: Tensor = torch.tensor(h0_row).reshape((1, 1, 1, -1))
+    h1_row_tensor: Tensor = torch.tensor(h1_row).reshape((1, 1, 1, -1))
 
     return h0_col_tensor, h1_col_tensor, h0_row_tensor, h1_row_tensor
 
@@ -95,10 +95,10 @@ def prep_filt_sfb2d(
         g0_row = g0_col
     if g1_row is None:
         g1_row = g1_col
-    g0_col = torch.tensor(g0_col, device="cuda").reshape((1, 1, -1, 1))
-    g1_col = torch.tensor(g1_col, device="cuda").reshape((1, 1, -1, 1))
-    g0_row = torch.tensor(g0_row, device="cuda").reshape((1, 1, 1, -1))
-    g1_row = torch.tensor(g1_row, device="cuda").reshape((1, 1, 1, -1))
+    g0_col = g0_col.reshape((1, 1, -1, 1))
+    g1_col = g1_col.reshape((1, 1, -1, 1))
+    g0_row = g0_row.reshape((1, 1, 1, -1))
+    g1_row = g1_row.reshape((1, 1, 1, -1))
 
     return g0_col, g1_col, g0_row, g1_row
 
