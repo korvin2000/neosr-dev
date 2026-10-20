@@ -1,0 +1,1002 @@
+[
+ {
+  "group": "G1",
+  "title": "GAN / discriminator / training step",
+  "items": [
+   {
+    "id": "G1.1",
+    "verdict": "TRUE",
+    "severity": "critical",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Remove `with torch.inference_mode():` at image.py:610 and dedent 611; D params are already requires_grad=False (498-499). Land it together with G1.2."
+   },
+   {
+    "id": "G1.2",
+    "verdict": "TRUE",
+    "severity": "critical",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Remove net_d.eval() at image.py:654/692 so D's real/fake training forwards run in train mode (SN power iteration, BN/dropout). For the G pass, eval vs train is an explicit choice."
+   },
+   {
+    "id": "G1.3",
+    "verdict": "TRUE",
+    "severity": "high",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "When wavelet_guided and iter>=wavelet_init, query net_d(combined_HF) in the G pass at 611; remove @torch.no_grad (wavelet_guided.py:386) and the no_grad at image.py:539 on G's path; keep the filters frozen and .detach() on D's fake input."
+   },
+   {
+    "id": "G1.4",
+    "verdict": "TRUE",
+    "severity": "high",
+    "action": "redesign",
+    "consensus": "unanimous",
+    "fix": "Now: SAM+use_amp becomes a hard error, and the SAM replay must not re-run the D block. Proper fix: a single G optimizer owner (SAM in self.optimizers with saved state, scheduler and warmup), a G-only replay closure, and one D scale/backward/step/update per iteration."
+   },
+   {
+    "id": "G1.5",
+    "verdict": "PARTIAL",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "In feed_data store gt_raw and clear an ECO cache; compute the blended target and lq centroid once per fed batch (no_grad, detached) and reuse them in the SAM second pass; optionally suppress the extra BN running-stat update."
+   },
+   {
+    "id": "G1.6",
+    "verdict": "PARTIAL",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "majority",
+    "fix": "Use not torch.isfinite(l_g_total) at image.py:716, and when net_d exists check l_d_real/l_d_fake before D's backward/step, naming the failing side. Defer EMA and scheduler gating on scaler-skipped steps."
+   },
+   {
+    "id": "G1.7",
+    "verdict": "PARTIAL",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Delete the dead %4 check at image.py:331-332 (do not enforce it) and the no-op .detach() statements at 623/688-689. Keep the bf16 GradScaler. Removing the same ValueError in otf/default/simple_otf/eqr_otf/pancam_otf is a separate follow-up."
+   },
+   {
+    "id": "G1.8",
+    "verdict": "PARTIAL",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Do the accumulation divisions out of place after logging (622, 665, 680); keep or rename the mean D metric."
+   },
+   {
+    "id": "G1.M1-fable",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "delete-feature",
+    "consensus": "judge",
+    "fix": "Remove net_d_ema construction (image.py:103-108) and its update (769-770); save self.net_d at 999. Leave G's EMA save unchanged."
+   },
+   {
+    "id": "G1.M2-fable",
+    "verdict": "TRUE",
+    "severity": "high",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Replace the warning at image.py:301-306 with logger.error + sys.exit(1) for sam+use_amp until the SAM branch scales and updates gradscaler_d correctly."
+   },
+   {
+    "id": "G1.M3-fable",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "majority",
+    "fix": "Feed gt_raw to D's real branch (image.py:659) and the wavelet gt (540); reconstruction losses keep the ECO centroid. Fallback: reject eco+GAN at config. Document this as a deviation from upstream."
+   },
+   {
+    "id": "G1.M1-codex",
+    "verdict": "PARTIAL",
+    "severity": "low",
+    "action": "defer",
+    "consensus": "majority",
+    "fix": "No code change now; document clamp=false for from-scratch training. Moving the clamp to val/export only changes the objective and needs a separate decision."
+   },
+   {
+    "id": "G1.M2-codex",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "resgan_arch.py:80: self.conv2(x2) -> self.conv3(x2). Note that existing ResGAN D checkpoints carry an untrained conv3."
+   },
+   {
+    "id": "G1.M3-codex",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "delete-feature",
+    "consensus": "unanimous",
+    "fix": "Remove the attention arg and simam module (resgan_arch.py:62-65) or reject attention=True; implement it only with an explicit placement."
+   }
+  ]
+ },
+ {
+  "group": "G2",
+  "title": "Accumulation / counters / scheduler / logging / train loop",
+  "items": [
+   {
+    "id": "G2.1",
+    "verdict": "TRUE",
+    "severity": "high",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Delete the closure increment (image.py:501-505) so optimize_parameters increments once. Use one boundary (current_iter % accum_iters == 0 from a loop-owned counter) for clip (:632,:704), step (:743), zero_grad, EMA and scheduler (base.py:268)."
+   },
+   {
+    "id": "G2.2",
+    "verdict": "TRUE",
+    "severity": "high",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "train.py:460: current_iter = int(resume_state['iter']) * accumulate. logger.py:143: drop the extra // self.accumulate (keep the :153 it/s conversion). Document the unit of the saved counter."
+   },
+   {
+    "id": "G2.3",
+    "verdict": "TRUE",
+    "severity": "high",
+    "action": "delete-feature",
+    "consensus": "unanimous",
+    "fix": "Delete train.py:577-584 (low-throughput save + sys.exit(0)). Keep the it/s reporting (log_vars['time'], logger.py:164)."
+   },
+   {
+    "id": "G2.4",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "base.py:559: keep detached tensors and convert to float in get_current_log at print_freq. Do the NaN check once per print window. Vectorize the consistency_loss threshold and diffjpeg quality selection. Drop the ff_loss .item() asserts."
+   },
+   {
+    "id": "G2.5",
+    "verdict": "PARTIAL",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "(a) Delete the dead image.py:159 total_iter and the stale logger.py:106 docstring. (b) In setup_optimizers add g.setdefault('initial_lr', g['lr']) for each param_group. (c) Delete train.py:327-334 so experiments_root from options.py:246-260 is kept."
+   },
+   {
+    "id": "G2.6",
+    "verdict": "PARTIAL",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Delete the train.py:297-317 nvcc gate. Replace :287 with a (major, minor) tuple compare or delete it. Delete the duplicate tb_logger.close (:656-659). Scheduler timing is fixed by G2.1."
+   },
+   {
+    "id": "G2.M1",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Loop epochs while current_iter < total_iters (or break both loops with a flag). Check the budget before incrementing. Size epochs from len(train_loader) and drop the * accumulate unit mix (:149-154). Merge with G2.M7."
+   },
+   {
+    "id": "G2.M2",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Set the warm-up LR before optimize_parameters using <= so it reaches init_lr at w. Step the scheduler after the update with one update counter. Or delete warmup_iter (unused by any config)."
+   },
+   {
+    "id": "G2.M3",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "redesign",
+    "consensus": "majority",
+    "fix": "The loop owns micro_iter and update_iter. Pass update_iter to optimize_parameters, update_learning_rate and update_loss_weights (eco/wavelet/sam/warmup thresholds). Gate print/save/val on completed updates. Size epochs from len(train_loader). Do this as one counter redesign with G2.1/G2.2/M1/M6/M7."
+   },
+   {
+    "id": "G2.M4",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Normalise and validate once in options.parse_options: missing -> 1, non-integer or <1 -> clear config error. Read the value raw at train.py:148/448, image.py:175 and logger.py:116."
+   },
+   {
+    "id": "G2.M6",
+    "verdict": "PARTIAL",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "majority",
+    "fix": "Track a loop-owned completed_updates counter (incremented after a boundary step) and save it at train.py:635 (also :583/:596). Discard the partial window on resume. Do not persist partial gradients. Depends on the G2.1 fix."
+   },
+   {
+    "id": "G2.M7",
+    "verdict": "TRUE",
+    "severity": "high",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "num_iter_per_epoch = len(train_loader) (covers enlarge ratio, drop_last and the DataParallel multiplier). Reject an empty loader. Loop until the micro-batch budget is met (merge with G2.M1)."
+   }
+  ]
+ },
+ {
+  "group": "G3",
+  "title": "Checkpoint / resume / EMA / compile / DDP wrappers",
+  "items": [
+   {
+    "id": "G3.1",
+    "verdict": "TRUE",
+    "severity": "high",
+    "action": "redesign",
+    "consensus": "unanimous",
+    "fix": "save_network([net_g, net_g_ema], 'net_g', iter, ['params','params_ema']) (same for D). Resume loads 'params' into the live nets and 'params_ema' into the EMA (needs the G3.7 key fix). save_training_state also stores and restores GradScaler state_dicts. Save at completed-update boundaries; RNG and sampler position deferred."
+   },
+   {
+    "id": "G3.2",
+    "verdict": "TRUE",
+    "severity": "high",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "At train.py:235-238, log and sys.exit(1) when a requested resume fails. Rewrite the retry loop as `for attempt in range(3): try: torch.save(...); break / except OSError: sleep(1)` with `else: exit(1)`. Make writes atomic with a tmp file plus os.replace in save_network and save_training_state, writing .state last."
+   },
+   {
+    "id": "G3.3",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "redesign",
+    "consensus": "unanimous",
+    "fix": "Fold into G3.1: save live y under 'params' for resume and export inference weights separately. To export x for ema<=0 SF runs, call optimizer.eval(), copy into the inference key, then optimizer.train() in finally. Capture was_train before image.py:851 and restore it. Do not apply the eval()-before-copy reorder on its own."
+   },
+   {
+    "id": "G3.4",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Make get_bare_model a loop that unwraps DP/DDP (.module), OptimizedModule (._orig_mod) and AveragedModel (.module). Build AveragedModel(get_bare_model(net)) (image.py:98-108) and call update_parameters(get_bare_model(net)) (image.py:768-770). Strip a legacy '_orig_mod.' prefix in load_network and validate with the bare model. No structural split is needed."
+   },
+   {
+    "id": "G3.5",
+    "verdict": "PARTIAL",
+    "severity": "low",
+    "action": "defer",
+    "consensus": "unanimous",
+    "fix": "Fold into the G6.1 DDP overhaul as a required item. In dist_validation, run validation on rank 0 using get_bare_model (also for the EMA's inner module), so no DDP forward runs. Add dist.barrier() on all ranks afterwards and fix the reduce() return."
+   },
+   {
+    "id": "G3.6",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "delete-feature",
+    "consensus": "unanimous",
+    "fix": "Remove the QAT block at train.py:414-446, the _init_ema QAT override at image.py:74-86 and the enable_qat options. If QAT is kept, register the aether archs, fuse and prepare inside build_model before building optimizers and wrappers, keep the AveragedModel and match the calibrate signature."
+   },
+   {
+    "id": "G3.7",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Use param_key if it is in load_net, else the first present of ('params-ema','params_ema','params'), else treat the file as a raw state dict. Narrow the bare except to KeyError. sys.exit(1) or raise at base.py:407 and :445."
+   },
+   {
+    "id": "G3.F-M1",
+    "verdict": "PARTIAL",
+    "severity": "low",
+    "action": "defer",
+    "consensus": "majority",
+    "fix": "Document SF+EMA semantics now and warn in config validation when schedule_free and ema>0 are both set. Before changing policy, run a short A/B on one SF config comparing x, EMA(y) and EMA(x). Then either skip the AveragedModel for SF and export/validate x (with the G3.1/G3.3 resume handling) or keep EMA(y)."
+   },
+   {
+    "id": "G3.F-M2",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "judge",
+    "fix": "In check_resume, record the original pretrain state before overwriting pretrain_network_g (e.g. opt['path']['pretrain_g_initial'] = bool(original value)), and ideally persist it in the .state file. image.py:170 then uses that flag instead of the rewritten path. Do not unconditionally set self.pretrain=None on resume."
+   },
+   {
+    "id": "G3.F-M3",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "After prefix normalization and shape filtering, sys.exit(1) or raise when no checkpoint key matches a model key. Log loaded/total counts for partial loads."
+   },
+   {
+    "id": "G3.F-M4",
+    "verdict": "FALSE",
+    "severity": "none",
+    "action": "not-a-bug",
+    "consensus": "unanimous",
+    "fix": "Optional cleanup: save prev = self.is_train at image.py:851 and restore it at :980 instead of forcing True."
+   },
+   {
+    "id": "G3.F-M5",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Delete the eval()/train() toggles at base.py:475-478 and 501-504. Coordinate with G3.1 for the save_network toggles at base.py:353-356/379-382."
+   },
+   {
+    "id": "G3.F-M6",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "majority",
+    "fix": "Check opt['path'].get('resume_state') explicitly, either first or as a fallback when the auto-scan finds nothing. Exit with an error when an explicitly requested resume cannot load (see G3.2). Keep the fresh start when auto_resume finds no state and no explicit path was given."
+   },
+   {
+    "id": "G3.C-M1",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "delete-feature",
+    "consensus": "majority",
+    "fix": "Fold into the G3.6 removal. If QAT is kept, use tq.get_default_qat_qconfig('fbgemm') (FakeQuantize) in both aether_arch.py:544 and aether_core.py:551, including the bf16 activation path."
+   },
+   {
+    "id": "G3.C-M2",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "delete-feature",
+    "consensus": "majority",
+    "fix": "Fold into the G3.6 removal. If QAT is kept, rebuild the fused/QAT structure before load_network, or save float-equivalent weights with a structure flag, and build optimizers after the parameter-changing transforms."
+   },
+   {
+    "id": "G3.C-M3",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "delete-feature",
+    "consensus": "majority",
+    "fix": "Fold into the G3.6 removal. If QAT is kept, save and restore was_training in calibrate() with try/finally, or call net_g.train() after train.py:438."
+   }
+  ]
+ },
+ {
+  "group": "G4",
+  "title": "Optimizers",
+  "items": [
+   {
+    "id": "G4.1",
+    "verdict": "PARTIAL",
+    "severity": "high",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Compute sched above the SF branch and pass lr=group['lr']*sched to the kernel (adan_sf.py:315). Do not pass the sqrt(bc3)-scaled lr from :260, because denom is already bias-corrected at :54-56. Land this together with the G4.M2 kernel redesign."
+   },
+   {
+    "id": "G4.2",
+    "verdict": "TRUE",
+    "severity": "high",
+    "action": "delete-feature",
+    "consensus": "majority",
+    "fix": "Delete neosr/optimizers/soap_sf.py and its wiring: optimizers/__init__.py, base.py:14,193-194, image.py:20,368,374-377,395-396,424,430-433, readme.md:214. If SOAP is wanted later, depend on heavyball instead of re-vendoring it."
+   },
+   {
+    "id": "G4.3",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "adamw_win: replace lr_y/lr_x->beta3, lr_z/lr_x->beta4, lr_z/lr_y->beta4/beta3 at every occurrence (:188,:192,:203-211), and require beta3>0 for win2. adamw_sf: raise ValueError for schedule_free=False. adamw_sf and adan_sf: require 0<beta1<1."
+   },
+   {
+    "id": "G4.4",
+    "verdict": "PARTIAL",
+    "severity": "low",
+    "action": "defer",
+    "consensus": "majority",
+    "fix": "No registry rewrite now. The residual divergence of SF-required sets between image.py:368 and :424 goes away once soap_sf is deleted. Optionally unify the alias lookup and replace sys.exit with exceptions later."
+   },
+   {
+    "id": "G4.M1",
+    "verdict": "TRUE",
+    "severity": "high",
+    "action": "delete-feature",
+    "consensus": "majority",
+    "fix": "Covered by deleting soap_sf (G4.2). If it were kept: skip merge_dims when reshape cannot return a view, or copy the update back into the parameter."
+   },
+   {
+    "id": "G4.M2",
+    "verdict": "TRUE",
+    "severity": "high",
+    "action": "redesign",
+    "consensus": "unanimous",
+    "fix": "Use one direction U=(m/bc1+(b2/bc2)*diff)/denom+wd*y; then y.lerp_(z,ckp1); y += lr*(b1*(1-ckp1)-1)*U; z -= lr*U, with lr=group lr*sched. Move the :58 decay into the non-SF branch. Gate behind an SR-metric A/B and keep a legacy mode for existing checkpoints. Fallback: plain adan plus warmup."
+   },
+   {
+    "id": "G4.M3",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "After FSAM construction, set optimizer_g = sam_optimizer_g.base_optimizer for scheduling, SF and checkpointing. Make fsam.state_dict/load_state_dict include the wrapped optimizer's state. Alternatively, reject sam until this is fixed."
+   },
+   {
+    "id": "G4.M3b",
+    "verdict": "TRUE",
+    "severity": "high",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Give D one consistent lifecycle under SAM: either the full scaler path (scale backward -> step -> update) or, when the scaler is disabled (bf16), a direct optimizer_d.step(). Reject SAM with fp16 AMP if that path is not implemented. Also zero D grads inside the closure, because fsam.step re-runs the closure (fsam.py:109-111) and doubles D grads."
+   },
+   {
+    "id": "G4.M4",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Drop **kwargs at adan.py:162 and adan_sf.py:123 so TypeError surfaces. The soap_sf case goes away with its deletion."
+   },
+   {
+    "id": "G4.M5",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "delete-feature",
+    "consensus": "unanimous",
+    "fix": "Delete restart_opt (adan.py:195-208, adan_sf.py:161-174)."
+   },
+   {
+    "id": "G4.M6",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Wrap the closure call in 'with torch.enable_grad():' in the step() of adan, adan_sf and adamw_win."
+   },
+   {
+    "id": "G4.M6b",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "majority",
+    "fix": "Gate the :252 bookkeeping, z allocation (:287), kernel selection and eval/train on group['schedule_free'] consistently."
+   },
+   {
+    "id": "G4.M7",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "delete-feature",
+    "consensus": "majority",
+    "fix": "Covered by deleting soap_sf. If kept: read hyperparameters and counters from the canonical param_groups."
+   },
+   {
+    "id": "G4.M8",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "delete-feature",
+    "consensus": "unanimous",
+    "fix": "Covered by deleting soap_sf. If kept: return after the stochastic copy."
+   },
+   {
+    "id": "G4.M9",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "majority",
+    "fix": "Drop .item() at adan.py:231 and adan_sf.py:223 and keep the 0-dim clamp tensor in the mul_/foreach ops."
+   },
+   {
+    "id": "G4.M10",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "defer",
+    "consensus": "unanimous",
+    "fix": "Optional: per-parameter state['step'] for bias correction."
+   }
+  ]
+ },
+ {
+  "group": "G5",
+  "title": "Loss numerics",
+  "items": [
+   {
+    "id": "G5.1",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "judge",
+    "fix": "ldl_loss.py:92-94 (and duplicate loss_util.py:29-31): torch.var(residual_sr.float(), dim=(-1,-2,-3), keepdim=True).clamp_min(1e-12) ** (1/5). Keep the weights differentiable. Detaching is a separate owner design decision."
+   },
+   {
+    "id": "G5.2",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "flatten(2).float(); center per (N,C); cc=sum(da*db,2)/sqrt((sum(da^2,2)*sum(db^2,2)).clamp_min(1e-8)); return cc.mean(). Deleting ncc_loss is also acceptable."
+   },
+   {
+    "id": "G5.3",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "ssim_loss.py:151-157: ssim.mean().clamp_min(1e-6), cs.mean().clamp_min(1e-6) before **w."
+   },
+   {
+    "id": "G5.4",
+    "verdict": "PARTIAL",
+    "severity": "medium",
+    "action": "delete-feature",
+    "consensus": "majority",
+    "fix": "Delete PatchesKernel3D, patch(), the patchloss/ipk/patch_weight options and readme row 234. vgg_arch.py: instantiate before load_state_dict (or drop the dead branch :128-132) and reject vgg_type != 'vgg19' with a clear error."
+   },
+   {
+    "id": "G5.5",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "majority",
+    "fix": "consistency_loss.py:138 img*(24389/27). msswd_loss.py:177: move ms_swd = ms_swd + swd inside the loop. Delete resnet_perceptual_loss.py, archs/resnet_arch.py (if it has no other user) and readme row 226."
+   },
+   {
+    "id": "G5.6",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Move the freeze loop (dists_loss.py:92-93) after the alpha/beta registration, or create them with requires_grad=False. Optionally add a generic requires_grad_(False) in build_loss."
+   },
+   {
+    "id": "G5.7",
+    "verdict": "PARTIAL",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "ldl_loss: use locals instead of self.output/self.gt. consistency_loss: register_buffer for mean and luma weights, and cast them to the input dtype/device."
+   },
+   {
+    "id": "G5.8",
+    "verdict": "PARTIAL",
+    "severity": "medium",
+    "action": "redesign",
+    "consensus": "unanimous",
+    "fix": "Parse options once at the entry point. Add a scale kwarg to vgg_perceptual_loss, injected in build_loss, and drop the module-level net_opt. Migrate archs incrementally."
+   },
+   {
+    "id": "G5.M1",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "delete-feature",
+    "consensus": "unanimous",
+    "fix": "Remove it with PatchLoss/IPK (G5.4). If kept, validate the kernel size against the feature map size."
+   },
+   {
+    "id": "G5.M2",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "vgg_perceptual feature term: chc_loss(loss_lambda=0, clip_min=0, clip_max=float('inf')) or nn.HuberLoss, keeping the 0.1 scale. Pixel-space chc users stay unchanged."
+   },
+   {
+    "id": "G5.M3",
+    "verdict": "PARTIAL",
+    "severity": "low",
+    "action": "redesign",
+    "consensus": "majority",
+    "fix": "Remove the Python 'if cosim < 1e-3' gate. Either delete the cosim block and self.similarity (recommended default) or add it unconditionally with a config weight, with luma cosine over flattened spatial dims."
+   },
+   {
+    "id": "G5.M4",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Re-register the ImageNet mean/std buffers and use h=(x-mean)/std in forward_once, keeping raw x as feats[0]. Get owner sign-off (this reverts 417432c). Optionally add a named compat flag for the loss operating point."
+   },
+   {
+    "id": "G5.M5",
+    "verdict": "PARTIAL",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "majority",
+    "fix": "register_buffer for the Gaussian kernel, illuminant and matrix A. Generate projections with torch.randn(..., device=x.device)."
+   },
+   {
+    "id": "G5.M6",
+    "verdict": "PARTIAL",
+    "severity": "low",
+    "action": "delete-feature",
+    "consensus": "majority",
+    "fix": "Delete kl_loss.py, image.py:211-216 and 561-564, readme row 236 and the commented [train.kl_opt] blocks."
+   },
+   {
+    "id": "G5.M7",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Store self.reduction and apply mean/sum/none after the clamp (basic_loss.py:194-213), or drop the parameter."
+   },
+   {
+    "id": "G5.M8",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "majority",
+    "fix": "fdl_loss.py:272: self.model_name = model.lower()."
+   },
+   {
+    "id": "G5.M9",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "delete-feature",
+    "consensus": "majority",
+    "fix": "Moot under the G5.M6 deletion. If kl_loss is kept, use F.log_softmax(net_output.float(), dim=1)."
+   }
+  ]
+ },
+ {
+  "group": "G6",
+  "title": "Data pipeline",
+  "items": [
+   {
+    "id": "G6.1",
+    "verdict": "TRUE",
+    "severity": "high",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Build one dataloader_args before `if dist:` with only batch_size/num_workers differing; delete the unreachable block at data/__init__.py:132-139; in base.py:551 use in-place all_reduce(losses, op=AVG), or call reduce without assignment and divide on rank 0; remove the print."
+   },
+   {
+    "id": "G6.2",
+    "verdict": "PARTIAL",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "In CUDAPrefetcher.next(), after wait_stream, call record_stream(current_stream) on every batch tensor. Land this before removing loss syncs (G2.4). Handle pin_memory under G6.8."
+   },
+   {
+    "id": "G6.3",
+    "verdict": "TRUE",
+    "severity": "high",
+    "action": "redesign",
+    "consensus": "unanimous",
+    "fix": "Parse options, seed and init_dist once in train.py/test.py; make rng(seed) a plain default_rng; inject scale/is_train into archs; seed the dataset Generators per worker and rank in worker_init_fn."
+   },
+   {
+    "id": "G6.4",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "mixup: mix LQ with shuffled LQ. Pick the augmentation before upsampling and return unchanged for 'none'. Use weighted random.choices excluding zero weights. Default prob to uniform when None."
+   },
+   {
+    "id": "G6.5",
+    "verdict": "TRUE",
+    "severity": "critical",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Read all four ranges from opt['datasets']['train']; guard both final JPEG stages with jpeg_compress, or remove the flag (owner decision)."
+   },
+   {
+    "id": "G6.6",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "majority",
+    "fix": "Derive queue_size = max(queue_cfg // b, 1) * b from the runtime batch on the first enqueue and drop the assert, or raise a clear config error when queue < batch. simple_otf needs nothing at HEAD (deleted in 43db06a)."
+   },
+   {
+    "id": "G6.7",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Unify the key to 'meta_info'; data_util.py:122 should use str(Path(input_folder)/gt_name); use Path(self.gt_folder)/v in otf_dataset; delete the dead retry loop or wrap the real reads in a bounded retry; use random.randrange(len(self))."
+   },
+   {
+    "id": "G6.8",
+    "verdict": "PARTIAL",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Default persistent_workers to num_workers > 0 and pin_memory to True for the CUDA training loader (overrides kept; check memory and throughput in the perf phase). Use a CPU Generator/randperm in data_sampler.py:40-42. Track removal of the global set_default_device as a separate redesign (C4)."
+   },
+   {
+    "id": "G6.9",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "majority",
+    "fix": "otf.py:70-78: idx = randperm(Q)[:b]; gather LR and GT at idx, then write the new batch into idx; drop the clones. Cache SWTForward per (device, dtype). Count occupied quantization bins per sample (gray and color separately) in one batched op, keeping the power-of-two rounding."
+   },
+   {
+    "id": "G6.M1",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Set crop = max(512, patch_size*scale) rounded up to a multiple of scale; validate in the dataset __init__ and share the value with otf.py."
+   },
+   {
+    "id": "G6.M2",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "num_iter_per_epoch = ceil(len*ratio/(batch*world)) in micro-batches; total_epochs = ceil(total_iters/num_iter_per_epoch); leave the outer loop once current_iter > total_iters, before the next set_epoch/reset."
+   },
+   {
+    "id": "G6.M3",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "majority",
+    "fix": "noise_gray = torch.randn(b,1,h,w, dtype, device) * sigma / 255.0; drop the .view."
+   },
+   {
+    "id": "G6.M4",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Remove blur_kernel_size/blur_kernel_size2 from otf_dataset.py and the 42 templates (keeps current behavior) and note it in the release notes. If configurability is wanted later, add validated upper-bound semantics (odd, 7..21) with an explicit migration."
+   },
+   {
+    "id": "G6.M5",
+    "verdict": "PARTIAL",
+    "severity": "low",
+    "action": "delete-feature",
+    "consensus": "majority",
+    "fix": "At HEAD, delete the orphan helpers: PrefetchGenerator/PrefetchDataLoader (prefetch_dataloader.py:9-65), mod_crop (transforms.py:14), single_random_crop (:37), paired_random_crop_ow (:163), paths_from_folder (data_util.py:180). The legacy dataset and model modules are already deleted in 43db06a."
+   },
+   {
+    "id": "G6.M6",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "(a) Derive the worker seed from torch.initial_seed() (or get_worker_info().seed) and seed the numpy Generators in worker_init_fn; persistent workers (G6.8) also help. (b) Remove self.preload() from CUDAPrefetcher.__init__."
+   },
+   {
+    "id": "G6.M7",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Merge into G6.7 as an explicit sub-item: input_path = str(Path(input_folder)/gt_name) plus the key unification."
+   },
+   {
+    "id": "G6.M8",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "delete-feature",
+    "consensus": "majority",
+    "fix": "Nothing to do at HEAD: pancamsingle_dataset was deleted in 43db06a. If it is ever restored, extract the last channel before slicing it off."
+   },
+   {
+    "id": "G6.M9",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "majority",
+    "fix": "str(Path(self.lq_folder) / line.rstrip().split(' ')[0])."
+   },
+   {
+    "id": "G6.M10",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "majority",
+    "fix": "In rand_bbox_tao use H, W = size[2], size[3]; clamp cut sizes to at least 1 (or share one box helper across cutmix/cutblur/resizemix)."
+   }
+  ]
+ },
+ {
+  "group": "G7",
+  "title": "Validation / metrics / test / convert",
+  "items": [
+   {
+    "id": "G7.1",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "(a) image.py:783 use 'replicate' padding (or reflect only when pad<dim); guard tile<=0. (b) Allocate `processed` from the first tile output's shape (channels and scale). (c) Add a configurable overlap/halo per tile and crop or blend interiors. (d) n=len(dataloader); skip cleanly when 0 and divide by n, not _idx+1. (e) Delete calculate.py:163-164 so nonpositive SSIM is returned as-is."
+   },
+   {
+    "id": "G7.2",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "majority",
+    "fix": "Build DISTS/TOPIQ once per validation pass (cached, frozen eval instance on the device), return .item(), and release the instances after validation. Delete the per-tile empty_cache at image.py:807. Delete the per-image one at :914 after a quick VRAM check. Keep CPU stitching. Tile batching is deferred."
+   },
+   {
+    "id": "G7.3",
+    "verdict": "PARTIAL",
+    "severity": "high",
+    "action": "fix-now",
+    "consensus": "majority",
+    "fix": "convert.py:201 pass dynamo=False (or add onnxscript and migrate). Reject -fp16/-fulloptimization before load/export. Replace the bare except at :126-127 with error propagation and fix the PlainUSR Block.switch_to_deploy order and MBConv signature. Drop the torch.device('cpu') context at :198. Fix the dynamic_axes width/height swap. Run verification with TF32 off or on CPU."
+   },
+   {
+    "id": "G7.4",
+    "verdict": "PARTIAL",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "image.py:889 use self.opt['is_train'] for sf_mode. Gate :947 on self.opt['is_train'] and tb_logger. Stop mutating self.is_train (is_val flag, or restore in finally, incl. otf.py:290-292). Leave EMA .train() unchanged."
+   },
+   {
+    "id": "G7.M1",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "img_util.py:103 normalize n_tensor instead of tensor_."
+   },
+   {
+    "id": "G7.M2",
+    "verdict": "FALSE",
+    "severity": "none",
+    "action": "not-a-bug",
+    "consensus": "majority",
+    "fix": "None needed. Optionally drop benchmark_limit=0 at options.py:200 for clarity."
+   },
+   {
+    "id": "G7.M3",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "majority",
+    "fix": "In dists_loss.py, register ImageNet mean/std buffers and normalize in forward_once on the metric path only (as_loss=False, or behind a flag). Leave the training loss unchanged and document it."
+   },
+   {
+    "id": "G7.M4",
+    "verdict": "TRUE",
+    "severity": "none",
+    "action": "not-a-bug",
+    "consensus": "majority",
+    "fix": "Optional cosmetic: delete @staticmethod at calculate.py:67."
+   },
+   {
+    "id": "G7.M5",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Default --output to None and derive Path(args.input).with_suffix('.onnx'), or make it required."
+   },
+   {
+    "id": "G7.M6",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Return .item(). Pick the device from the input and move the whole module there. Remove hard-coded .cuda() at dists_loss.py:125-127 and the CUDA map_location at topiq.py:272."
+   },
+   {
+    "id": "G7.M7",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Reject a negative crop. Raise when post-crop PSNR inputs are empty or SSIM inputs are below 11x11."
+   },
+   {
+    "id": "G7.M8",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Insert dataset_name into the training-mode SR path (image.py:921-923), the LQ path (:940) and the tb tag (:952)."
+   }
+  ]
+ },
+ {
+  "group": "G8",
+  "title": "Structure / legacy / imports / config",
+  "items": [
+   {
+    "id": "G8.1",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "delete-feature",
+    "consensus": "majority",
+    "fix": "Delete neosr/models/default.py, simple_otf.py, eqr_otf.py, image.py.helaman and neosr/data/otfgray_dataset.py. Delete them in the same change as neosr/models/pancam_otf.py (G8.2), because pancam_otf.py:6 imports default and the eager model scan would fail without it. Nothing needs porting: the only unique behaviour (default.py:778-787 metric gating) belongs to datasets deleted in G8.M6."
+   },
+   {
+    "id": "G8.2",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "delete-feature",
+    "consensus": "majority",
+    "fix": "Delete neosr/models/pancam_otf.py, neosr/data/pancamotf_dataset.py and neosr/data/pancamsingle_dataset.py. KEEP neosr/archs/pancam_arch.py (pancamsr, documented in readme.md:175). If the owner vetoes deletion: set linear_blur=False before pancam_otf.py:39, read dist before slicing at pancamsingle_dataset.py:50-51, and add kernelfinal=None before pancamotf_dataset.py:196."
+   },
+   {
+    "id": "G8.3",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "redesign",
+    "consensus": "unanimous",
+    "fix": "Make neosr/__init__.py empty. In each build_* import only the selected module (by naming convention or an explicit name->module map) before REGISTRY.get."
+   },
+   {
+    "id": "G8.4",
+    "verdict": "TRUE",
+    "severity": "high",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Keep one canonical implementation (aether_core.py, the v5 line). Import ARCH_REGISTRY and net_opt, and define named @ARCH_REGISTRY.register() factories aether_small/medium/large that take scale from kwargs or net_opt(). Use named defs, not lambdas. Delete the duplicate aether_arch.py so names do not clash in registry.py:51. Keep the train.py QAT block."
+   },
+   {
+    "id": "G8.5",
+    "verdict": "PARTIAL",
+    "severity": "medium",
+    "action": "redesign",
+    "consensus": "unanimous",
+    "fix": "Library code should raise ValueError/RuntimeError with context. train.py, test.py and convert.py catch, log and exit non-zero. Never exit(0) on failure (base.py:407, :445). Replace bare except/pass (base.py:423, convert.py:99, :126) with specific exceptions. Route library prints through the logger."
+   },
+   {
+    "id": "G8.6",
+    "verdict": "PARTIAL",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "majority",
+    "fix": "Remove pin_memory=True at neosr/archs/arch_util.py:142 (optionally build coords directly with device=x.device)."
+   },
+   {
+    "id": "G8.M1",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Insert [train.fdl_opt] before line 88 of options/train_dctlsa.toml."
+   },
+   {
+    "id": "G8.M2",
+    "verdict": "PARTIAL",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "unanimous",
+    "fix": "Fold into G8.5: except tomllib.TOMLDecodeError as e: raise tomllib.TOMLDecodeError(f\"{msg}\\n{e}\") from e. Let FileNotFoundError propagate, and drop the dead sys.exit(1)."
+   },
+   {
+    "id": "G8.M3",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "delete-feature",
+    "consensus": "unanimous",
+    "fix": "Delete options/test_scnet.toml. Remove the hard-coded personal paths from test_aether.toml."
+   },
+   {
+    "id": "G8.M4",
+    "verdict": "PARTIAL",
+    "severity": "low",
+    "action": "fix-now",
+    "consensus": "judge",
+    "fix": "Empty neosr/__init__.py as part of the same change as G8.3. Subpackage registration stays in the subpackage __init__ files."
+   },
+   {
+    "id": "G8.M5",
+    "verdict": "PARTIAL",
+    "severity": "low",
+    "action": "defer",
+    "consensus": "unanimous",
+    "fix": "Fold into G8.3: cache discovery or import only the selected module, and remove the dead `if opt is not None` guard."
+   },
+   {
+    "id": "G8.M6",
+    "verdict": "TRUE",
+    "severity": "low",
+    "action": "delete-feature",
+    "consensus": "majority",
+    "fix": "Delete neosr/data/simple_otf_dataset.py, eqrotf_dataset.py and pcpaired_dataset.py together with G8.1 and G8.2."
+   },
+   {
+    "id": "G8.M7",
+    "verdict": "TRUE",
+    "severity": "medium",
+    "action": "delete-feature",
+    "consensus": "majority",
+    "fix": "Removed with G8.2 (delete pancamotf_dataset.py). If the pancam feature is kept, add kernelfinal=None before pancamotf_dataset.py:196."
+   }
+  ]
+ }
+]

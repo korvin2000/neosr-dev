@@ -11,3 +11,35 @@
 - Architecture consensus workflow (T1..T4) and aether/QAT design (T5) running.
 - Owner decisions recorded in `DECISIONS.md`. Branch `refactor/stabilize` + worktree `.worktrees/refactor` created.
 - Next: collect G1..G8 consensus + T1..T5 designs into `analysis/` and `design/`, write `PLAN.md`, start step 1.
+- tests/ safety net written (uncommitted until the loss step): 65 pass, 7 strict-xfail (known G5.1-G5.4), 5 fail = consistency_loss
+  hidden dependency on torch.set_default_device("cuda") (consistency_loss.py:42,132 build tensors without device) -> fix in loss step.
+  G5.1 trigger is broader: any zero-variance residual (constant or anticorrelated inputs), not only identical inputs.
+- Owner reminder: traiNNer-redux-dev may contain fixes/features; port ideas/code only after adaptation, never as-is.
+  Competitor-harvest workflow launched (H1 losses, H2 data/OTF, H3 loop/checkpoint/config, H4 archs/optimizers/metrics;
+  Fable t5 + Codex per area, Opus merge) -> analysis/competitor/H*.md. PLAN.md must consult these before each step.
+- Smoke baseline (analysis/smoke/baseline_report.md): 85/99 archs pass (real failures: grformer*/krgn rely on global cuda default
+  device, esc_fp/omnisr invalid default kwargs, hit_srf_medium/large OOM at 64px); R1 bf16 NaN abort at iter 1 in ~50% of starts,
+  R3 fp16 NaN ~iter 24 always; speed kill-switch fires at iter 10-20 in every run; OTF configs crash (poisson_scale_range KeyError,
+  then sinc_prob None); resume works mechanically (eta negative). NaN root-cause investigation launched (t4 + Codex).
+- Codex NaN analysis (analysis/nan/codex.md): iter-1 NaN most likely MS-SSIM fractional power of negative cs/ssim (CPU probe:
+  8/10 random-init esrgan seeds NaN, also in fp32); metagan spectral norm never updated because D is always eval() -> logits up to
+  25k at init (one train-mode forward fixes it); adan_sf warmup not applied (warmup 1600 vs 16000 give identical updates);
+  the smoke "fp16 NaN at iter 24" was actually CUDA OOM (dr3.log:58-61), l_g_gan 624 of 640 total. Empirical t4 repro pending.
+- Owner: traiNNer-redux trains stably despite bad code -> its stability experience must shape the fixes. Evidence: its real run
+  experiments/4x_ESRGAN (ESRGAN7.yml) 43k iters stable with AdamW G 1e-4 / D 5e-6, warmup 1000, EMA ema_power 0.75 warmup,
+  r3gan weight 0.03 start_iter 1000 + R1/R2, grad-norm + scaler logging; neosr templates: adan_sf 8e-4 / 1e-4, gan 0.3 from iter 0,
+  metagan. Stability-playbook workflow launched (Fable + Codex static extraction, empirical traiNNer runs E1/E2 + neosr E3)
+  -> design/T6_stability.md.
+- T5 aether+QAT design done -> design/T5_aether_qat.md (GPU-verified: QAT from scratch works with Q/DQ stubs, plain FakeQuantize
+  under bf16/fp16 autocast, strict save/load round trip diff 0, QDQ ONNX parity 5e-3). Note: its D18 keeps the old checkpoint
+  scheme; reconcile with T2's new checkpoint format in PLAN.md.
+- Round-1 consensus done (48 agents): 119 items, 89 TRUE / 28 PARTIAL / 2 FALSE; 75 unanimous, 40 majority, 4 judge ->
+  analysis/consensus/G1..G8.md + round1_final.json. Competitor harvest done -> analysis/competitor/H1..H4.md
+  (notable new: FlexNet attention under no_grad by default, HAT/DRCT/SwinIR window padding, DISTS input normalisation).
+- PLAN.md v1 written. Phase L (L1 losses, L2 optimizers, L3 data, L4 metrics/utils/archs) and Phase A (A1-A3 arch fixes) running
+  as workflows in the worktree (uncommitted; review + commit per step when they return).
+- Phase L committed: L1 155f677 (losses), L2 14e3b2b (optimizers), L3 9360403 (data), L4 52137a8 (metrics/utils/small archs).
+  Each: Opus t3 implement -> Codex review -> fix pass -> main-thread review. Main-thread corrections: consistency cosine term kept
+  with its original gated semantics (agent had made it unconditional = objective change for 85 configs) via torch.where (no sync);
+  DISTS ImageNet normalisation on loss + metric per owner. 185 tests pass (losses/optimizers/data/metrics).
+  Lint: remaining ruff findings are pre-existing style (quotes, blank lines) -> C8.

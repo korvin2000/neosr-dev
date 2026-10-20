@@ -20,3 +20,12 @@ Notable refutations (do NOT "fix"):
 - EMA `AveragedModel(use_buffers=False)` already copies live buffers (BN stats, spectral-norm u/v) on every update (F.1).
 - `soap_sf.py` `parse_options` call lives inside a string literal and never runs (F.14).
 - DropPath re-seeding does not clone weights in swinir/dat (they re-init after construction) but DOES in metagan (F.3).
+
+## Competitor policy (owner, 2026-10-20)
+traiNNer-redux-dev (/home/korvin/apps/traiNNer-redux-dev) is a newer sibling project: check it for already-fixed bugs, better
+implementations and useful features in every step; adapt and improve what is taken, never port bad code as-is.
+Port candidates per area: `analysis/competitor/H1..H4.md`.
+6. DISTS (owner, 2026-10-20): restore ImageNet input normalisation for BOTH the dists training loss and the validation metric
+   (correct per paper and competitor; metric values shift vs old logs). Apply after Phase L1 (L1 was told to leave it) — G5.M4.
+7. Model allocation (owner, 2026-10-20): Fable only for strategic/global/conceptual questions at effort high/medium (limits);
+   Opus implements (algorithms, optimisation, math); Codex gpt-6-astra high = code reviewer + advisor for every step.
