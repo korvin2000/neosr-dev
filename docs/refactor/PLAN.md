@@ -24,9 +24,9 @@ Phase L launched 2026-10-20 as workflow `phase-L-leaf-fixes` (impl t3 -> Codex r
 ## Phase A — architecture fixes (parallel, disjoint arch files; state_dict keys must not change)
 | step | scope | files owned | status |
 |---|---|---|---|
-| A1 | H4 #1 FlexNet attention no-grad/layout/window, H4 #10 reparam lifecycle | flexnet, span, spanplus archs + tests/test_archs_a1.py | wip |
-| A2 | H4 #3 window padding, H4 #11 mask dtype/exit/mean buffer | hat, drct, swinir, swinirdense, dat archs + tests/test_archs_a2.py | wip |
-| A3 | H4 #12 EIMN, smoke: grformer/krgn device, esc_fp/omnisr defaults, hit_srf OOM check | eimn, grformer, krgn, esc, omnisr, hitsrf archs + tests/test_archs_a3.py | wip |
+| A1 | H4 #1 FlexNet attention no-grad/layout/window, H4 #10 reparam lifecycle | flexnet, span, spanplus archs + tests/test_archs_a1.py | todo (WIP patch, unverified) |
+| A2 | H4 #3 window padding, H4 #11 mask dtype/exit/mean buffer | hat, drct, swinir, swinirdense, dat archs + tests/test_archs_a2.py | todo (WIP patch, unverified) |
+| A3 | H4 #12 EIMN, smoke: grformer/krgn device, esc_fp/omnisr defaults, hit_srf OOM check | eimn, grformer, krgn, esc, omnisr, hitsrf archs + tests/test_archs_a3.py | todo (WIP patch, unverified) |
 | A4 | later/optional: H4 #17 spectral_norm parametrization (needs D checkpoint key remap), #15 shared UniUpsample, #18 compact learn_residual, #19 capability flags | - | todo |
 
 ## Phase C — core restructure (sequenced; refined from design/T1..T4, T6)
@@ -43,3 +43,16 @@ Phase L launched 2026-10-20 as workflow `phase-L-leaf-fixes` (impl t3 -> Codex r
 
 G5.M4 DISTS normalisation (loss + metric) applied in 155f677 (DECISIONS #6).
 Open 3-model tie-break: canonical aether source (T5: aether_arch v4 vs G8.4: aether_core v5) — resolve at C5.
+
+## Session-1 end state (2026-10-20) — start here next session
+1. Phase A: unverified WIP saved as `wip/phaseA_archs_unverified.patch` (+ `wip/test_archs_a*.py`); the worktree was reset clean.
+   Resume: `git apply docs/refactor/wip/phaseA_archs_unverified.patch`, copy the tests into tests/, then for each group A1-A3:
+   verify (state_dict keys unchanged vs HEAD, forward equality, tests) -> Codex review -> fix -> commit. The workflow was stopped
+   mid-run, so some groups may lack their Codex review/fix pass — treat all three as unreviewed.
+2. Designs: T1, T2, T3 final in `design/`; T4 has only the synthesis draft (`design/drafts/T4_feature_triage_perf.md`, no
+   critique/final); T5 final; T6 stability playbook NOT produced — evidence in `analysis/stability/raw_summary.md` (neosr
+   instability is mechanical: competitor survives neosr-like hyperparameters, current neosr NaNs in 4/6 seeds).
+   Next: finalize T4 + T6 with Opus (Codex as reviewer; Fable only if a strategic fork appears), then refine Phase C rows above.
+3. NaN root cause: Codex analysis in `analysis/nan/codex.md`; the empirical t4 run was stopped before reporting
+   (its logs were in the session scratchpad and are not preserved beyond `analysis/stability/raw_summary.md`).
+4. Then Phase C (C1 -> C8) per the table above; Codex reviews every step.

@@ -43,3 +43,7 @@
   with its original gated semantics (agent had made it unconditional = objective change for 85 configs) via torch.where (no sync);
   DISTS ImageNet normalisation on loss + metric per owner. 185 tests pass (losses/optimizers/data/metrics).
   Lint: remaining ruff findings are pre-existing style (quotes, blank lines) -> C8.
+- Session 1 closed at the owner's request (usage limit ~92%): all background tasks stopped (design T1-T4 workflow, stability
+  playbook, Phase A, NaN repro). Saved: design/T1-T3 finals, design/drafts/* (T4 synthesis, proposals, Codex reviews),
+  analysis/stability/raw_summary.md, Phase A WIP patch in wip/. Scratch worktree nanwt removed; experiments/stab_* and smoke_*
+  deleted in both repos. Owner's uncommitted files in the main checkout untouched. Next steps: PLAN.md "Session-1 end state".
