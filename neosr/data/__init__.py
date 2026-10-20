@@ -2,18 +2,16 @@ import importlib
 import os
 import random
 from copy import deepcopy
-from functools import partial
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
-import torch.utils.data
 from torch.utils import data
 from torch.utils.data.sampler import Sampler
 
+from neosr.data import augmentations, degradations, otf_dataset
 from neosr.utils import get_root_logger, scandir
-from neosr.utils.dist_util import get_dist_info
 from neosr.utils.registry import DATASET_REGISTRY
 
 __all__ = ["build_dataloader", "build_dataset"]
@@ -50,14 +48,27 @@ def build_dataset(dataset_opt: dict[str, Any]):
     return dataset
 
 
-def worker_init_fn(worker_id: int, num_workers: int, rank: int, seed: int) -> None:
-    # Set the worker seed to num_workers * rank + worker_id + seed
-    worker_seed = num_workers * rank + worker_id + seed
-    # NOTE: set seed on old generator as a precaution, but
-    # it is redundand since we use np.random.Generator
-    np.random.seed(worker_seed)  # noqa: NPY002
-    torch.manual_seed(worker_seed)
-    random.seed(worker_seed)
+def seed_data_rngs(seed: int) -> None:
+    """Replace the module-level numpy Generators of the data pipeline.
+
+    Workers inherit (fork) or re-create (spawn, from the same manual_seed) identical
+    Generators, so every worker would draw the same degradations unless reseeded.
+    """
+    modules = (augmentations, degradations, otf_dataset)
+    for module, child in zip(
+        modules, np.random.SeedSequence(seed).spawn(len(modules)), strict=True
+    ):
+        module.rng = np.random.default_rng(child)  # type: ignore[attr-defined]
+
+
+def worker_init_fn(worker_id: int) -> None:  # noqa: ARG001
+    # torch seeds each worker with base_seed + worker_id, where base_seed is drawn
+    # from the main process RNG (seeded per rank) for every new iterator: distinct
+    # per worker, rank and epoch, and reproducible under manual_seed
+    seed = torch.initial_seed()
+    random.seed(seed)
+    np.random.seed(seed % 2**32)  # noqa: NPY002
+    seed_data_rngs(seed)
 
 
 def build_dataloader(
@@ -66,7 +77,7 @@ def build_dataloader(
     num_gpu: int = 1,
     dist: bool = False,
     sampler: Sampler | None = None,
-    seed: int | None = None,
+    seed: int | None = None,  # noqa: ARG001
 ) -> data.DataLoader:
     """Build dataloader.
 
@@ -75,70 +86,56 @@ def build_dataloader(
         dataset (torch.utils.data.Dataset): Dataset.
         dataset_opt (dict): Dataset options. It contains the following keys:
             phase (str): 'train' or 'val'.
-            num_worker_per_gpu (int): Number of workers for each GPU.
+            num_worker_per_gpu (int | 'auto'): Number of workers for each GPU.
             batch_size (int): Training batch size for each GPU.
+            pin_memory (bool): Default: True for training with CUDA.
+            persistent_workers (bool): Default: True when there are workers.
         num_gpu (int): Number of GPUs. Used only in the train phase.
             Default: 1.
         dist (bool): Whether in distributed training. Used only in the train
             phase. Default: False.
         sampler (torch.utils.data.sampler): Data sampler. Default: None.
-        seed (int | None): Seed. Default: None
+        seed (int | None): Unused, kept for compatibility: worker seeds derive
+            from torch's per-worker seed (see worker_init_fn).
 
     """
     phase = dataset_opt["phase"]
-    rank, _ = get_dist_info()
 
-    # train
     if phase == "train":
-        if dataset_opt.get("num_worker_per_gpu") is None:
+        multiplier = max(num_gpu, 1)
+        num_workers = dataset_opt.get("num_worker_per_gpu")
+        if num_workers is None:
             num_workers = 4
-        elif dataset_opt.get("num_worker_per_gpu") == "auto":
-            num_workers = os.cpu_count()
-        else:
-            num_workers = dataset_opt["num_worker_per_gpu"]
-        if dist:  # distributed training
-            batch_size = dataset_opt["batch_size"]
-        else:  # non-distributed training
-            multiplier = 1 if num_gpu == 0 else num_gpu
-            batch_size = dataset_opt["batch_size"] * multiplier
+        elif num_workers == "auto":
+            num_workers = max((os.cpu_count() or 1) // multiplier, 1)
+        batch_size = dataset_opt["batch_size"]
+        if not dist:  # DataParallel splits one batch across all GPUs
+            batch_size *= multiplier
             num_workers *= multiplier
-            prefetch_factor = None if num_workers == 0 else 2
-            dataloader_args = {
-                "dataset": dataset,
-                "batch_size": batch_size,
-                "shuffle": False,
-                "num_workers": num_workers,
-                "sampler": sampler,
-                "prefetch_factor": prefetch_factor,
-                "drop_last": True,
-            }
-        if sampler is None:
-            dataloader_args["shuffle"] = True
-        dataloader_args["worker_init_fn"] = (
-            partial(worker_init_fn, num_workers=num_workers, rank=rank, seed=seed)
-            if seed is not None
-            else None
-        )
-
-    # val
+        dataloader_args = {
+            "dataset": dataset,
+            "batch_size": batch_size,
+            "shuffle": sampler is None,
+            "sampler": sampler,
+            "num_workers": num_workers,
+            "prefetch_factor": 2 if num_workers > 0 else None,
+            "drop_last": True,
+            "worker_init_fn": worker_init_fn,
+            "pin_memory": dataset_opt.get("pin_memory", torch.cuda.is_available()),
+            # torch rejects persistent workers without workers
+            "persistent_workers": dataset_opt.get("persistent_workers", True)
+            and num_workers > 0,
+        }
     elif phase in {"val", "test"}:
         dataloader_args = {
             "dataset": dataset,
             "batch_size": 1,
             "shuffle": False,
             "num_workers": 0,
+            "pin_memory": dataset_opt.get("pin_memory", False),
         }
     else:
-        raise ValueError(
-            f"Wrong dataset phase: {phase}. Supported ones are 'train', 'val' and 'test'.")
-
-        dataloader_args['pin_memory'] = dataset_opt.get('pin_memory', True)
-        if dataset_opt.get('num_worker_per_gpu', 'auto') == 'auto' or None:
-            num_workers = psutil.cpu_count(logical=False)
-        default_persistent = True if num_workers > 0 else False
-        dataloader_args['persistent_workers'] = dataset_opt.get('persistent_workers', default_persistent)
-
-    dataloader_args["pin_memory"] = dataset_opt.get("pin_memory", False)
-    dataloader_args["persistent_workers"] = dataset_opt.get("persistent_workers", False)
+        msg = f"Wrong dataset phase: {phase}. Supported ones are 'train', 'val' and 'test'."
+        raise ValueError(msg)
 
     return data.DataLoader(**dataloader_args)

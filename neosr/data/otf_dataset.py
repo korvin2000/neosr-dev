@@ -1,7 +1,5 @@
 import math
 import random
-import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -11,17 +9,28 @@ import torch
 from torch import Tensor
 from torch.utils import data
 
+from neosr.data.data_util import read_img
 from neosr.data.degradations import (  # type: ignore[attr-defined]
     circular_lowpass_kernel,
     random_mixed_kernels,
 )
 from neosr.data.file_client import FileClient
 from neosr.data.transforms import basic_augment
-from neosr.utils import get_root_logger, imfrombytes, img2tensor, scandir, tc
+from neosr.utils import get_root_logger, img2tensor, scandir, tc
 from neosr.utils.registry import DATASET_REGISTRY
 from neosr.utils.rng import rng
 
 rng = rng()
+
+
+def otf_crop_size(patch_size: int, scale: int) -> int:
+    """GT crop/pad size: at least 512 and the GT patch, a multiple of scale so the
+    degraded LQ (GT // scale) keeps the exact scale ratio.
+    """
+    if not (isinstance(patch_size, int) and isinstance(scale, int)) or min(patch_size, scale) < 1:
+        msg = f"otf needs positive integer patch_size and scale, got {patch_size!r}, {scale!r}."
+        raise ValueError(msg)
+    return math.ceil(max(512, patch_size * scale) / scale) * scale
 
 
 @DATASET_REGISTRY.register()
@@ -53,9 +62,9 @@ class otf(data.Dataset):
         self.gt_folder = opt["dataroot_gt"]
 
         if opt.get("dataroot_lq") is not None:
-            msg = f"{tc.red}'dataroot_lq' not supported by otf, please switch to paired or remove it.{tc.end}"
-            logger.error(msg)
-            sys.exit(1)
+            msg = "'dataroot_lq' not supported by otf, please switch to paired or remove it."
+            raise ValueError(msg)
+        self.crop_pad_size = otf_crop_size(opt.get("patch_size"), opt.get("scale"))  # type: ignore[arg-type]
 
         # sets flag for file_client.py
         if self.gt_folder.endswith("lmdb"):
@@ -76,12 +85,12 @@ class otf(data.Dataset):
                 encoding="utf-8"
             ) as fin:
                 self.paths = [line.split(".")[0] for line in fin]
-        elif "meta_info" in self.opt and self.opt["meta_info"] is not None:
-            # disk backend with meta_info
+        elif (meta_info := opt.get("meta_info", opt.get("meta_info_file"))) is not None:
+            # disk backend with meta_info ('meta_info_file' is the legacy key)
             # Each line in the meta_info describes the relative path to an image
-            with Path(str(self.opt["meta_info"])).open(encoding="utf-8") as fin:
+            with Path(meta_info).open(encoding="utf-8") as fin:
                 paths = [line.strip().split(" ")[0] for line in fin]
-                self.paths = [str(Path((self.gt_folder) / v)) for v in paths]
+                self.paths = [str(Path(self.gt_folder) / v) for v in paths]
         else:
             # disk backend
             # it will scan the whole folder to get meta info
@@ -89,7 +98,6 @@ class otf(data.Dataset):
             self.paths = sorted(scandir(self.gt_folder, full_path=True))
 
         # blur settings for the first degradation
-        self.blur_kernel_size = opt.get("blur_kernel_size")
         self.kernel_list = opt.get("kernel_list")
         # a list for each kernel probability
         self.kernel_prob = opt.get("kernel_prob")
@@ -103,7 +111,6 @@ class otf(data.Dataset):
 
         self.rotation = opt.get('rotation', [-math.pi, math.pi])
         # blur settings for the second degradation
-        self.blur_kernel_size2 = opt.get("blur_kernel_size2")
         self.kernel_list2 = opt.get("kernel_list2")
         self.kernel_prob2 = opt.get("kernel_prob2")
         self.blur_sigma2 = opt.get("blur_sigma2")
@@ -129,7 +136,6 @@ class otf(data.Dataset):
         return len(self.paths)
 
     def __getitem__(self, index: int) -> dict[str, str | Tensor]:
-        logger = get_root_logger()
         if self.file_client is None:
             self.file_client = FileClient(
                 self.io_backend_opt.pop("type"),  # type: ignore[union-attr]
@@ -139,41 +145,16 @@ class otf(data.Dataset):
         # -------------------------------- Load gt images -------------------------------- #
         # Shape: (h, w, c); channel order: BGR; image range: [0, 1], float32.
         gt_path = self.paths[index]
-        # avoid errors caused by high latency in reading files
-        retry = 3
-        img_gt = None
-        while retry > 0:
-            try:
-                img_bytes = self.file_client.get(gt_path, "gt")  # type: ignore[attr-defined]
-                if img_bytes is None:
-                    msg = f"No data returned from path: {gt_path}"
-                    raise ValueError(msg)
-                img_gt = imfrombytes(img_bytes, float32=True)
-            except OSError as e:
-                msg = f"{tc.red}File client error: {e} in path {gt_path}, remaining retry times: {retry - 1}{tc.end}"
-                logger.warning(msg)
-                # change another file to read
-                index = random.randint(0, self.__len__())
-                gt_path = self.paths[index]
-                time.sleep(1)  # sleep 1s for occasional server congestion
-            else:
-                break
-            finally:
-                retry -= 1
-        if img_gt is None:
-            msg = f"{tc.red}No data returned from path: {gt_path}.{tc.end}"
-            logger.error(msg)
-            sys.exit(1)
+        img_gt = read_img(self.file_client, gt_path, "gt")
 
         # -------------------- Do augmentation for training: flip, rotation -------------------- #
         img_gt = basic_augment(  # type: ignore[assignment]
             img_gt, self.opt.get("use_hflip", True), self.opt.get("use_rot", True)
         )
 
-        # crop or pad to 512
-        # TODO: 512 is hard-coded. You may change it accordingly
+        # crop or pad to crop_pad_size
         h, w = img_gt.shape[0:2]  # type: ignore[union-attr]
-        crop_pad_size = 512
+        crop_pad_size = self.crop_pad_size
         # pad
         if h < crop_pad_size or w < crop_pad_size:
             pad_h = max(0, crop_pad_size - h)
@@ -247,16 +228,15 @@ class otf(data.Dataset):
             kernel_size = random.choice(self.kernel_range)
             omega_c = rng.uniform(np.pi / 3, np.pi)  # type: ignore[attr-defined]
             sinc_kernel = circular_lowpass_kernel(omega_c, kernel_size, pad_to=21)
-            sinc_kernel = torch.FloatTensor(sinc_kernel)
+            sinc_kernel = torch.from_numpy(sinc_kernel).float()
         else:
             sinc_kernel = self.pulse_tensor
 
         # BGR to RGB, HWC to CHW, numpy to tensor
         img_gt = img2tensor([img_gt], bgr2rgb=True, float32=True, color=self.color)[0]  # type: ignore[reportArgumentType,arg-type]
-        # NOTE: using torch.tensor(device='cuda') won't work.
-        # Keeping old constructor for now.
-        kernel = torch.FloatTensor(kernel)
-        kernel2 = torch.FloatTensor(kernel2)
+        # from_numpy stays on the CPU regardless of the default device
+        kernel = torch.from_numpy(kernel).float()
+        kernel2 = torch.from_numpy(kernel2).float()
 
         return {
             "gt": img_gt,

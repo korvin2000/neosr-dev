@@ -756,12 +756,10 @@ def generate_gaussian_noise_pt(img, sigma=10, gray_noise=0):
         cal_gray_noise = torch.sum(gray_noise) > 0
 
     if cal_gray_noise:
+        # one gray field per sample, broadcast over channels
         noise_gray = (
-            torch.randn(*img.size()[2:4], dtype=img.dtype, device=img.device)
-            * sigma
-            / 255.0
+            torch.randn(b, 1, h, w, dtype=img.dtype, device=img.device) * sigma / 255.0
         )
-        noise_gray = noise_gray.view(b, 1, h, w)
 
     # always calculate color noise
     noise = torch.randn(*img.size(), dtype=img.dtype, device=img.device) * sigma / 255.0

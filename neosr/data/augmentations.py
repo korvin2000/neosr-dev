@@ -1,5 +1,3 @@
-import random
-
 import numpy as np
 import torch
 from torch import Tensor
@@ -9,10 +7,37 @@ from neosr.utils.rng import rng
 
 rng = rng()
 
+# All augmentations work at native resolutions: boxes are drawn in LQ pixels and
+# multiplied by `scale` for GT, so LQ is never resampled to GT size and back.
+
+
+def _check_sizes(img_gt: Tensor, img_lq: Tensor, scale: int) -> None:
+    if img_gt.shape[-2:] != (img_lq.shape[-2] * scale, img_lq.shape[-1] * scale):
+        msg = f"img_gt {tuple(img_gt.shape)} must be {scale}x img_lq {tuple(img_lq.shape)}."
+        raise ValueError(msg)
+
+
+def _rand_box(h: int, w: int, cut_h: int, cut_w: int) -> tuple[int, int, int, int]:
+    """Random box (top, bottom, left, right) with a uniform center, clipped to the
+    image. Cut sizes are at least 1, so the box is never empty.
+    """
+    cut_h, cut_w = max(cut_h, 1), max(cut_w, 1)
+    top = int(rng.integers(h)) - cut_h // 2  # type: ignore[attr-defined]
+    left = int(rng.integers(w)) - cut_w // 2  # type: ignore[attr-defined]
+    return (max(top, 0), min(top + cut_h, h), max(left, 0), min(left + cut_w, w))
+
+
+def _perm(img: Tensor) -> Tensor:
+    return torch.randperm(img.shape[0], device=img.device)
+
 
 @torch.no_grad()
 def mixup(
-    img_gt: Tensor, img_lq: Tensor, alpha_min: float = 0.4, alpha_max: float = 0.6
+    img_gt: Tensor,
+    img_lq: Tensor,
+    alpha_min: float = 0.4,
+    alpha_max: float = 0.6,
+    scale: int = 1,
 ) -> tuple[Tensor, Tensor]:
     r"""MixUp augmentation.
 
@@ -22,29 +47,27 @@ def mixup(
 
     Args:
     ----
-        img_gt, img_lq (Tensor): Input images of shape (N, C, H, W).
-            Assumes same size.
+        img_gt, img_lq (Tensor): Input images of shape (N, C, H, W),
+            GT `scale` times the size of LQ.
         alpha_min/max (float): The given min/max mixing ratio.
+        scale (int): Scale ratio between GT and LQ.
 
     """
-    if img_gt.size() != img_lq.size():
-        msg = "img_gt and img_lq have to be the same resolution."
-        raise ValueError(msg)
-
+    _check_sizes(img_gt, img_lq, scale)
     lam = rng.uniform(alpha_min, alpha_max)  # type: ignore[attr-defined]
 
-    # mixup process
-    rand_index = torch.randperm(img_gt.size(0))
-    img_ = img_gt[rand_index]
-
-    img_gt = lam * img_gt + (1 - lam) * img_
-    img_lq = lam * img_lq + (1 - lam) * img_
+    # each image is mixed with the same partner in GT and LQ
+    idx = _perm(img_gt)
+    img_gt = lam * img_gt + (1 - lam) * img_gt[idx]
+    img_lq = lam * img_lq + (1 - lam) * img_lq[idx]
 
     return img_gt, img_lq
 
 
 @torch.no_grad()
-def cutmix(img_gt: Tensor, img_lq: Tensor, alpha: float = 0.9) -> tuple[Tensor, Tensor]:
+def cutmix(
+    img_gt: Tensor, img_lq: Tensor, alpha: float = 0.9, scale: int = 1
+) -> tuple[Tensor, Tensor]:
     r"""CutMix augmentation.
 
     "CutMix: Regularization Strategy to Train Strong Classifiers with
@@ -53,50 +76,33 @@ def cutmix(img_gt: Tensor, img_lq: Tensor, alpha: float = 0.9) -> tuple[Tensor, 
 
     Args:
     ----
-        img_gt, img_lq (Tensor): Input images of shape (N, C, H, W).
-            Assumes same size.
+        img_gt, img_lq (Tensor): Input images of shape (N, C, H, W),
+            GT `scale` times the size of LQ. Modified in place.
         alpha (float): The given maximum mixing ratio.
+        scale (int): Scale ratio between GT and LQ.
 
     """
-    if img_gt.size() != img_lq.size():
-        msg = "img_gt and img_lq have to be the same resolution."
-        raise ValueError(msg)
+    _check_sizes(img_gt, img_lq, scale)
+    h, w = img_lq.shape[-2:]
+    cut_rat = np.sqrt(1.0 - rng.uniform(0, alpha))  # type: ignore[attr-defined]
+    y1, y2, x1, x2 = _rand_box(h, w, int(h * cut_rat), int(w * cut_rat))
+    s = scale
 
-    def rand_bbox(size, lam):
-        """Generate random box by lam."""
-        W = size[2]
-        H = size[3]
-        cut_rat = np.sqrt(1.0 - lam)
-        cut_w = int(W * cut_rat)
-        cut_h = int(H * cut_rat)
-
-        # uniform
-        cx = rng.integers(W)  # type: ignore[attr-defined]
-        cy = rng.integers(H)  # type: ignore[attr-defined]
-
-        bbx1 = np.clip(cx - cut_w // 2, 0, W)
-        bby1 = np.clip(cy - cut_h // 2, 0, H)
-        bbx2 = np.clip(cx + cut_w // 2, 0, W)
-        bby2 = np.clip(cy + cut_h // 2, 0, H)
-
-        return bbx1, bby1, bbx2, bby2
-
-    lam = rng.uniform(0, alpha)  # type: ignore[attr-defined]
-    rand_index = torch.randperm(img_gt.size(0))
-
-    # mixup process
-    img_gt_ = img_gt[rand_index]
-    img_lq_ = img_lq[rand_index]
-    bbx1, bby1, bbx2, bby2 = rand_bbox(img_gt.size(), lam)
-    img_gt[:, :, bbx1:bbx2, bby1:bby2] = img_gt_[:, :, bbx1:bbx2, bby1:bby2]
-    img_lq[:, :, bbx1:bbx2, bby1:bby2] = img_lq_[:, :, bbx1:bbx2, bby1:bby2]
+    idx = _perm(img_gt)
+    img_gt[..., y1 * s : y2 * s, x1 * s : x2 * s] = img_gt[idx][
+        ..., y1 * s : y2 * s, x1 * s : x2 * s
+    ]
+    img_lq[..., y1:y2, x1:x2] = img_lq[idx][..., y1:y2, x1:x2]
 
     return img_gt, img_lq
 
 
 @torch.no_grad()
 def resizemix(
-    img_gt: Tensor, img_lq: Tensor, scope: tuple[float, float] = (0.2, 0.9)
+    img_gt: Tensor,
+    img_lq: Tensor,
+    scope: tuple[float, float] = (0.2, 0.9),
+    scale: int = 1,
 ) -> tuple[Tensor, Tensor]:
     r"""ResizeMix augmentation.
 
@@ -105,64 +111,34 @@ def resizemix(
 
     Args:
     ----
-        img_gt, img_lq (Tensor): Input images of shape (N, C, H, W).
-            Assumes same size.
-        scope (float): The given maximum mixing ratio.
+        img_gt, img_lq (Tensor): Input images of shape (N, C, H, W),
+            GT `scale` times the size of LQ. Modified in place.
+        scope (float): The given min/max box size ratio.
+        scale (int): Scale ratio between GT and LQ.
 
     """
-    if img_gt.size() != img_lq.size():
-        msg = "img_gt and img_lq have to be the same resolution."
-        raise ValueError(msg)
-
-    def rand_bbox_tao(size, tao):
-        """Generate random box by tao (scale)."""
-        W = size[2]
-        H = size[3]
-        cut_w = int(W * tao)
-        cut_h = int(H * tao)
-
-        # uniform
-        cx = rng.integers(W)  # type: ignore[attr-defined]
-        cy = rng.integers(H)  # type: ignore[attr-defined]
-
-        bbx1 = np.clip(cx - cut_w // 2, 0, W)
-        bby1 = np.clip(cy - cut_h // 2, 0, H)
-        bbx2 = np.clip(cx + cut_w // 2, 0, W)
-        bby2 = np.clip(cy + cut_h // 2, 0, H)
-
-        return bbx1, bby1, bbx2, bby2
-
-    # index
-    rand_index = torch.randperm(img_gt.size(0))
-    img_gt_resize = img_gt.clone()
-    img_gt_resize = img_gt_resize[rand_index]
-    img_lq_resize = img_lq.clone()
-    img_lq_resize = img_lq_resize[rand_index]
-
-    # generate tao
+    _check_sizes(img_gt, img_lq, scale)
+    h, w = img_lq.shape[-2:]
     tao = rng.uniform(scope[0], scope[1])  # type: ignore[attr-defined]
+    y1, y2, x1, x2 = _rand_box(h, w, int(h * tao), int(w * tao))
+    s = scale
 
-    # random box
-    bbx1, bby1, bbx2, bby2 = rand_bbox_tao(img_gt.size(), tao)
-
-    # resize
-    img_gt_resize = torch.clamp(
-        F.interpolate(img_gt_resize, (bby2 - bby1, bbx2 - bbx1), mode="bicubic"), 0, 1
+    idx = _perm(img_gt)
+    gt_resized = F.interpolate(
+        img_gt[idx], ((y2 - y1) * s, (x2 - x1) * s), mode="bicubic"
+    ).clamp(0, 1)
+    lq_resized = F.interpolate(img_lq[idx], (y2 - y1, x2 - x1), mode="bicubic").clamp(
+        0, 1
     )
-    img_lq_resize = torch.clamp(
-        F.interpolate(img_lq_resize, (bby2 - bby1, bbx2 - bbx1), mode="bicubic"), 0, 1
-    )
-
-    # mix
-    img_gt[:, :, bby1:bby2, bbx1:bbx2] = img_gt_resize
-    img_lq[:, :, bby1:bby2, bbx1:bbx2] = img_lq_resize
+    img_gt[..., y1 * s : y2 * s, x1 * s : x2 * s] = gt_resized
+    img_lq[..., y1:y2, x1:x2] = lq_resized
 
     return img_gt, img_lq
 
 
 @torch.no_grad()
 def cutblur(
-    img_gt: Tensor, img_lq: Tensor, alpha: float = 0.7
+    img_gt: Tensor, img_lq: Tensor, alpha: float = 0.7, scale: int = 1
 ) -> tuple[Tensor, Tensor]:
     r"""CutBlur Augmentation.
 
@@ -172,40 +148,37 @@ def cutblur(
 
     Args:
     ----
-        img_gt, img_lq (Tensor): Input images of shape (N, C, H, W).
-            Assumes same size.
+        img_gt, img_lq (Tensor): Input images of shape (N, C, H, W),
+            GT `scale` times the size of LQ. img_lq is modified in place.
         alpha (float): The given max mixing ratio.
+        scale (int): Scale ratio between GT and LQ.
 
     """
-    if img_gt.size() != img_lq.size():
-        msg = "img_gt and img_lq have to be the same resolution."
-        raise ValueError(msg)
-
-    def rand_bbox(size, lam):
-        """Generate random box by lam (scale)."""
-        W = size[2]
-        H = size[3]
-        cut_w = int(W * lam)
-        cut_h = int(H * lam)
-
-        # uniform
-        cx = rng.integers(W)  # type: ignore[attr-defined]
-        cy = rng.integers(H)  # type: ignore[attr-defined]
-
-        bbx1 = np.clip(cx - cut_w // 2, 0, W)
-        bby1 = np.clip(cy - cut_h // 2, 0, H)
-        bbx2 = np.clip(cx + cut_w // 2, 0, W)
-        bby2 = np.clip(cy + cut_h // 2, 0, H)
-
-        return bbx1, bby1, bbx2, bby2
-
+    _check_sizes(img_gt, img_lq, scale)
+    h, w = img_lq.shape[-2:]
     lam = rng.uniform(0.2, alpha)  # type: ignore[attr-defined]
-    bbx1, bby1, bbx2, bby2 = rand_bbox(img_gt.size(), lam)
+    y1, y2, x1, x2 = _rand_box(h, w, int(h * lam), int(w * lam))
+    s = scale
 
-    # apply cutblur
-    img_lq[:, :, bbx1:bbx2, bby1:bby2] = img_gt[:, :, bbx1:bbx2, bby1:bby2]
+    # paste the GT region into LQ, downscaled to LQ resolution
+    patch = img_gt[..., y1 * s : y2 * s, x1 * s : x2 * s]
+    if s > 1:
+        patch = F.interpolate(
+            patch, (y2 - y1, x2 - x1), mode="bicubic", antialias=True
+        ).clamp(0, 1)
+    img_lq[..., y1:y2, x1:x2] = patch
 
     return img_gt, img_lq
+
+
+_AUGMENTS = {
+    "mixup": mixup,
+    "cutmix": cutmix,
+    "resizemix": resizemix,
+    "cutblur": cutblur,
+}
+# application order when several are drawn
+_ORDER = ("cutmix", "mixup", "resizemix", "cutblur")
 
 
 @torch.no_grad()
@@ -213,17 +186,11 @@ def apply_augment(
     img_gt: Tensor,
     img_lq: Tensor,
     scale: int = 1,
-    augs: tuple[str, str, str, str, str] = (
-        "none",
-        "mixup",
-        "cutmix",
-        "resizemix",
-        "cutblur",
-    ),
-    prob: tuple[float, float, float, float, float] = (0.1, 0.3, 0.2, 0.7, 0.8),
-    multi_prob: float = 0.3
+    augs: tuple[str, ...] = ("none", "mixup", "cutmix", "resizemix", "cutblur"),
+    prob: tuple[float, ...] | None = (0.1, 0.3, 0.2, 0.7, 0.8),
+    multi_prob: float = 0.3,
 ) -> tuple[Tensor, Tensor]:
-    r"""Applies Augmentations.
+    r"""Applies Augmentations. The inputs are never modified.
 
     Args:
     ----
@@ -231,62 +198,48 @@ def apply_augment(
         scale (int): Scale ratio between GT and LQ.
         augs (list): List of possible augmentations to apply. Supported
             values are: "none", "mixup", "cutmix", "resizemix" and "cutblur"
-        prob (list|float): List of float probabilities for each augmentation.
+        prob (list | None): Relative weight of each augmentation (zero
+            disables it). Default None: uniform.
         multi_prob (float): Probability that to apply >1 augmentations from the list.
             Default: 0.3
     Return:
         img_gt, img_lq (Tensor)
 
     """
+    if prob is None:
+        prob = (1.0,) * len(augs)
     if len(augs) != len(prob):
         msg = "Length of 'augmentation' and aug_prob don't match!"
         raise ValueError(msg)
-    if img_gt.shape[0] == 1:
+    unknown = set(augs) - {"none", *_AUGMENTS}
+    if unknown:
+        msg = f"Unknown augmentations: {sorted(unknown)}."
+        raise ValueError(msg)
+    if any(p < 0 for p in prob) or sum(prob) <= 0:
+        msg = f"aug_prob must be non-negative with a positive sum, got {prob}."
+        raise ValueError(msg)
+
+    active = [(a, p) for a, p in zip(augs, prob, strict=True) if p > 0]
+    names = [a for a, _ in active]
+    weights = np.array([p for _, p in active], dtype=np.float64)
+    weights /= weights.sum()
+
+    if len(active) > 1 and rng.random() < multi_prob:  # type: ignore[attr-defined]
+        num_augs = rng.integers(2, len(active)) if len(active) > 2 else len(active)  # type: ignore[attr-defined]
+        chosen = set(rng.choice(names, size=num_augs, replace=False, p=weights))  # type: ignore[attr-defined]
+    else:
+        chosen = {rng.choice(names, p=weights)}  # type: ignore[attr-defined]
+
+    chosen = [a for a in _ORDER if a in chosen]
+    if not chosen:  # only "none"
+        return img_gt, img_lq
+    if img_gt.shape[0] == 1 and chosen != ["cutblur"]:
         msg = "Augmentations need batch >1 to work."
         raise ValueError(msg)
 
-    # match resolutions
-    modes = ["bilinear", "bicubic"]
-    if scale > 1:
-        img_lq = torch.clamp(
-            F.interpolate(img_lq, scale_factor=scale, mode=random.choice(modes)), 0, 1
-        )
-
-    if rng.random() < multi_prob:  # type: ignore[attr-defined]
-        num_augs = rng.integers(2, len(augs)) if len(augs) > 2 else len(augs)  # type: ignore[attr-defined]
-        weighted = list(zip(augs, prob, strict=False))
-        aug: str | list[str]
-        aug = []
-        for _ in range(num_augs):
-            choice = random.choices(weighted, k=1)
-            aug.append(choice[0][0])
-            weighted.remove(choice[0])
-
-        if "cutmix" in aug:
-            img_gt, img_lq = cutmix(img_gt, img_lq)
-        if "mixup" in aug:
-            img_gt, img_lq = mixup(img_gt, img_lq)
-        if "resizemix" in aug:
-            img_gt, img_lq = resizemix(img_gt, img_lq)
-        if "cutblur" in aug:
-            img_gt, img_lq = cutblur(img_gt, img_lq)
-
-    else:
-        idx = random.choices(range(len(augs)), weights=prob)[0]
-        aug = augs[idx]
-        if "cutmix" in aug:
-            img_gt, img_lq = cutmix(img_gt, img_lq)
-        elif "mixup" in aug:
-            img_gt, img_lq = mixup(img_gt, img_lq)
-        elif "resizemix" in aug:
-            img_gt, img_lq = resizemix(img_gt, img_lq)
-        elif "cutblur" in aug:
-            img_gt, img_lq = cutblur(img_gt, img_lq)
-
-    # back to original resolution
-    if scale > 1:
-        img_lq = torch.clamp(
-            F.interpolate(img_lq, scale_factor=1 / scale, mode="bicubic"), 0, 1
-        )
+    # the mixing functions write in place: never touch the caller's tensors
+    img_gt, img_lq = img_gt.clone(), img_lq.clone()
+    for aug in chosen:
+        img_gt, img_lq = _AUGMENTS[aug](img_gt, img_lq, scale=scale)
 
     return img_gt, img_lq

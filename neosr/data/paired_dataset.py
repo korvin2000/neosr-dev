@@ -1,7 +1,4 @@
-import random
-import sys
-import time
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from torch import Tensor
 from torch.utils import data
@@ -11,15 +8,12 @@ from neosr.data.data_util import (
     paired_paths_from_folder,
     paired_paths_from_lmdb,
     paired_paths_from_meta_info_file,
+    read_img,
 )
 from neosr.data.file_client import FileClient
 from neosr.data.transforms import basic_augment, paired_random_crop
-from neosr.utils import get_root_logger, imfrombytes, img2tensor, tc
+from neosr.utils import img2tensor
 from neosr.utils.registry import DATASET_REGISTRY
-
-if TYPE_CHECKING:
-    import numpy as np
-    from numpy.typing import ArrayLike
 
 
 @DATASET_REGISTRY.register()
@@ -32,7 +26,7 @@ class paired(data.Dataset):
 
     1. **lmdb**: Use lmdb files. If opt['io_backend'] == lmdb.
     2. **meta_info_file**: Use meta information file to generate paths. \
-        If opt['io_backend'] != lmdb and opt['meta_info_file'] is not None.
+        If opt['io_backend'] != lmdb and opt['meta_info'] is not None.
     3. **folder**: Scan folders to generate paths. The rest.
 
     Args:
@@ -74,13 +68,11 @@ class paired(data.Dataset):
             self.paths: list[str] | list[dict[str, str]] = paired_paths_from_lmdb(
                 [self.lq_folder, self.gt_folder], ["lq", "gt"]
             )
-        elif "meta_info" in self.opt and self.opt.get("meta_info", None) is not None:
-            # disk backend with meta_info
+        elif (meta_info := opt.get("meta_info", opt.get("meta_info_file"))) is not None:
+            # disk backend with meta_info ('meta_info_file' is the legacy key)
             # Each line in the meta_info describes the relative path to an image
             self.paths = paired_paths_from_meta_info_file(
-                [self.lq_folder, self.gt_folder],
-                ["lq", "gt"],
-                self.opt["meta_info_file"],
+                [self.lq_folder, self.gt_folder], ["lq", "gt"], meta_info
             )
         else:
             # disk backend
@@ -94,7 +86,6 @@ class paired(data.Dataset):
         return len(self.paths)
 
     def __getitem__(self, index: int) -> dict[str, str | Tensor]:
-        logger = get_root_logger()
         if self.file_client is None:
             self.file_client = FileClient(
                 self.io_backend_opt.pop("type"),  # type: ignore[union-attr]
@@ -104,41 +95,9 @@ class paired(data.Dataset):
         # Load gt and lq images. Dimension order: HWC; channel order: BGR;
         # image range: [0, 1], float32.
         gt_path = self.paths[index]["gt_path"]  # type: ignore[index]
-        img_bytes = self.file_client.get(gt_path, "gt")  # type: ignore[attr-defined]
-
-        try:
-            img_gt: np.ndarray | ArrayLike = imfrombytes(img_bytes, float32=True)
-        except AttributeError:
-            raise AttributeError(gt_path)
-
         lq_path = self.paths[index]["lq_path"]  # type: ignore[index]
-        img_bytes = self.file_client.get(lq_path, "lq")  # type: ignore[attr-defined]
-
-        try:
-            img_lq: np.ndarray | ArrayLike = imfrombytes(img_bytes, float32=True)
-        except AttributeError:
-            raise AttributeError(lq_path)
-
-        # avoid errors caused by high latency in reading files
-        retry = 3
-        while retry > 0:
-            try:
-                if img_bytes is None:
-                    msg = f"{tc.red}No data returned from path: {gt_path}, {lq_path}{tc.end}"
-                    logger.error(msg)
-                    sys.exit(1)
-
-            except OSError as e:
-                msg = f"{tc.red}File client error: {e} in paths {gt_path}, {lq_path}, remaining retry times: {retry - 1}{tc.end}"
-                logger.warning(msg)
-                # change another file to read
-                index = random.randint(0, self.__len__())
-                gt_path = gt_path[index]
-                time.sleep(1)  # sleep 1s for occasional server congestion
-            else:
-                break
-            finally:
-                retry -= 1
+        img_gt = read_img(self.file_client, gt_path, "gt")
+        img_lq = read_img(self.file_client, lq_path, "lq")
 
         scale = self.opt["scale"]
         # augmentation for training

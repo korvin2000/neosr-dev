@@ -36,10 +36,11 @@ class EnlargedSampler(Sampler):
         self.epoch = epoch
 
     def __iter__(self) -> Iterator[int]:
-        # deterministically shuffle based on epoch
-        g = torch.Generator(device="cuda")
+        # deterministically shuffle based on epoch, identical on all ranks;
+        # explicit CPU device: a CUDA permutation only adds a sync for .tolist()
+        g = torch.Generator(device="cpu")
         g.manual_seed(self.epoch)
-        indices = torch.randperm(self.total_size, generator=g, device="cuda").tolist()
+        indices = torch.randperm(self.total_size, generator=g, device="cpu").tolist()
 
         dataset_size = len(self.dataset)
         indices = [v % dataset_size for v in indices]

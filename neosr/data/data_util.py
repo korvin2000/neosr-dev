@@ -1,7 +1,42 @@
+import time
 from pathlib import Path
 from typing import Any
 
-from neosr.utils import scandir
+import cv2
+import numpy as np
+
+from neosr.data.file_client import FileClient
+from neosr.utils import imfrombytes, scandir
+
+
+def read_img(
+    file_client: FileClient, path: str, client_key: str, retries: int = 3
+) -> np.ndarray:
+    """Read and decode an image as float32 HWC BGR in [0, 1].
+
+    Transient read errors (OSError, e.g. a congested network share) are retried
+    ``retries`` times; missing files, empty data and decode failures raise at once
+    with the path.
+    """
+    for attempt in range(retries):
+        try:
+            img_bytes = file_client.get(path, client_key)  # type: ignore[arg-type]
+            break
+        except FileNotFoundError:
+            raise
+        except OSError:
+            if attempt == retries - 1:
+                raise
+            time.sleep(1)
+    if not img_bytes:
+        msg = f"No data returned from path: {path}"
+        raise ValueError(msg)
+    try:
+        img = imfrombytes(img_bytes, float32=True)
+    except (AttributeError, ValueError, cv2.error) as e:  # e.g. imdecode gave None
+        msg = f"Failed to decode image: {path}"
+        raise ValueError(msg) from e
+    return img  # type: ignore[return-value]
 
 
 def paired_paths_from_lmdb(folders: list[str], keys: list[str]) -> list[str]:
@@ -119,7 +154,7 @@ def paired_paths_from_meta_info_file(
 
     paths: list[dict[str, str]] = []
     for gt_name in gt_names:
-        input_path = str(Path(input_folder))
+        input_path = str(Path(input_folder) / gt_name)
         gt_path = str(Path(gt_folder) / gt_name)
         paths.append({f"{input_key}_path": input_path, f"{gt_key}_path": gt_path})
     return paths
@@ -175,22 +210,6 @@ def paired_paths_from_folder(
         assert input_path in input_paths, f"{input_path} is not in {input_key}_paths."
         paths.append({f"{input_key}_path": input_path, f"{gt_key}_path": gt_path})
     return paths
-
-
-def paths_from_folder(folder: str) -> list[str]:
-    """Generate paths from folder.
-
-    Args:
-    ----
-        folder (str): Folder path.
-
-    Returns:
-    -------
-        list[str]: Returned path list.
-
-    """
-    paths = list(scandir(folder))
-    return [Path(str(folder)) / path for path in paths]
 
 
 def paths_from_lmdb(folder: str) -> list[str]:
