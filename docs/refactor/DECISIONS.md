@@ -37,3 +37,6 @@ Port candidates per area: `analysis/competitor/H1..H4.md`.
       resume = warning; EMA keeps averaging the schedule-free y sequence (T2 Q1, Q3, Q4, Q5).
    e. Unknown config keys warn with did-you-mean (not an error); convert.py CPU-only, scale from -s (T3 Q2, Q3).
    f. Loader defaults pin_memory/persistent_workers on (already landed in 9360403; T3 Q1).
+9. EMA warmup (session 2): new optional `train.ema_power` (ema_pytorch-style decay ramp, competitor recipe 0.75); code default = constant
+   decay (backward compatible); shipped templates get `ema_power = 0.75` next to `ema = 0.999`. Evidence: acceptance runs, EMA PSNR 6.55
+   vs live 23.51 at update 1000.
