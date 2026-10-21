@@ -1,6 +1,8 @@
 import pytest
 import torch
 
+from neosr.config import ConfigError
+
 from neosr.losses import build_loss
 from neosr.utils.registry import LOSS_REGISTRY
 
@@ -166,7 +168,7 @@ def test_consistency_l_star_low_branch():
 def test_frozen_weights_and_options():
     assert not any(p.requires_grad for p in build("dists_loss", "cpu").parameters())
     assert build_loss({"type": "fdl_loss", "model": "VGG"}).model_name == "vgg"
-    with pytest.raises(TypeError):  # PatchLoss/IPK were removed (G5.4)
+    with pytest.raises(ConfigError):  # PatchLoss/IPK were removed (G5.4)
         build_loss({"type": "vgg_perceptual_loss", "patchloss": True})
     with pytest.raises(ValueError, match="vgg19"):
         build_loss({"type": "vgg_perceptual_loss", "vgg_type": "vgg16"})
