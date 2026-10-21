@@ -29,3 +29,11 @@ Port candidates per area: `analysis/competitor/H1..H4.md`.
    (correct per paper and competitor; metric values shift vs old logs). Apply after Phase L1 (L1 was told to leave it) — G5.M4.
 7. Model allocation (owner, 2026-10-20): Fable only for strategic/global/conceptual questions at effort high/medium (limits);
    Opus implements (algorithms, optimisation, math); Codex gpt-6-astra high = code reviewer + advisor for every step.
+8. Session 2 (2026-10-21) — design open questions resolved (owner answered #a; the rest take the designs' recommended defaults):
+   a. `logger.keep_states = 3` by default (0 = keep all); exports in models/ never pruned (owner).
+   b. `train.max_skip_streak = 10`; the live adversarial G term ships without a legacy flag (T1 Q1, Q2).
+   c. DDP is best-effort: gloo-tested on 1 GPU, NCCL untested; DataParallel removed (T1 Q3, T2 D5).
+   d. Stochastic resume continuation (not order-exact); `.state` not accepted as pretrain; same-shape net option change on
+      resume = warning; EMA keeps averaging the schedule-free y sequence (T2 Q1, Q3, Q4, Q5).
+   e. Unknown config keys warn with did-you-mean (not an error); convert.py CPU-only, scale from -s (T3 Q2, Q3).
+   f. Loader defaults pin_memory/persistent_workers on (already landed in 9360403; T3 Q1).

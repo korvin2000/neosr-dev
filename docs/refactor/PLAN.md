@@ -56,3 +56,15 @@ Open 3-model tie-break: canonical aether source (T5: aether_arch v4 vs G8.4: aet
 3. NaN root cause: Codex analysis in `analysis/nan/codex.md`; the empirical t4 run was stopped before reporting
    (its logs were in the session scratchpad and are not preserved beyond `analysis/stability/raw_summary.md`).
 4. Then Phase C (C1 -> C8) per the table above; Codex reviews every step.
+
+## Phase C execution plan v2 (session 2, from design/T1-T3 §6/§9/§5; T5 for aether)
+Rule: agents implement against CURRENT HEAD (designs were written at 55f0cdd; Phase L already landed parts — skip what is done).
+Each lane: Opus implements -> Codex gpt-6-astra reviews -> Opus fix pass -> main-thread review -> commit.
+| wave | lanes (disjoint files) | status |
+|---|---|---|
+| W0 | seed `neosr/config.py` (ConfigError/ConfigWarning) by main thread; **A-verify** (apply wip patch: A1-A3 + T1-A4 swinirdense reentrant); **T3-0** foundation (config.py, runtime.py, cli.py, utils/factory.py, dist_util.py, tests config/runtime/imports/registry/hygiene); **T1-A3** models/phase.py (Phase, Ema, LossMeter) + tests; **T2-A1** models/checkpoint.py + tests; **T2-A2** models/tiling.py + tests; **T2-A4** utils/stop.py + tests | todo |
+| W1 | **L-A** archs R1 recipe (batch 0: archs/__init__ table + build_network(scale=) + arch_util; batches 1-6) incl. call-site `scale=` one-liners; **L-B** metrics table; **L-C** data/RNG atomic switch (utils/rng.py, data/**, models/otf.py:20); **T1-A1** losses/base.py + losses/__init__ builder (LOSSES table) | todo |
+| W2 | **T1-A2** gan_loss + AdvView; **T1-B1** loss kernel recipe (3 workers) incl. FDL seeded projections; **T2-A3** data/otf_degradation.py (Degrader, PairPool); **T2-B1** phase state_dict | todo |
+| W3 | **C1** integration (one agent): models/base.py, image.py, otf.py, models/__init__ (T2 C1 + T1 B2 + T3 L-E + T5 QAT slot) | todo |
+| W4 | **D1** entry points: train.py, test.py, convert.py, utils/logger.py, utils/misc.py, utils/__init__.py, prefetch reset (T2 D1 + T1 B3 + T3 L-E) | todo |
+| W5 | verification (T2 E1-E4, T3 I-1 smoke + DDP gloo + errors, T1 D step tests) + T3-Z cleanup; then C5 aether/QAT, C6 perf, C7 stability acceptance, C8 docs | todo |
