@@ -1,4 +1,4 @@
-"""Banned constructs under neosr/. ALLOW lists the files not migrated yet; lanes shrink it as they land."""
+"""Banned constructs under neosr/. ALLOW must stay empty; a new offender is fixed, not allowlisted."""
 
 import re
 from pathlib import Path
@@ -18,26 +18,8 @@ PATTERNS = {
 }
 
 
-# pattern -> files (relative to neosr/) that may still contain it
-ALLOW: dict[str, set[str]] = {
-    "net_opt": {"archs/arch_util.py"},
-    "parse_options": {"archs/arch_util.py", "optimizers/soap_sf.py", "utils/options.py"},
-    "set_default_device": set(),
-    "sys.exit": {
-        "utils/lmdb_util.py",
-        "utils/options.py",
-    },
-    "sys.argv": {"utils/options.py"},
-    "bare except": {
-        "archs/arch_util.py",
-        "archs/esrgan_arch.py",
-        "utils/img_util.py",
-        "utils/options.py",
-    },
-    "registry": {
-        "utils/registry.py",
-    },
-}
+# pattern -> files (relative to neosr/) that may still contain it; empty since T3-Z
+ALLOW: dict[str, set[str]] = {p: set() for p in PATTERNS}
 
 
 def offenders(pattern: str) -> set[str]:

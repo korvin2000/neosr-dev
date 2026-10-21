@@ -29,8 +29,6 @@ from neosr.utils.misc import (
     sizeof_fmt,
     tc,
 )
-from neosr.utils.options import toml_load
-from neosr.utils.registry import Registry
 
 __all__ = [
     "AvgTimer",
@@ -39,8 +37,6 @@ __all__ = [
     "filter2D",
     # logger.py
     "MessageLogger",
-    # registry
-    "Registry",
     #  color_util.py
     "bgr2ycbcr",
     # misc.py
@@ -62,8 +58,6 @@ __all__ = [
     "sizeof_fmt",
     "tc",
     "tensor2img",
-    # options
-    "toml_load",
     "ycbcr2bgr",
     "ycbcr2rgb",
 ]

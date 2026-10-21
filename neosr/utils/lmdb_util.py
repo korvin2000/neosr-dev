@@ -1,4 +1,3 @@
-import sys
 from multiprocessing import Pool
 from pathlib import Path
 
@@ -103,7 +102,8 @@ def make_lmdb_from_imgs(
         msg = "lmdb_path must end with '.lmdb'."
         raise ValueError(msg)
     if Path(lmdb_path).exists():
-        sys.exit(1)
+        msg = f"Folder {lmdb_path} already exists."
+        raise FileExistsError(msg)
 
     if multiprocessing_read:
         # read all the images to memory (multiprocessing)
@@ -195,8 +195,8 @@ class LmdbMaker:
             msg = "lmdb_path must end with '.lmdb'."
             raise ValueError(msg)
         if Path(lmdb_path).exists():
-            print(f"Folder {lmdb_path} already exists. Exit.")
-            sys.exit(1)
+            msg = f"Folder {lmdb_path} already exists."
+            raise FileExistsError(msg)
 
         self.lmdb_path = lmdb_path
         self.batch = batch

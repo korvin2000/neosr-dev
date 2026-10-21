@@ -242,7 +242,8 @@ def pre_b1_loss(name: str, file: str | None = None, **kwargs) -> torch.nn.Module
         pytest.skip(f"pre-B1 source of {path} not available")
     mod = types.ModuleType(f"pre_b1_{file or name}")
     mod.__file__ = str(root / path)  # DISTS finds its weights next to the module
-    exec(compile(src.replace("@LOSS_REGISTRY.register()\n", ""), path, "exec"), mod.__dict__)  # ruff: ignore[exec-builtin]
+    src = src.replace("@LOSS_REGISTRY.register()\n", "").replace("from neosr.utils.registry import LOSS_REGISTRY\n", "")
+    exec(compile(src, path, "exec"), mod.__dict__)  # ruff: ignore[exec-builtin]
     if "chc_loss" in mod.__dict__ and (file or name) != "basic_loss":  # VGG's criterion: pin it to pre-B1 too
         mod.chc_loss = type(pre_b1_loss("chc_loss", "basic_loss"))
     return getattr(mod, name)(**kwargs)

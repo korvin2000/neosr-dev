@@ -33,7 +33,6 @@ def init(_):
 if __name__ == "__main__":
     import contextlib
     bracket = sys.argv[1] == "1"
-    sys.argv = [sys.argv[0], "-opt", os.environ["NEOSR_OPT"]]
     from neosr.utils.stop import StopFlag, sigint_ignored
     for persistent in (True, False):
         loader = DataLoader(DS(), num_workers=3, multiprocessing_context="spawn",
@@ -66,11 +65,7 @@ def restore_sigint():
 def run_scenario(tmp_path: Path, bracket: bool) -> subprocess.CompletedProcess:
     script = tmp_path / "sigint_scenario.py"
     script.write_text(SCENARIO)
-    env = {
-        **os.environ,
-        "PYTHONPATH": str(ROOT),
-        "NEOSR_OPT": str(ROOT / "tests" / "loss_test_options.toml"),
-    }
+    env = {**os.environ, "PYTHONPATH": str(ROOT)}
     return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
         [sys.executable, str(script), str(int(bracket))],
         env=env,

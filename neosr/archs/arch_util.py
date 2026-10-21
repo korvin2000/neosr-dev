@@ -1,31 +1,10 @@
 from collections.abc import Callable, Iterable
 from itertools import repeat
-from pathlib import Path
 
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 from torch.nn.modules.batchnorm import _BatchNorm
-
-from neosr.utils.options import parse_options
-
-
-def net_opt() -> tuple[int, bool]:
-    # initialize options parsing
-    root_path = Path(__file__).parents[2]
-    opt, args = parse_options(str(root_path), is_train=True)
-
-    # set variable for scale factor and training phase
-    # conditions needed due to convert.py
-
-    if args.input is None:
-        upscale = opt["scale"]
-        training = "train" in opt["datasets"]
-    else:
-        upscale = args.scale
-        training = False
-
-    return upscale, training
 
 
 @torch.no_grad()
@@ -101,10 +80,7 @@ class DySample(nn.Module):
     ) -> None:
         super().__init__()
 
-        try:
-            assert in_channels >= groups
-            assert in_channels % groups == 0
-        except:
+        if in_channels < groups or in_channels % groups != 0:
             msg = "Incorrect in_channels and groups values."
             raise ValueError(msg)
 

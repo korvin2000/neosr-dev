@@ -213,9 +213,9 @@ def imwrite(
         Path(dir_name).mkdir(parents=True, exist_ok=True)
     try:
         cv2.imencode(Path(file_path).suffix, img, params or [])[1].tofile(file_path)
-    except:
+    except (cv2.error, OSError) as e:
         msg = "Failed to write images."
-        raise OSError(msg)
+        raise OSError(msg) from e
 
 
 def crop_border(imgs: np.ndarray | list[np.ndarray], crop_border: int) -> ArrayLike:
