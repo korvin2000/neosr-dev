@@ -5,19 +5,40 @@ from __future__ import annotations
 import copy
 import math
 from contextlib import nullcontext
+from itertools import zip_longest
 from typing import TYPE_CHECKING
 
 import torch
 from torch import distributed as dist
 from torch.nn.utils import clip_grads_with_norm_, get_total_norm
 
+from neosr.config import ConfigError
+
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable, Mapping, Sequence
+    from logging import Logger
 
     from torch import Tensor, nn
     from torch.optim import Optimizer
 
     from neosr.losses.base import Context, Loss
+
+
+def trainable(net: nn.Module) -> tuple[list[str], list[nn.Parameter]]:
+    """Ordered names and parameters that require grad: what the optimizer owns."""
+    pairs = [(n, p) for n, p in net.named_parameters() if p.requires_grad]
+    return [n for n, _ in pairs], [p for _, p in pairs]
+
+
+def is_schedule_free(opt: Optimizer) -> bool:
+    """adamw_sf is always SF; adan_sf honours its flag; plain optimizers have no eval()."""
+    return callable(getattr(opt, "eval", None)) and bool(
+        opt.defaults.get("schedule_free", True)
+    )
+
+
+def _first_diff(a: Sequence, b: Sequence) -> tuple[int, object, object]:
+    return next((i, x, y) for i, (x, y) in enumerate(zip_longest(a, b)) if x != y)
 
 
 class Phase:
@@ -36,8 +57,17 @@ class Phase:
         grad_clip: float,
         max_skip_streak: int = 10,
         schedulers: Iterable = (),
+        names: Sequence[str] | None = None,
+        opt_type: str | None = None,
     ) -> None:
         self.name, self.params, self.opt, self.terms = name, params, opt, terms
+        # resume identity: config optimizer type, SF mode, ordered trainable names;
+        # no positional fallback: same-count swaps would silently remap optimizer moments
+        self.opt_type, self.sf = opt_type or type(opt).__name__, is_schedule_free(opt)
+        self.names = None if names is None else list(names)
+        if self.names is not None and len(self.names) != len(params):
+            msg = f"net_{name}: {len(self.names)} names for {len(params)} parameters"
+            raise ValueError(msg)
         self.autocast = {"device_type": "cuda", "dtype": amp_dtype, "enabled": use_amp}
         self.scaler = torch.amp.GradScaler(
             "cuda", enabled=use_amp and amp_dtype is torch.float16, init_scale=2.0**5
@@ -81,6 +111,56 @@ class Phase:
             )
         return ok
 
+    def _need_names(self) -> list[str]:
+        if self.names is None:
+            msg = f"net_{self.name}: state needs the trainable names (pass names=)"
+            raise RuntimeError(msg)
+        return self.names
+
+    def state_dict(self) -> dict:
+        return {
+            "optimizer": {
+                "type": self.opt_type,
+                "sf": self.sf,
+                "names": self._need_names(),
+                "state": self.opt.state_dict(),
+            },
+            "scaler": self.scaler.state_dict(),  # {} when fp16 is off
+            "schedulers": [
+                {"type": type(s).__name__, "state": s.state_dict()}
+                for s in self.schedulers
+            ],
+        }
+
+    def load_state_dict(self, sd: Mapping, log: Logger) -> None:
+        """Strict resume: a changed optimizer, SF mode, trainable set or scheduler list raises."""
+        o, hint = sd["optimizer"], "; start a new run with pretrain_network_*"
+        if (o["type"], o["sf"]) != (self.opt_type, self.sf):
+            msg = (
+                f"net_{self.name}: optimizer {o['type']}(sf={o['sf']}) -> "
+                f"{self.opt_type}(sf={self.sf}){hint}"
+            )
+            raise ConfigError(msg)
+        if o["names"] != (names := self._need_names()):
+            i, a, b = _first_diff(o["names"], names)
+            msg = f"net_{self.name}: trainable parameter #{i} changed: {a} -> {b}{hint}"
+            raise ConfigError(msg)
+        saved = [s["type"] for s in sd["schedulers"]]
+        if saved != (now := [type(s).__name__ for s in self.schedulers]):
+            i, a, b = _first_diff(saved, now)
+            msg = f"net_{self.name}: scheduler #{i} changed: {a} -> {b}{hint}"
+            raise ConfigError(msg)
+        self.opt.load_state_dict(o["state"])  # restores SF train_mode group flags
+        for s, ss in zip(self.schedulers, sd["schedulers"], strict=True):
+            s.load_state_dict(ss["state"])
+        if self.scaler.is_enabled():
+            if sd["scaler"]:
+                self.scaler.load_state_dict(sd["scaler"])
+            else:
+                log.warning(f"net_{self.name}: fp16 GradScaler starts fresh")
+        elif sd["scaler"]:
+            log.warning(f"net_{self.name}: saved GradScaler state ignored (fp16 off)")
+
 
 def no_sync(net: nn.Module, boundary: bool):
     """DDP: reduce only on the window's last micro-batch."""
@@ -113,6 +193,13 @@ class Ema:
         torch._foreach_lerp_(dp, sp, self.w)
         if db:
             torch._foreach_copy_(db, sb)
+
+    def state_dict(self) -> dict | None:  # None until the first update
+        return None if self.lists is None else self.module.state_dict()
+
+    def load_state_dict(self, sd: Mapping) -> None:
+        self.module.load_state_dict(sd)  # strict
+        self._bind()  # initialised: the next update lerps, never re-copies
 
 
 class LossMeter:
