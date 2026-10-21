@@ -77,3 +77,12 @@
   main checkout (owner's uncommitted files there are not touched by the branch), push master + refactor/stabilize. Later phases
   (C5 aether/QAT, C6 perf, C7 stability acceptance, C8 docs/cleanup) merge into master again after each is verified.
   `git push` was blocked by the session's permission classifier (needs the owner's permission); remote URL embeds a token (rotate it).
+- W3+W4 committed: trainer rewrite 4d55315, entry points 0ab383b. Chain: C1 (t4) -> D1 (t3) -> Codex (6 findings, all fixed:
+  SN buffer sync under DDP broadcast_buffers=False, collective check_finite, resume into missing folder, PlainUSR convert,
+  grad_norm on skipped updates, QAT stub raises) -> 8 GPU smoke runs all green (esrgan+metagan bf16: D logits ~0, GAN grad reaches
+  all 702 G params and no D; 0 NaN aborts over 8 seeds; fp16 0 skips; accumulate exact; SIGINT+auto-resume; OTF; tiled val;
+  test.py; convert.py) -> final fix (checkpoint umask, convert default output, stop wording). Full suite 1073 passed.
+- Merged origin/master (comment-only conflict in calculate_topiq, branch version kept) 22d8481; master fast-forwarded and pushed.
+- Remaining: C5 aether + QAT (T5; resolve v4/v5 canonical source; image._prepare_qat hook currently raises on enable_qat),
+  C6 perf pass (T4 draft), C7 stability acceptance (2k-iter runs, resume equivalence tests T2 E1-E4), C8 docs/templates/cleanup
+  (factory.build helper, wavelet_guided.py shrink, readme, final Codex review).
