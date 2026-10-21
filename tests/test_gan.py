@@ -21,23 +21,24 @@ from neosr.losses.wavelet_guided import AdvView
 ROOT = Path(__file__).resolve().parents[1]
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 LEGACY_REV = "c48252d"  # last revision with the @torch.no_grad wavelet_guided(output, gt) function
+SWT_REV = "4d55315"  # last revision whose AdvView ran the index-padded SWTForward
 cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
 
 
-def legacy_wavelet_guided():
+def legacy_wavelet_guided(rev=LEGACY_REV, name="wavelet_guided"):
     try:
         src = subprocess.run(
-            ["git", "show", f"{LEGACY_REV}:neosr/losses/wavelet_guided.py"],  # noqa: S607
+            ["git", "show", f"{rev}:neosr/losses/wavelet_guided.py"],  # noqa: S607
             cwd=ROOT,
             capture_output=True,
             text=True,
             check=True,
         ).stdout
     except (OSError, subprocess.CalledProcessError):
-        pytest.skip(f"git history with {LEGACY_REV} is not available")
+        pytest.skip(f"git history with {rev} is not available")
     mod = types.ModuleType("legacy_wavelet_guided")
     exec(compile(src, mod.__name__, "exec"), mod.__dict__)  # noqa: S102
-    return mod.wavelet_guided
+    return getattr(mod, name)
 
 
 def images(shape=(2, 3, 32, 40), dev=DEV, seed=0):
@@ -114,20 +115,32 @@ def test_advview_identity_then_hf():
         assert hf.dtype == torch.float32
     assert not list(view.parameters())
     assert not view.state_dict()  # the filters are constants, not checkpoint state
-    assert {n for n, _ in view.named_buffers()} == {
-        "y_w",
-        "band_w",
-        "swt.h0_col",
-        "swt.h1_col",
-        "swt.h0_row",
-        "swt.h1_row",
-    }
+    assert {n for n, _ in view.named_buffers()} == {"y_w", "band_w", "row", "col"}
 
 
 def test_advview_equals_legacy_wavelet_guided():
     gt = images()
     _, hf_gt = legacy_wavelet_guided()(gt, gt)
     torch.testing.assert_close(AdvView().to(DEV)(gt, 0), hf_gt, rtol=1e-6, atol=1e-6)
+
+
+@pytest.mark.parametrize("dev", ["cpu", pytest.param("cuda", marks=cuda)])
+@pytest.mark.parametrize(
+    "hw", [(19, 19), (19, 20), (64, 64)]
+)  # the size floor and a training size
+def test_advview_matches_swtforward_backward(dev, hw):
+    """Circular F.pad replaced the index-padded SWTForward: same value and same input gradient."""
+    old, new = legacy_wavelet_guided(SWT_REV, "AdvView")().to(dev), AdvView().to(dev)
+    x = images((2, 3, *hw), dev=dev).requires_grad_()
+    up = images((2, 3, *hw), dev=dev, seed=1)  # one fixed upstream gradient for both
+    grads = []
+    for view in (old, new):
+        out = view(x, 0)
+        (g,) = torch.autograd.grad(out, x, up)
+        grads.append((out, g))
+    (out_old, g_old), (out_new, g_new) = grads
+    torch.testing.assert_close(out_new, out_old, rtol=1e-6, atol=1e-6)
+    torch.testing.assert_close(g_new, g_old, rtol=1e-5, atol=1e-5)
 
 
 def test_advview_gradcheck():

@@ -3,6 +3,7 @@
 import importlib
 import inspect
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Any
 
 from neosr.config import ConfigError
@@ -46,3 +47,21 @@ def construct(
             msg = f"[{section}] {name}: {bad}"
             raise ConfigError(msg) from err
         raise  # a bug inside the constructor: keep the TypeError and its traceback
+
+
+def build(
+    table: Table,
+    package: str,
+    section: str,
+    cfg: Mapping[str, Any],
+    *,
+    scale: int | None = None,
+    whole: bool = False,
+) -> Any:
+    """Build `cfg["type"]` from a copy of `cfg` with the run scale injected: as keyword arguments
+    without `type`, or (`whole`, the dataset shape) as one positional dict that keeps it."""
+    kwargs = deepcopy(dict(cfg))
+    name = kwargs.get("type") if whole else kwargs.pop("type", None)
+    obj = resolve(table, package, section, name)
+    inject_scale(table, section, name, kwargs, scale)
+    return obj(kwargs) if whole else construct(obj, section, name, kwargs)

@@ -3,14 +3,16 @@
 import ast
 import importlib
 import inspect
+import sys
 import textwrap
+import types
 from typing import Any
 
 import pytest
 from torch import nn
 
 from neosr.config import ConfigError
-from neosr.utils.factory import construct, inject_scale, resolve
+from neosr.utils.factory import build, construct, inject_scale, resolve
 
 # package -> name of its table; a package without the table is skipped until its lane lands
 TABLES = {
@@ -173,3 +175,28 @@ def test_construct_maps_only_kwarg_errors_to_config_error() -> None:
         TypeError, match="has no len"
     ):  # ConfigError is a ValueError, so this is the original
         construct(Broken, "network_g", "Broken", {})
+
+
+def echo(opt: dict) -> dict:
+    return opt
+
+
+def test_build_copies_cfg_and_dispatches_both_call_shapes(monkeypatch) -> None:
+    mod = types.ModuleType("fakepkg.mod")
+    mod.Net, mod.echo = Net, echo
+    monkeypatch.setitem(sys.modules, "fakepkg.mod", mod)
+    table = {"Net": ("mod", "upsampling"), "echo": ("mod", None)}
+    cfg = {"type": "Net", "channels": 4}
+    net = build(table, "fakepkg", "network_g", cfg, scale=2)
+    assert (net.channels, net.upsampling) == (4, 2)
+    assert cfg == {"type": "Net", "channels": 4}  # the caller's table is untouched
+    nested = {"type": "echo", "phase": "train", "aug": [1]}
+    opt = build(table, "fakepkg", "datasets.train", nested, whole=True)
+    assert opt == nested  # one positional dict that keeps `type`
+    assert opt["aug"] is not nested["aug"]  # a deep copy
+    with pytest.raises(ConfigError, match="needs the run scale"):
+        build(table, "fakepkg", "network_g", {"type": "Net"})
+    with pytest.raises(ConfigError, match=r"\[network_g\] Net: .*chanels"):
+        build(table, "fakepkg", "network_g", {"type": "Net", "chanels": 4}, scale=2)
+    with pytest.raises(ConfigError, match="unknown type None"):
+        build(table, "fakepkg", "network_g", {})

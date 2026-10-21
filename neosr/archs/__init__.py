@@ -1,10 +1,9 @@
 from collections.abc import Mapping
-from copy import deepcopy
 from typing import Any
 
 from torch import nn
 
-from neosr.utils.factory import construct, inject_scale, resolve
+from neosr.utils.factory import build
 
 __all__ = ["ARCHS", "build_network"]
 
@@ -90,8 +89,4 @@ ARCHS: dict[str, tuple[str, str | None]] = {
 def build_network(
     cfg: Mapping[str, Any], *, scale: int | None = None, section: str = "network_g"
 ) -> nn.Module:
-    kwargs = deepcopy(dict(cfg))
-    name = kwargs.pop("type", None)
-    obj = resolve(ARCHS, "neosr.archs", section, name)
-    inject_scale(ARCHS, section, name, kwargs, scale)
-    return construct(obj, section, name, kwargs)
+    return build(ARCHS, "neosr.archs", section, cfg, scale=scale)

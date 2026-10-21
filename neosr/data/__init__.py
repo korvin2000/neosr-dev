@@ -1,12 +1,11 @@
 import os
 from collections.abc import Mapping
-from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
 import torch
 from torch.utils.data import DataLoader, Dataset, Sampler, get_worker_info
 
-from neosr.utils.factory import resolve
+from neosr.utils.factory import build
 from neosr.utils.rng import seed_rng
 
 if TYPE_CHECKING:
@@ -23,9 +22,7 @@ DATASETS: dict[str, tuple[str, str | None]] = {
 
 def build_dataset(cfg: Mapping[str, Any]) -> Dataset:
     section = f"datasets.{cfg.get('phase')}"
-    return resolve(DATASETS, "neosr.data", section, cfg.get("type"))(
-        deepcopy(dict(cfg))
-    )
+    return build(DATASETS, "neosr.data", section, cfg, whole=True)
 
 
 def worker_init_fn(_: int) -> None:

@@ -2,7 +2,6 @@
 
 import math
 from collections.abc import Mapping
-from copy import deepcopy
 from typing import Any
 
 import torch
@@ -10,7 +9,7 @@ from torch import nn
 
 from neosr.config import ConfigError
 from neosr.losses.base import Loss
-from neosr.utils.factory import construct, inject_scale, resolve
+from neosr.utils.factory import build
 
 __all__ = [
     "LOSSES",
@@ -58,11 +57,7 @@ RESERVED_PREFIX = ("grad_norm_", "skipped_")
 def build_loss(
     cfg: Mapping[str, Any], *, scale: int | None = None, section: str = "train.loss"
 ) -> nn.Module:
-    kwargs = deepcopy(dict(cfg))
-    name = kwargs.pop("type", None)
-    obj = resolve(LOSSES, "neosr.losses", section, name)
-    inject_scale(LOSSES, section, name, kwargs, scale)
-    return construct(obj, section, name, kwargs)
+    return build(LOSSES, "neosr.losses", section, cfg, scale=scale)
 
 
 def build_losses(
