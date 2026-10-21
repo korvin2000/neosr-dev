@@ -35,6 +35,7 @@ type = "aether_small"
 
 [train]
 ema = 0.999
+ema_power = 0.75
 enable_qat = true
 qat_type = "int8"
 fused_init = true

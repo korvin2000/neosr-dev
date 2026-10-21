@@ -97,13 +97,10 @@ type = "metagan"
 
 [train]
 ema = 0.999
+ema_power = 0.75
 wavelet_guided = true
 wavelet_init = 80000
-#sam = "fsam"
-#sam_init = 1000
-#eco = true
-#eco_init = 15000
-#match_lq = true
+#match_lq_colors = true
 
 [train.optim_g]
 type = "adan_sf"
@@ -152,9 +149,6 @@ loss_weight = 0.3
 #type = "vgg_perceptual_loss"
 #loss_weight = 0.5
 #criterion = "huber"
-##patchloss = true
-##ipk = true
-##patch_weight = 1.0
 
 #[train.dists_opt]
 #type = "dists_loss"

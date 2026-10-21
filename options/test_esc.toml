@@ -17,8 +17,6 @@ dataroot_lq = 'C:\datasets\val\'
 type = "esc"
 #type = "esc_light"
 #type = "esc_large"
-#deployment = true
-#do_compile = true
 
 [path]
 pretrain_network_g = 'C:\model.pth'

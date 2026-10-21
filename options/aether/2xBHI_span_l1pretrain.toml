@@ -37,6 +37,7 @@ type = "span"
 
 [train]
 ema = 0.999
+ema_power = 0.75
 
 [train.optim_g]
 type = "adamw"

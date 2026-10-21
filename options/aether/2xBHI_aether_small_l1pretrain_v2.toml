@@ -39,6 +39,7 @@ type = "aether_small"
 
 [train]
 ema = 0.999
+ema_power = 0.75
 enable_qat = true # Only disable qat training if you will never!!! create an int8 onnx model out of this trained model. QAT adds a bit of training overhead and also worsen metrics slightly, but will be profitable for the end user.
 
 [train.optim_g]
