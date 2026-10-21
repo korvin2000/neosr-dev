@@ -47,3 +47,15 @@
   playbook, Phase A, NaN repro). Saved: design/T1-T3 finals, design/drafts/* (T4 synthesis, proposals, Codex reviews),
   analysis/stability/raw_summary.md, Phase A WIP patch in wip/. Scratch worktree nanwt removed; experiments/stab_* and smoke_*
   deleted in both repos. Owner's uncommitted files in the main checkout untouched. Next steps: PLAN.md "Session-1 end state".
+
+## 2026-10-21 session 2 (Opus 5.5)
+- Resumed from PLAN "Session-1 end state". Read design/T1-T3 finals (consistent, cross-referenced). Owner: keep_states=3.
+  Other design open questions take recommended defaults (DECISIONS #8). PLAN v2 = waves W0..W5. Seed c7a2e7a (ConfigError).
+- W0 launched (workflow phase-C-wave0): A-verify (apply wip Phase A patch + T1-A4), T3-0, T1-A3 phase.py, T2-A1 checkpoint.py,
+  T2-A2 tiling.py, T2-A4 stop.py. If interrupted: the workflow can be resumed with its run id, or redo lanes from PLAN v2.
+- W0 committed (6 commits): Phase A arch fixes verified (state_dict keys unchanged; swinirdense 3conv the one intended shape change)
+  09ffccc; T3-0 config/runtime/cli/factory de925d4; phase.py 5c7e8ee; checkpoint.py 998ce6c; tiling.py 2e18ffe; stop.py 6968a2c.
+  Full suite 598 passed / 2 skipped / 4 xfailed. Main-thread review of the new modules: no changes needed.
+- W1 launched (workflow phase-C-wave1): L-A (fixture on old code -> ARCHS table/build_network(scale=) -> 6 parallel R1 batches -> Codex
+  review -> fix), L-B metrics table, L-C RNG atomic switch + data tables, T1-A1 loss contract/builder (not wired until W3).
+  Pending main-thread chore after W1: shrink tests/test_hygiene.py / test_imports.py allowlists.
