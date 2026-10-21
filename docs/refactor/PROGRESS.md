@@ -91,3 +91,11 @@
   Full suite 1135 passed / 0 failed. Finding for W6: EMA (decay 0.999, first-update copy) validates far below live weights early
   (6.55 vs 23.51 PSNR at 1000 updates) -> add EMA decay warmup (competitor ema_power). Owner asked how to register archs now:
   answered (ARCHS row + native scale kw); README section planned in C8.
+- W6 first run: the owner's mid-turn question (arch registration) was relayed into the lane agents; EMA, C6 and C8-code lanes answered
+  it instead of working (no edits). C8-docs lane did its work (readme rewrite incl. "Adding an architecture"/"Adding a loss", 91
+  templates cleaned + ema_power = 0.75) -> uncommitted; templates fail test_config until the EMA lane adds the key. Relaunched the three
+  lanes as phase-C-wave6b with an explicit "question already answered" note.
+- W6 committed: EMA warmup + strip-qat a924bf2 (EMA PSNR 12.2 -> 26.6 dB at 1000 updates), perf e31cd49 (bitwise-identical speedups
+  on by default; DINOv2 bf16 backbone opt-in after main-thread review: pixel-gradient error up to 60% at 256 px, no quality A/B),
+  builder/wavelet cleanup 9063c70 (421 -> 49 lines), readme + templates c3dc388. Full suite 1170 passed / 0 failed.
+- Next: W7 final whole-branch Codex review, fixes, final merge.
