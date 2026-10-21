@@ -5,8 +5,6 @@ import torch
 from torch import Tensor, nn
 from torchvision.models import VGG19_Weights, vgg
 
-from neosr.utils.registry import ARCH_REGISTRY
-
 VGG_PRETRAIN_PATH: str = "experiments/pretrained_models/vgg19-dcbb9e9d.pth"
 NAMES: dict[str, list[str]] = {
     "vgg19": [
@@ -51,7 +49,6 @@ NAMES: dict[str, list[str]] = {
 }
 
 
-@ARCH_REGISTRY.register()
 class VGGFeatureExtractor(nn.Module):
     """VGG network for feature extraction.
 

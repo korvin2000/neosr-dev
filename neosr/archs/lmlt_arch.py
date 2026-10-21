@@ -4,10 +4,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from neosr.archs.arch_util import net_opt, to_2tuple
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
+from neosr.archs.arch_util import to_2tuple
 
 
 # Layer Norm
@@ -307,14 +304,13 @@ class AttBlock(nn.Module):
         return self.ccm(self.norm2(x)) + x
 
 
-@ARCH_REGISTRY.register()
 class lmlt(nn.Module):
     def __init__(
         self,
         dim=60,
         n_blocks=8,
         ffn_scale=2.0,
-        upscaling_factor=upscale,
+        upscaling_factor=4,
         window_size=8,
         drop_rate=0.0,
         attn_drop_rate=0.0,
@@ -371,11 +367,9 @@ class lmlt(nn.Module):
         return self.to_img(x)
 
 
-@ARCH_REGISTRY.register()
 def lmlt_tiny(**kwargs):
     return lmlt(dim=36, **kwargs)
 
 
-@ARCH_REGISTRY.register()
 def lmlt_large(**kwargs):
     return lmlt(dim=84, **kwargs)

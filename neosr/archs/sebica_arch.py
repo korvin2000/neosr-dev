@@ -2,11 +2,6 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from neosr.archs.arch_util import net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
-
 
 class SECA(nn.Module):
     """
@@ -147,9 +142,8 @@ class Attn(nn.Module):
         return out
 
 
-@ARCH_REGISTRY.register()
 class sebica(nn.Module):
-    def __init__(self, sr_rate=upscale, N=16, mini=False, dropout=0.0, **kwargs):
+    def __init__(self, sr_rate=4, N=16, mini=False, dropout=0.0):
         super().__init__()
         self.scale = sr_rate
         dropout = dropout if self.training else 0.0
@@ -182,6 +176,5 @@ class sebica(nn.Module):
         return h + base
 
 
-@ARCH_REGISTRY.register()
-def sebica_mini(**kwargs):  # noqa: ARG001
-    return sebica(N=8, mini=True)
+def sebica_mini(**kwargs):
+    return sebica(N=8, mini=True, **kwargs)

@@ -5,10 +5,7 @@ import torch
 from torch import nn
 from torch.nn.init import trunc_normal_
 
-from neosr.archs.arch_util import net_opt, to_2tuple
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
+from neosr.archs.arch_util import to_2tuple
 
 
 def drop_path(x, drop_prob: float = 0.0, training: bool = False):
@@ -1107,7 +1104,6 @@ class Upsample(nn.Sequential):
         super(Upsample, self).__init__(*m)
 
 
-@ARCH_REGISTRY.register()
 class hma(nn.Module):
     r"""Multi-axis Blocking Hybrid Network
         A PyTorch implementation of : `Activating More Pixels in Image Super-Resolution Transformer`.
@@ -1165,11 +1161,10 @@ class hma(nn.Module):
         ape=False,
         patch_norm=True,
         use_checkpoint=False,
-        upscale=upscale,
+        upscale=4,
         img_range=1.0,
         upsampler="pixelshuffle",
         resi_connection="1conv",
-        **kwargs,
     ):
         super(hma, self).__init__()
 
@@ -1379,7 +1374,6 @@ class hma(nn.Module):
         return x
 
 
-@ARCH_REGISTRY.register()
 def hma_medium(**kwargs):
     return hma(
         img_size=64,
@@ -1391,7 +1385,6 @@ def hma_medium(**kwargs):
     )
 
 
-@ARCH_REGISTRY.register()
 def hma_large(**kwargs):
     return hma(
         img_size=48,

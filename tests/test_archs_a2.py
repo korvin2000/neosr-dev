@@ -8,7 +8,8 @@ import torch
 import torch.nn.functional as F
 
 from neosr.archs import dat_arch, drct_arch, hat_arch, swinir_arch, swinirdense_arch
-from neosr.utils.registry import ARCH_REGISTRY
+from neosr.archs import ARCHS as TABLE
+from neosr.utils.factory import resolve
 
 _REGISTERED = (hat_arch,)  # imported to register
 DEV = "cuda"
@@ -51,7 +52,7 @@ MANIFEST = {
 
 def build(name, **kw):
     torch.manual_seed(0)
-    return ARCH_REGISTRY.get(name)(upscale=SCALE, **kw).to(DEV)
+    return resolve(TABLE, "neosr.archs", "test", name)(upscale=SCALE, **kw).to(DEV)
 
 
 @pytest.fixture
@@ -73,7 +74,7 @@ def _manifest(net):
 
 @pytest.mark.parametrize("name", VARIANTS)
 def test_state_dict_manifest(name):
-    assert _manifest(ARCH_REGISTRY.get(name)(upscale=SCALE)) == MANIFEST[name]
+    assert _manifest(resolve(TABLE, "neosr.archs", "test", name)(upscale=SCALE)) == MANIFEST[name]
 
 
 @cuda

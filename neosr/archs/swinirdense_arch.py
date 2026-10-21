@@ -7,10 +7,7 @@ import torch.utils.checkpoint as checkpoint
 from torch import nn
 from torch.nn.init import trunc_normal_
 
-from neosr.utils.registry import ARCH_REGISTRY
-from .arch_util import to_2tuple, DropPath, net_opt
-
-upscale, training = net_opt()
+from .arch_util import to_2tuple, DropPath
 
 
 class Mlp(nn.Module):
@@ -754,7 +751,7 @@ class UpsampleOneStep(nn.Sequential):
         flops = h * w * self.num_feat * 3 * 9
         return flops
 
-@ARCH_REGISTRY.register()
+
 class swinirdense(nn.Module):
     r""" SwinIR
         A PyTorch impl of : `SwinIR: Image Restoration Using Swin Transformer`, based on Swin Transformer.
@@ -803,11 +800,10 @@ class swinirdense(nn.Module):
                  ape=False,
                  patch_norm=True,
                  use_checkpoint=False,
-                 upscale=upscale,
+                 upscale=4,
                  img_range=1.0,
                  upsampler='pixelshuffle',
-                 resi_connection='1conv',
-                 **kwargs):
+                 resi_connection='1conv'):
         super().__init__()
         num_in_ch = in_chans
         num_out_ch = out_chans

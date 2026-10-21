@@ -10,10 +10,7 @@ from torch.nn import functional as F
 from torch.nn.init import trunc_normal_
 from torch.utils import checkpoint
 
-from neosr.archs.arch_util import DropPath, net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
+from neosr.archs.arch_util import DropPath
 
 
 def img2windows(img, H_sp, W_sp):
@@ -815,7 +812,6 @@ class Upsample(nn.Sequential):
         super(Upsample, self).__init__(*m)
 
 
-@ARCH_REGISTRY.register()
 class rgt(nn.Module):
 
     def _init_weights(self, m):
@@ -845,12 +841,11 @@ class rgt(nn.Module):
         act_layer=nn.GELU,
         norm_layer=nn.LayerNorm,
         use_chk=False,
-        upscale=upscale,
+        upscale=4,
         img_range=1.0,
         resi_connection="1conv",
         split_size=[8, 32],
         c_ratio=0.5,
-        **kwargs,
     ):
         super().__init__()
 
@@ -956,6 +951,5 @@ class rgt(nn.Module):
         return x
 
 
-@ARCH_REGISTRY.register()
 def rgt_s(**kwargs):
     return rgt(depth=[6, 6, 6, 6, 6, 6], num_heads=[6, 6, 6, 6, 6, 6], **kwargs)

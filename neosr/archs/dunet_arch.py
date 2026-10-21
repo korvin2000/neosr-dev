@@ -3,7 +3,6 @@ from torch import Tensor, nn
 from torch.nn.utils import spectral_norm
 
 from neosr.archs.arch_util import DySample
-from neosr.utils.registry import ARCH_REGISTRY
 
 
 class Down(nn.Sequential):
@@ -19,7 +18,6 @@ class Up(nn.Sequential):
         )
 
 
-@ARCH_REGISTRY.register()
 class dunet(nn.Module):
     """Code from:
     https://github.com/umzi2/DUnet

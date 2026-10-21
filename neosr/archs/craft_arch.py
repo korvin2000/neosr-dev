@@ -7,11 +7,6 @@ from einops import rearrange
 from torch import nn
 from torch.nn.init import trunc_normal_
 
-from neosr.archs.arch_util import net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
-
 
 def img2windows(img, H_sp, W_sp):
     """Input: Image (B, C, H, W)
@@ -755,7 +750,6 @@ class UpsampleOneStep(nn.Sequential):
         super(UpsampleOneStep, self).__init__(*m)
 
 
-@ARCH_REGISTRY.register()
 class craft(nn.Module):
     r"""Cross-Refinement Adaptive Fusion Transformer
         Some codes are based on SwinIR.
@@ -800,10 +794,9 @@ class craft(nn.Module):
         qkv_bias=True,
         qk_scale=None,
         norm_layer=nn.LayerNorm,
-        upscale=upscale,
+        upscale=4,
         img_range=1.0,
         resi_connection="1conv",
-        **kwargs,
     ):
         super(craft, self).__init__()
 

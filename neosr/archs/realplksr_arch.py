@@ -5,10 +5,7 @@ import torch
 from torch import nn
 from torch.nn.init import trunc_normal_
 
-from neosr.archs.arch_util import DySample, net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
+from neosr.archs.arch_util import DySample
 
 
 class DCCM(nn.Sequential):
@@ -99,7 +96,6 @@ class PLKBlock(nn.Module):
         return x + x_skip
 
 
-@ARCH_REGISTRY.register()
 class realplksr(nn.Module):
     """Partial Large Kernel CNNs for Efficient Super-Resolution:
     https://arxiv.org/abs/2404.11848
@@ -111,14 +107,13 @@ class realplksr(nn.Module):
         out_ch: int = 3,
         dim: int = 64,
         n_blocks: int = 28,
-        upscaling_factor: int = upscale,
+        upscaling_factor: int = 4,
         kernel_size: int = 17,
         split_ratio: float = 0.25,
         use_ea: bool = True,
         norm_groups: int = 4,
         dropout: float = 0,
         dysample: bool = False,
-        **kwargs,
     ):
         super().__init__()
 
@@ -162,10 +157,9 @@ class realplksr(nn.Module):
         return x
 
 
-@ARCH_REGISTRY.register()
 def realplksr_s(**kwargs):
     return realplksr(n_blocks=12, kernel_size=13, use_ea=False, **kwargs)
 
-@ARCH_REGISTRY.register()
+
 def realplksr_l(**kwargs):
     return realplksr(dim=96, **kwargs)

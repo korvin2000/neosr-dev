@@ -17,25 +17,14 @@ PATTERNS = {
     "registry": r"_REGISTRY\b",
 }
 
-_SR = (
-    "asid atd catanet cfsr compact craft cugan dat dct dctlsa desrgan ditn drct eimn esc esrgan flexnet "
-    "grformer hasn hat hitsrf hma krgn lmlt man mfghmoe microsr moesr mosrv2 msdan ninasr omnisr plainusr "
-    "plksr rcan realplksr rgt safmn sebica span spanplus srformer swinir swinirdense"
-).split()
-_NON_SR = "dunet ea2fpn metagan patchgan resgan unet vgg".split()
 _LOSSES = (
     "basic consistency dists fdl ff gan kl ldl msswd ncc ssim vgg_perceptual"
 ).split()
 
 # pattern -> files (relative to neosr/) that may still contain it
 ALLOW: dict[str, set[str]] = {
-    "net_opt": {"archs/arch_util.py", *(f"archs/{a}_arch.py" for a in _SR)},
-    "parse_options": {
-        "archs/arch_util.py",
-        "optimizers/soap_sf.py",
-        "utils/options.py",
-        "utils/rng.py",
-    },
+    "net_opt": {"archs/arch_util.py"},
+    "parse_options": {"archs/arch_util.py", "optimizers/soap_sf.py", "utils/options.py"},
     "set_default_device": set(),
     "sys.exit": {
         "models/base.py",
@@ -52,17 +41,7 @@ ALLOW: dict[str, set[str]] = {
         "utils/options.py",
     },
     "registry": {
-        *(f"archs/{a}_arch.py" for a in _SR + _NON_SR),
-        "archs/__init__.py",
-        "data/__init__.py",
-        "data/otf_dataset.py",
-        "data/paired_dataset.py",
-        "data/single_dataset.py",
         *(f"losses/{loss}_loss.py" for loss in _LOSSES),
-        "losses/__init__.py",
-        "metrics/__init__.py",
-        "metrics/calculate.py",
-        "metrics/topiq.py",
         "models/__init__.py",
         "models/image.py",
         "models/otf.py",

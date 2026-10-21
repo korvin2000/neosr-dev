@@ -6,7 +6,6 @@ from torchvision import models
 from torchvision.models import ResNet18_Weights
 
 from neosr.archs.arch_util import DySample
-from neosr.utils.registry import ARCH_REGISTRY
 
 
 def l2_norm(x: Tensor) -> Tensor:
@@ -180,7 +179,6 @@ class SegmentationBlock(nn.Module):
         return self.block(x)
 
 
-@ARCH_REGISTRY.register()
 class ea2fpn(nn.Module):
     """Modified for the neosr project, based on 'A2-FPN for Semantic
     Segmentation of Fine-Resolution Remotely Sensed Images':
@@ -203,7 +201,6 @@ class ea2fpn(nn.Module):
         pyramid_channels: int = 64,
         segmentation_channels: int = 64,
         dropout: float = 0.0,
-        **kwargs,  # noqa: ARG002
     ) -> None:
         super().__init__()
         self.base_model = models.resnet18(weights=ResNet18_Weights.DEFAULT)

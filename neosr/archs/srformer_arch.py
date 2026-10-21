@@ -7,10 +7,7 @@ from torch import nn
 from torch.nn.init import trunc_normal_
 from torch.utils import checkpoint
 
-from neosr.archs.arch_util import DropPath, net_opt, to_2tuple
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
+from neosr.archs.arch_util import DropPath, to_2tuple
 
 
 class emptyModule(nn.Module):
@@ -945,7 +942,7 @@ class UpsampleOneStep(nn.Sequential):
         flops = h * w * self.num_feat * 3 * 9
         return flops
 
-@ARCH_REGISTRY.register()
+
 class srformer(nn.Module):
     r"""SRFormer
         A PyTorch implement of : `SRFormer: Permuted Self-Attention for Single Image Super-Resolution`, based on Swin Transformer.
@@ -1005,11 +1002,10 @@ class srformer(nn.Module):
         ape=False,
         patch_norm=True,
         use_checkpoint=False,
-        upscale=upscale,
+        upscale=4,
         img_range=1.0,
         upsampler="pixelshuffledirect",
         resi_connection="1conv",
-        **kwargs,
     ):
         super(srformer, self).__init__()
         num_in_ch = in_chans
@@ -1230,7 +1226,6 @@ class srformer(nn.Module):
         return flops
 
 
-@ARCH_REGISTRY.register()
 def srformer_light(**kwargs):
     return srformer(
         in_chans=3,
@@ -1247,7 +1242,6 @@ def srformer_light(**kwargs):
     )
 
 
-@ARCH_REGISTRY.register()
 def srformer_medium(**kwargs):
     return srformer(
         in_chans=3,

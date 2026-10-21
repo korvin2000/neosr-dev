@@ -9,10 +9,7 @@ from torch import Tensor
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.nn.attention.flex_attention import flex_attention
 
-from neosr.archs.arch_util import DySample, net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
+from neosr.archs.arch_util import DySample
 
 
 def attention(q: Tensor, k: Tensor, v: Tensor, bias: Tensor) -> Tensor:
@@ -428,7 +425,6 @@ def _geo_ensemble(k):
     ) / 8
 
 
-@ARCH_REGISTRY.register()
 class esc(nn.Module):
     """
     ESC: Emulating Self-attention with Convolution for Efficient Image Super-Resolution.
@@ -447,7 +443,7 @@ class esc(nn.Module):
         conv_blocks: int = 5,
         window_size: int = 32,
         num_heads: int = 4,
-        upscaling_factor: int = upscale,
+        upscaling_factor: int = 4,
         exp_ratio: float = 1.25,
         attn_type: str = "sdpa",
         is_fp: bool = False,
@@ -580,12 +576,10 @@ class esc(nn.Module):
         )
 
 
-@ARCH_REGISTRY.register()
 def esc_light(**kwargs):
     return esc(n_blocks=3, **kwargs)
 
 
-@ARCH_REGISTRY.register()
 def esc_fp(use_dysample: bool = False, **kwargs):
     # DySample is realsr-only, so it must default to off here
     return esc(
@@ -598,6 +592,5 @@ def esc_fp(use_dysample: bool = False, **kwargs):
     )
 
 
-@ARCH_REGISTRY.register()
 def esc_large(**kwargs):
     return esc(n_blocks=10, exp_ratio=2.0, **kwargs)

@@ -9,10 +9,7 @@ from torch import nn
 from torch.nn import functional as F
 from torch.nn.init import trunc_normal_
 
-from neosr.archs.arch_util import DropPath, net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
+from neosr.archs.arch_util import DropPath
 
 
 def img2windows(img, H_sp, W_sp):
@@ -811,7 +808,6 @@ class UpsampleOneStep(nn.Sequential):
         super().__init__(*m)
 
 
-@ARCH_REGISTRY.register()
 class dct(nn.Module):
     """Dual Compression Transformer
     Args:
@@ -859,11 +855,10 @@ class dct(nn.Module):
         drop_path_rate=0.1,
         act_layer=nn.GELU,
         norm_layer=nn.LayerNorm,
-        upscale=upscale,
+        upscale=4,
         img_range=1.0,
         resi_connection="3conv",
         upsampler="pixelshuffledirect",
-        **kwargs,
     ):
         if num_heads is None:
             num_heads = [2, 2, 2, 2]

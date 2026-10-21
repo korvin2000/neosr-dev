@@ -6,10 +6,7 @@ from einops import rearrange
 from torch import nn
 from torch.nn import functional as F
 
-from neosr.archs.arch_util import DySample, net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
+from neosr.archs.arch_util import DySample
 
 
 class Interpolate(nn.Module):
@@ -600,7 +597,6 @@ class MetaPipeline(nn.Module):
         return self.dec2(x)
 
 
-@ARCH_REGISTRY.register()
 class flexnet(nn.Module):
 
     def _init_weights(self, m):
@@ -615,7 +611,7 @@ class flexnet(nn.Module):
         self,
         inp_channels: int = 3,
         out_channels: int = 3,
-        scale: int = upscale,
+        scale: int = 4,
         dim: int = 64,
         num_blocks: tuple[int, ...] = (
             6,
@@ -707,6 +703,5 @@ class flexnet(nn.Module):
         return x[:, :, : h * self.scale, : w * self.scale]
 
 
-@ARCH_REGISTRY.register()
 def metaflexnet(**kwargs):
     return flexnet(dim=48, num_blocks=(4, 6, 6, 8), pipeline_type="meta", **kwargs)

@@ -3,11 +3,6 @@ import math
 import torch
 from torch import nn
 
-from neosr.archs.arch_util import net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
-
 
 def default_conv(in_channels, out_channels, kernel_size, bias=True):
     return nn.Conv2d(
@@ -141,7 +136,6 @@ class ResidualGroup(nn.Module):
         return res
 
 
-@ARCH_REGISTRY.register()
 class rcan(nn.Module):
     """
     Residual Channel Attention Network (RCAN)
@@ -155,10 +149,9 @@ class rcan(nn.Module):
         kernel_size=3,
         reduction=16,
         n_colors=3,
-        scale=upscale,
+        scale=4,
         act=None,
         norm=False,
-        **kwargs,  # noqa: ARG002
     ):
         super().__init__()
 

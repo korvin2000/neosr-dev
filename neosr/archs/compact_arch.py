@@ -2,13 +2,7 @@
 from torch import nn
 from torch.nn import functional as F
 
-from neosr.archs.arch_util import net_opt
-from neosr.utils.registry import ARCH_REGISTRY
 
-upscale, __ = net_opt()
-
-
-@ARCH_REGISTRY.register()
 class compact(nn.Module):
     """A compact VGG-style network structure for super-resolution.
 
@@ -32,9 +26,8 @@ class compact(nn.Module):
         num_out_ch=3,
         num_feat=64,
         num_conv=16,
-        upscale=upscale,
+        upscale=4,
         act_type="prelu",
-        **kwargs,
     ):
         super(compact, self).__init__()
         self.num_in_ch = num_in_ch

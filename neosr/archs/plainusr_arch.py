@@ -5,11 +5,6 @@ from einops.layers.torch import Rearrange, Reduce
 from torch import nn
 from torch.nn.utils.parametrize import remove_parametrizations
 
-from neosr.archs.arch_util import net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
-
 
 def pad_tensor(t, pattern):
     pattern = pattern.view(1, -1, 1, 1)
@@ -390,7 +385,6 @@ class Block(nn.Module):
             para.detach_()
 
 
-@ARCH_REGISTRY.register()
 class plainusr(nn.Module):
     """PlainUSR: Chasing Faster ConvNet for Efficient Super-Resolution:
     https://arxiv.org/abs/2409.13435
@@ -398,7 +392,7 @@ class plainusr(nn.Module):
     https://github.com/icandle/PlainUSR
     """
 
-    def __init__(self, n_feat=64, im_feat=(64, 48, 32), attn_feat=16, scale=upscale):
+    def __init__(self, n_feat=64, im_feat=(64, 48, 32), attn_feat=16, scale=4):
         super().__init__()
         self.n_feat = n_feat
         self.scale = scale
@@ -483,11 +477,9 @@ class plainusr(nn.Module):
         return self.tail(x)
 
 
-@ARCH_REGISTRY.register()
 def plainusr_ultra(**kwargs):
     return plainusr(n_feat=32, im_feat=(32, 16), attn_feat=4, **kwargs)
 
 
-@ARCH_REGISTRY.register()
 def plainusr_large(**kwargs):
     return plainusr(n_feat=80, im_feat=(80, 64, 48), attn_feat=16, **kwargs)

@@ -7,10 +7,7 @@ from torch import nn
 from torch.nn.init import trunc_normal_
 from torch.utils import checkpoint
 
-from neosr.archs.arch_util import DropPath, net_opt, to_2tuple
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
+from neosr.archs.arch_util import DropPath, to_2tuple
 
 
 class DFE(nn.Module):
@@ -867,7 +864,6 @@ class UpsampleOneStep(nn.Sequential):
         super(UpsampleOneStep, self).__init__(*m)
 
 
-@ARCH_REGISTRY.register()
 class hit_srf(nn.Module):
     """HiT-SRF network.
 
@@ -920,12 +916,11 @@ class hit_srf(nn.Module):
         ape=False,
         patch_norm=True,
         use_checkpoint=False,
-        upscale=upscale,
+        upscale=4,
         img_range=1.0,
         upsampler="pixelshuffledirect",
         resi_connection="1conv",
         hier_win_ratios=[0.5, 1, 2, 4, 6, 8],
-        **kwargs,
     ):
         super(hit_srf, self).__init__()
         num_in_ch = in_chans
@@ -1128,7 +1123,6 @@ class hit_srf(nn.Module):
         return x[:, :, : H * self.upscale, : W * self.upscale]
 
 
-@ARCH_REGISTRY.register()
 def hit_srf_medium(**kwargs):
     return hit_srf(
         img_size=48,
@@ -1141,7 +1135,6 @@ def hit_srf_medium(**kwargs):
     )
 
 
-@ARCH_REGISTRY.register()
 def hit_srf_large(**kwargs):
     return hit_srf(
         img_size=48,

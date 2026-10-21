@@ -13,7 +13,8 @@ from neosr.archs import (
     krgn_arch,
     omnisr_arch,
 )
-from neosr.utils.registry import ARCH_REGISTRY
+from neosr.archs import ARCHS as TABLE
+from neosr.utils.factory import resolve
 
 _REGISTERED = (eimn_arch, grformer_arch, hitsrf_arch, krgn_arch)  # imported to register
 pytestmark = pytest.mark.usefixtures("_env")
@@ -76,7 +77,7 @@ MANIFEST = {
 
 def _build(name: str, dev: str) -> torch.nn.Module:
     torch.manual_seed(0)
-    return ARCH_REGISTRY.get(name)(**ARCHS[name]).to(dev)
+    return resolve(TABLE, "neosr.archs", "test", name)(**ARCHS[name]).to(dev)
 
 
 def _assert_all_grads(net: torch.nn.Module) -> None:
@@ -108,7 +109,7 @@ def _manifest(net):
 @pytest.mark.parametrize("name", MANIFEST)
 def test_state_dict_manifest(name: str) -> None:
     kw = ARCHS.get(name, {"upscale": SCALE})  # hit_srf_medium/large: build only
-    assert _manifest(ARCH_REGISTRY.get(name)(**kw)) == MANIFEST[name]
+    assert _manifest(resolve(TABLE, "neosr.archs", "test", name)(**kw)) == MANIFEST[name]
 
 
 @pytest.mark.parametrize("name", list(ARCHS))
@@ -176,7 +177,7 @@ def test_esc_kernel_size() -> None:
 
 
 def test_eimn_freeze() -> None:
-    net = ARCH_REGISTRY.get("eimn_a")(scale=2, freeze_param=True)
+    net = resolve(TABLE, "neosr.archs", "test", "eimn_a")(scale=2, freeze_param=True)
     trainable = {n.split(".")[0] for n, p in net.named_parameters() if p.requires_grad}
     assert trainable == {"tail"}
     assert net.tail[0].out_channels == 3 * 2 * 2
@@ -185,7 +186,7 @@ def test_eimn_freeze() -> None:
 @pytest.mark.parametrize("dev", DEVS)
 def test_hitsrf_small_input(dev: str) -> None:
     # windows up to 8x the base window used to break reflect padding on small inputs
-    net = ARCH_REGISTRY.get("hit_srf")(upscale=2).to(dev).eval()
+    net = resolve(TABLE, "neosr.archs", "test", "hit_srf")(upscale=2).to(dev).eval()
     with torch.no_grad():
         for h, w in ((12, 15), (1, 12), (12, 1), (1, 1)):
             assert net(torch.rand(1, 3, h, w, device=dev)).shape == (1, 3, 2 * h, 2 * w)
@@ -194,7 +195,7 @@ def test_hitsrf_small_input(dev: str) -> None:
 @pytest.mark.parametrize("name", ["hit_srf_medium", "hit_srf_large"])
 def test_hitsrf_heavy_build(name: str) -> None:
     # forward is too memory-heavy for a test; at least check they build and round-trip
-    net = ARCH_REGISTRY.get(name)(upscale=SCALE)
+    net = resolve(TABLE, "neosr.archs", "test", name)(upscale=SCALE)
     net.load_state_dict(net.state_dict(), strict=True)
 
 

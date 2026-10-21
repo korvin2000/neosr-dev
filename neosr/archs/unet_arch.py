@@ -3,10 +3,7 @@ from torch import nn
 from torch.nn import functional as F
 from torch.nn.utils import spectral_norm
 
-from neosr.utils.registry import ARCH_REGISTRY
 
-
-@ARCH_REGISTRY.register()
 class unet(nn.Module):
     """Defines a U-Net discriminator with spectral normalization (SN).
 

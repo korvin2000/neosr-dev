@@ -3,11 +3,6 @@ import torch
 from torch import nn as nn
 from torch.nn import functional as F
 
-from neosr.archs.arch_util import net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
-
 
 class SEBlock(nn.Module):
     def __init__(self, in_channels, reduction=8, bias=False):
@@ -253,9 +248,8 @@ class UNet2(nn.Module):
         return z
 
 
-@ARCH_REGISTRY.register()
 class cugan(nn.Module):
-    def __init__(self, in_channels=3, out_channels=3, scale=upscale, pro=True):
+    def __init__(self, in_channels=3, out_channels=3, scale=4, pro=True):
         super(cugan, self).__init__()
         self.scale = scale
         self.pro: torch.Tensor | None

@@ -7,11 +7,6 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch import nn
 
-from neosr.archs.arch_util import net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
-
 
 def default_conv(in_channels, out_channels, kernel_size, bias=True):
     return nn.Conv2d(
@@ -264,7 +259,6 @@ class UFONE(nn.Module):
         return local_features
 
 
-@ARCH_REGISTRY.register()
 class ditn(nn.Module):
     def __init__(
         self,
@@ -277,8 +271,7 @@ class ditn(nn.Module):
         bias=False,
         LayerNorm_type="WithBias",
         patch_size=8,
-        upscale=upscale,
-        **kwargs,
+        upscale=4,
     ):
         super(ditn, self).__init__()
         self.patch_size = patch_size

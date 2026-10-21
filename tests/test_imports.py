@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # Not yet migrated: still parse argv, scan folders or star-import at import time. Shrinks as lanes land;
 # strict xfail makes a migrated module fail here until it is removed from the set.
-XFAIL = {"neosr", "neosr.archs", "neosr.data", "neosr.models"}
+XFAIL: set[str] = set()
 MODULES = [
     "neosr.config",
     "neosr.cli",

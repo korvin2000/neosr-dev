@@ -5,10 +5,7 @@ from einops import rearrange
 from torch import Tensor, nn
 from torch.nn import functional as F
 
-from neosr.archs.arch_util import DropPath, net_opt, to_2tuple
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
+from neosr.archs.arch_util import DropPath, to_2tuple
 
 
 class ChannelAttention(nn.Module):
@@ -804,7 +801,6 @@ class DualRouting(nn.Module):
         num_experts: int,
         capacity_factor: float = 1.0,
         epsilon: float = 1e-6,
-        **kwargs,  # noqa: ARG002
     ):
         super().__init__()
         self.dim = dim
@@ -901,8 +897,6 @@ class HMoE(nn.Module):
         num_experts (int): The number of experts in the MoE.
         capacity_factor (float, optional): The capacity factor that controls the capacity of the MoE. Defaults to 1.0.
         mult (int, optional): The multiplier for the hidden dimension of the feedforward network. Defaults to 4.
-        *args: Variable length argument list.
-        **kwargs: Arbitrary keyword arguments.
 
     Attributes:
         dim (int): The input dimension.
@@ -922,7 +916,6 @@ class HMoE(nn.Module):
         output_dim: int,
         num_experts: int,
         capacity_factor: float = 1.0,
-        **kwargs,  # noqa: ARG002
     ):
         super().__init__()
         self.dim = dim
@@ -1014,7 +1007,6 @@ class MoEUpsample(nn.Sequential):
         return x
 
 
-@ARCH_REGISTRY.register()
 class mfghmoe(nn.Module):
     r"""Token Selective Transformer
         A PyTorch implementation of : `TTST: A Top-k Token Selective Transformer for Remote Sensing Image Super-Resolution`.
@@ -1077,11 +1069,10 @@ class mfghmoe(nn.Module):
         ape=False,
         patch_norm=True,
         use_checkpoint=False,
-        upscale=upscale,
+        upscale=4,
         img_range=1.0,
         upsampler="pixelshuffle",
         resi_connection="1conv",
-        **kwargs,  # noqa: ARG002
     ):
         super().__init__()
 

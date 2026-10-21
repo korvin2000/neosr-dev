@@ -6,10 +6,7 @@ from torch import nn
 from torch.nn import functional as F
 from torch.nn.init import trunc_normal_
 
-from neosr.archs.arch_util import DySample, net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
+from neosr.archs.arch_util import DySample
 
 
 SampleMods = Literal[
@@ -227,7 +224,6 @@ class Blocks(nn.Module):
         return self.msg(self.blocks(x))
 
 
-@ARCH_REGISTRY.register()
 class moesr(nn.Module):
     """Mamba out Excitation Super-Resolution"""
 
@@ -235,7 +231,7 @@ class moesr(nn.Module):
         self,
         in_ch: int = 3,
         out_ch: int = 3,
-        scale: int = upscale,
+        scale: int = 4,
         dim: int = 64,
         n_blocks: int = 9,
         n_block: int = 4,

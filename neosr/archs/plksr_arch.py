@@ -8,11 +8,6 @@ from torch import nn
 from torch.nn import functional as F
 from torch.nn.init import trunc_normal_
 
-from neosr.archs.arch_util import net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
-
 
 def repeat_interleave(x, n):
     x = x.unsqueeze(2)
@@ -345,7 +340,6 @@ class PLKBlock(nn.Module):
         return x + x_skip
 
 
-@ARCH_REGISTRY.register()
 class plksr(nn.Module):
     def __init__(
         self,
@@ -353,7 +347,7 @@ class plksr(nn.Module):
         num_out_ch: int = 3,
         dim: int = 64,
         n_blocks: int = 28,
-        upscaling_factor: int = upscale,
+        upscaling_factor: int = 4,
         ccm_type: str = "DCCM",  # 'CCM', 'ICCM', 'DCCM'
         kernel_size: int = 17,
         split_ratio: float = 0.25,
@@ -406,6 +400,5 @@ class plksr(nn.Module):
         return x
 
 
-@ARCH_REGISTRY.register()
 def plksr_tiny(**kwargs):
     return plksr(n_blocks=12, kernel_size=13, use_ea=False, **kwargs)

@@ -33,7 +33,7 @@ class image(base):
         super().__init__(opt)
 
         # define network net_g
-        self.net_g = build_network(opt["network_g"])
+        self.net_g = build_network(opt["network_g"], scale=opt["scale"])
         self.net_g = self.model_to_device(self.net_g)  # type: ignore[reportArgumentType,reportArgumentType,arg-type]
         if self.opt["path"].get("print_network", False) is True:
             self.print_network(self.net_g)
@@ -41,7 +41,7 @@ class image(base):
         # define network net_d
         self.net_d = self.opt.get("network_d", None)
         if self.net_d is not None:
-            self.net_d = build_network(self.opt["network_d"])
+            self.net_d = build_network(self.opt["network_d"], section="network_d")
             self.net_d = self.model_to_device(self.net_d)  # type: ignore[reportArgumentType]
             if self.opt.get("print_network", False) is True:
                 self.print_network(self.net_d)
@@ -75,7 +75,7 @@ class image(base):
         """Reinitialize EMA model to match current model structure"""
         if hasattr(self, 'net_g_ema'):
             # Create new EMA model matching current structure
-            self.net_g_ema = build_network(self.opt['network_g']).to(self.device)
+            self.net_g_ema = build_network(self.opt["network_g"], scale=self.opt["scale"]).to(self.device)
             
             # Prepare for QAT if needed
             if hasattr(self, 'is_qat_prepared') and self.is_qat_prepared:

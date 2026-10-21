@@ -7,10 +7,7 @@ from torch import nn
 from torch.nn import functional as F
 from torch.nn.init import trunc_normal_
 
-from neosr.archs.arch_util import net_opt, to_2tuple
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
+from neosr.archs.arch_util import to_2tuple
 
 
 # Shuffle operation for Categorization and UnCategorization operations.
@@ -887,7 +884,6 @@ class UpsampleOneStep(nn.Sequential):
         super(UpsampleOneStep, self).__init__(*m)
 
 
-@ARCH_REGISTRY.register()
 class atd(nn.Module):
     """Transcending the Limit of Local Window: Advanced Super-Resolution Transformer
         with Adaptive Token Dictionary. - https://arxiv.org/abs/2401.08209
@@ -940,12 +936,11 @@ class atd(nn.Module):
         norm_layer=nn.LayerNorm,
         ape=False,
         patch_norm=True,
-        upscale=upscale,
+        upscale=4,
         img_range=1.0,
         upsampler="pixelshuffle",
         resi_connection="1conv",
         norm=False,
-        **kwargs,
     ):
         super().__init__()
         num_in_ch = in_chans
@@ -1220,7 +1215,6 @@ class atd(nn.Module):
         return x
 
 
-@ARCH_REGISTRY.register()
 def atd_light(**kwargs):
     return atd(
         img_size=64,

@@ -6,10 +6,7 @@ from einops import rearrange
 from torch import nn
 from torch.nn import functional as F
 
-from neosr.archs.arch_util import DropPath, net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
+from neosr.archs.arch_util import DropPath
 
 
 class dwconv(nn.Module):
@@ -234,7 +231,7 @@ class GRSA(nn.Module):
         # cosine attention
         attn = F.normalize(q, dim=-1) @ F.normalize(k, dim=-1).transpose(-2, -1)
 
-        logit_scale = torch.clamp(self.logit_scale, max=math.log(1.0 / 0.01)).exp()
+        logit_scale = torch.clamp(self.logit_scale, max=math.log(100.0)).exp()
         attn = attn * logit_scale
 
         relative_position_bias_table = self.ESRPB_MLP(
@@ -467,7 +464,6 @@ class UpsampleOneStep(nn.Sequential):
         super().__init__(*m)
 
 
-@ARCH_REGISTRY.register()
 class grformer(nn.Module):
 
     def _init_weights(self, m):
@@ -496,9 +492,8 @@ class grformer(nn.Module):
         norm_layer=nn.LayerNorm,
         ape=False,
         patch_norm=True,
-        upscale=upscale,
+        upscale=4,
         img_range=1.0,
-        **kwargs,
     ):
         if window_size is None:
             window_size = [8, 32]
@@ -602,7 +597,6 @@ class grformer(nn.Module):
         return x[:, :, : H * self.upscale, : W * self.upscale]
 
 
-@ARCH_REGISTRY.register()
 def grformer_medium(**kwargs):
     return grformer(
         img_size=64,
@@ -613,7 +607,6 @@ def grformer_medium(**kwargs):
     )
 
 
-@ARCH_REGISTRY.register()
 def grformer_large(**kwargs):
     return grformer(
         img_size=64,

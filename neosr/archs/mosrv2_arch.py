@@ -6,10 +6,9 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 from torch.nn.init import trunc_normal_
 
-from neosr.archs.arch_util import DySample, net_opt
-from neosr.utils.registry import ARCH_REGISTRY
+from neosr.archs.arch_util import DySample
 
-upscale, __ = net_opt()
+
 SampleMods = Literal[
     "conv", "pixelshuffledirect", "pixelshuffle", "nearest+conv", "dysample"
 ]
@@ -179,14 +178,13 @@ class GatedCNNBlock(nn.Module):
         return x * self.gamma + shortcut
 
 
-@ARCH_REGISTRY.register()
 class mosrv2(nn.Module):
     """Mamba Out Super-Resolution"""
 
     def __init__(
         self,
         in_ch: int = 3,
-        scale: int = upscale,
+        scale: int = 4,
         n_block: int = 24,
         dim: int = 64,
         upsampler: SampleMods = "pixelshuffledirect",

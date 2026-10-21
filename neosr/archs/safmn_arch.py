@@ -3,11 +3,6 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from neosr.archs.arch_util import net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
-
 
 # Layer Norm
 class LayerNorm(nn.Module):
@@ -173,7 +168,6 @@ class BasicLayer(nn.Module):
         return self.conv(self.layers(x)) + x
 
 
-@ARCH_REGISTRY.register()
 class safmn(nn.Module):
     def __init__(
         self,
@@ -181,9 +175,8 @@ class safmn(nn.Module):
         num_layers=6,
         n_blocks=8,
         ffn_scale=2.0,
-        upscaling_factor=upscale,
+        upscaling_factor=4,
         bcie=False,
-        **kwargs,
     ):
         super().__init__()
         self.to_feat = nn.Conv2d(3, dim, 3, 1, 1)
@@ -209,7 +202,6 @@ class safmn(nn.Module):
         return x
 
 
-@ARCH_REGISTRY.register()
 def safmn_l(**kwargs):
     return safmn(dim=128, n_blocks=16, **kwargs)
 
@@ -268,9 +260,8 @@ class AttBlock_pp(nn.Module):
         return out
 
 
-@ARCH_REGISTRY.register()
 class light_safmnpp(nn.Module):
-    def __init__(self, dim=32, n_blocks=2, ffn_scale=1.5, upscaling_factor=upscale):
+    def __init__(self, dim=32, n_blocks=2, ffn_scale=1.5, upscaling_factor=4):
         super().__init__()
         self.scale = upscaling_factor
 

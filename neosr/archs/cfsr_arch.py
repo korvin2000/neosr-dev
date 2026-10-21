@@ -2,11 +2,6 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from neosr.archs.arch_util import net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
-
 
 class LayerNorm(nn.Module):
     r"""From ConvNeXt (https://arxiv.org/pdf/2201.03545.pdf)"""
@@ -273,7 +268,6 @@ class UpsampleOneStep(nn.Sequential):
         return h * w * self.num_feat * 3 * 9
 
 
-@ARCH_REGISTRY.register()
 class cfsr(nn.Module):
 
     def _init_weights(self, m: nn.Module) -> None:
@@ -289,7 +283,7 @@ class cfsr(nn.Module):
         depths=(6, 6),
         dw_size=9,
         mlp_ratio=2.0,
-        upscale=upscale,
+        upscale=4,
         img_range=1.0,
         upsampler="pixelshuffledirect",
         mean_norm=False,

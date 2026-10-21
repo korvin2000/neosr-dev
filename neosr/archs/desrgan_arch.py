@@ -3,10 +3,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from neosr.utils.registry import ARCH_REGISTRY
-from .arch_util import default_init_weights, make_layer, pixel_unshuffle, net_opt
-
-upscale, training = net_opt()
+from .arch_util import default_init_weights, make_layer, pixel_unshuffle
 
 
 class ResidualDenseBlock(nn.Module):
@@ -71,7 +68,6 @@ class RRDB(nn.Module):
         return out * self.scale_res + x
 
 
-@ARCH_REGISTRY.register()
 class desrgan(nn.Module):
     """Networks consisting of Residual in Residual Dense Block, which is used
     in ESRGAN.
@@ -92,7 +88,7 @@ class desrgan(nn.Module):
         num_grow_ch (int): Channels for each growth. Default: 32.
     """
 
-    def __init__(self, num_in_ch=3, num_out_ch=3, scale=upscale, num_feat=64, num_block=23, num_grow_ch=32):
+    def __init__(self, num_in_ch=3, num_out_ch=3, scale=4, num_feat=64, num_block=23, num_grow_ch=32):
         super(desrgan, self).__init__()
         self.scale = scale
         if scale == 2:

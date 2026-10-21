@@ -10,10 +10,7 @@ from torch.nn import functional as F
 from torch.nn.init import trunc_normal_
 from torch.utils import checkpoint
 
-from neosr.archs.arch_util import DropPath, net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
+from neosr.archs.arch_util import DropPath
 
 
 def img2windows(img, H_sp, W_sp):
@@ -953,11 +950,10 @@ class dat(nn.Module):
         act_layer=nn.GELU,
         norm_layer=nn.LayerNorm,
         use_chk=False,
-        upscale=upscale,
+        upscale=4,
         img_range=1.0,
         resi_connection="1conv",
         upsampler="pixelshuffle",
-        **kwargs,
     ):
         super().__init__()
 
@@ -1076,7 +1072,6 @@ class dat(nn.Module):
         return x
 
 
-@ARCH_REGISTRY.register()
 def dat_s(**kwargs):
     return dat(
         in_chans=3,
@@ -1091,7 +1086,6 @@ def dat_s(**kwargs):
     )
 
 
-@ARCH_REGISTRY.register()
 def dat_m(**kwargs):
     return dat(
         in_chans=3,
@@ -1106,7 +1100,6 @@ def dat_m(**kwargs):
     )
 
 
-@ARCH_REGISTRY.register()
 def dat_2(**kwargs):
     return dat(
         in_chans=3,

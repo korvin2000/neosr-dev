@@ -7,10 +7,7 @@ from torch import nn
 from torch.nn.init import trunc_normal_
 from torch.utils.checkpoint import checkpoint
 
-from neosr.archs.arch_util import DropPath, net_opt, to_2tuple
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
+from neosr.archs.arch_util import DropPath, to_2tuple
 
 
 class ChannelAttention(nn.Module):
@@ -891,12 +888,11 @@ class hat(nn.Module):
         norm_layer=nn.LayerNorm,
         ape=False,
         patch_norm=True,
-        upscale=upscale,
+        upscale=4,
         img_range=1.0,
         upsampler="",
         resi_connection="1conv",
         use_checkpoint=False,
-        **kwargs,
     ):
         super(hat, self).__init__()
         self.use_checkpoint = use_checkpoint
@@ -1166,7 +1162,6 @@ class hat(nn.Module):
         return x[:, :, : h * s, : w * s]
 
 
-@ARCH_REGISTRY.register()
 def hat_s(**kwargs):
     return hat(
         in_chans=3,
@@ -1186,7 +1181,6 @@ def hat_s(**kwargs):
     )
 
 
-@ARCH_REGISTRY.register()
 def hat_m(**kwargs):
     return hat(
         in_chans=3,
@@ -1206,7 +1200,6 @@ def hat_m(**kwargs):
     )
 
 
-@ARCH_REGISTRY.register()
 def hat_l(**kwargs):
     return hat(
         in_chans=3,

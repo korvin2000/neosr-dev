@@ -3,10 +3,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from neosr.archs.arch_util import DropPath, net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
+from neosr.archs.arch_util import DropPath
 
 
 class LayerNorm(nn.Module):
@@ -224,12 +221,11 @@ class EIMNBlock(nn.Module):
         )
 
 
-@ARCH_REGISTRY.register()
 class eimn(nn.Module):
     def __init__(
         self,
         embed_dims: int = 64,
-        scale: int = upscale,
+        scale: int = 4,
         depths: int = 1,
         mlp_ratios: float = 2.66,
         drop_rate: float = 0.0,
@@ -292,11 +288,9 @@ class eimn(nn.Module):
         return self.tail(identity + x)
 
 
-@ARCH_REGISTRY.register()
-def eimn_l(scale: int = upscale, **kwargs) -> eimn:
-    return eimn(embed_dims=64, num_stages=16, scale=scale, **kwargs)
+def eimn_l(**kwargs) -> eimn:
+    return eimn(embed_dims=64, num_stages=16, **kwargs)
 
 
-@ARCH_REGISTRY.register()
-def eimn_a(scale: int = upscale, **kwargs) -> eimn:
-    return eimn(embed_dims=64, num_stages=14, scale=scale, **kwargs)
+def eimn_a(**kwargs) -> eimn:
+    return eimn(embed_dims=64, num_stages=14, **kwargs)

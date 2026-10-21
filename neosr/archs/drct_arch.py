@@ -6,10 +6,7 @@ from torch import nn
 from torch.nn.init import trunc_normal_
 from torch.utils.checkpoint import checkpoint
 
-from neosr.archs.arch_util import DropPath, net_opt, to_2tuple
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
+from neosr.archs.arch_util import DropPath, to_2tuple
 
 
 class ChannelAttention(nn.Module):
@@ -748,7 +745,6 @@ class Upsample(nn.Sequential):
         super(Upsample, self).__init__(*m)
 
 
-@ARCH_REGISTRY.register()
 class drct(nn.Module):
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -781,13 +777,12 @@ class drct(nn.Module):
         norm_layer=nn.LayerNorm,
         ape=False,
         patch_norm=True,
-        upscale=upscale,
+        upscale=4,
         img_range=1.0,
         upsampler="pixelshuffle",
         resi_connection="1conv",
         gc=32,
         use_checkpoint=False,
-        **kwargs,
     ):
         super(drct, self).__init__()
         self.use_checkpoint = use_checkpoint
@@ -952,7 +947,6 @@ class drct(nn.Module):
         return x[:, :, : h * s, : w * s]
 
 
-@ARCH_REGISTRY.register()
 def drct_l(**kwargs):
     return drct(
         depths=(6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6),
@@ -961,7 +955,6 @@ def drct_l(**kwargs):
     )
 
 
-@ARCH_REGISTRY.register()
 def drct_xl(**kwargs):
     return drct(
         depths=(6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6),
@@ -970,6 +963,5 @@ def drct_xl(**kwargs):
     )
 
 
-@ARCH_REGISTRY.register()
 def drct_s(**kwargs):
     return drct(embed_dim=48, depths=(2, 2, 2, 2), num_heads=(6, 6, 6, 6), **kwargs)

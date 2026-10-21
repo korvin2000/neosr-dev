@@ -4,10 +4,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from neosr.archs.arch_util import DropPath, net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
+from neosr.archs.arch_util import DropPath
 
 
 class ChannelAttention(nn.Module):
@@ -187,10 +184,9 @@ def pixelshuffle_block(in_channels, out_channels, upscale_factor=2, kernel_size=
     return sequential(conv, pixel_shuffle)
 
 
-@ARCH_REGISTRY.register()
 class hasn(nn.Module):
     def __init__(
-        self, in_channels=3, out_channels=3, feature_channels=52, upscale=upscale
+        self, in_channels=3, out_channels=3, feature_channels=52, upscale=4
     ):
         super().__init__()
 

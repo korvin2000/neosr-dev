@@ -4,11 +4,6 @@ from torch import nn
 from torch.nn import functional as F
 from torch.nn.modules.batchnorm import _BatchNorm
 
-from neosr.archs.arch_util import net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
-
 
 @torch.no_grad()
 def default_init_weights(module_list, scale=1, bias_fill=0, **kwargs):
@@ -146,7 +141,6 @@ class RRDB(nn.Module):
         return out * 0.2 + x
 
 
-@ARCH_REGISTRY.register()
 class esrgan(nn.Module):
     """Networks consisting of Residual in Residual Dense Block, which is used
     in ESRGAN.
@@ -173,7 +167,7 @@ class esrgan(nn.Module):
         self,
         num_in_ch=3,
         num_out_ch=3,
-        scale=upscale,
+        scale=4,
         num_feat=64,
         num_block=23,
         num_grow_ch=32,

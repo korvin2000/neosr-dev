@@ -6,10 +6,7 @@ from torch import nn
 from torch.nn.init import trunc_normal_
 from torch.utils import checkpoint
 
-from neosr.archs.arch_util import DropPath, net_opt, to_2tuple
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
+from neosr.archs.arch_util import DropPath, to_2tuple
 
 
 class Mlp(nn.Module):
@@ -878,11 +875,10 @@ class swinir(nn.Module):
         ape=False,
         patch_norm=True,
         use_checkpoint=False,
-        upscale=upscale,
+        upscale=4,
         img_range=1.0,
         upsampler="pixelshuffle",
         resi_connection="1conv",
-        **kwargs,
     ):
         super(swinir, self).__init__()
         num_in_ch = in_chans
@@ -1107,7 +1103,6 @@ class swinir(nn.Module):
         return flops
 
 
-@ARCH_REGISTRY.register()
 def swinir_small(**kwargs):
     return swinir(
         img_size=64,
@@ -1120,7 +1115,6 @@ def swinir_small(**kwargs):
     )
 
 
-@ARCH_REGISTRY.register()
 def swinir_medium(**kwargs):
     return swinir(
         img_size=48,
@@ -1133,7 +1127,6 @@ def swinir_medium(**kwargs):
     )
 
 
-@ARCH_REGISTRY.register()
 def swinir_large(**kwargs):
     return swinir(
         img_size=64,

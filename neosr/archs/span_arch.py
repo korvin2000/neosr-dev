@@ -4,11 +4,6 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from neosr.archs.arch_util import net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
-
 
 def _make_pair(value):
     if isinstance(value, int):
@@ -185,7 +180,6 @@ class SPAB(nn.Module):
         return out, out1, sim_att
 
 
-@ARCH_REGISTRY.register()
 class span(nn.Module):
     """Swift Parameter-free Attention Network for Efficient Super-Resolution"""
 
@@ -201,13 +195,12 @@ class span(nn.Module):
         num_in_ch=3,
         num_out_ch=3,
         feature_channels=48,
-        upscale=upscale,
+        upscale=4,
         bias=True,
         norm=False,
         fast=False,
         img_range=1.0,
         rgb_mean=(0.5, 0.5, 0.5),
-        **kwargs,  # noqa: ARG002
     ):
         super().__init__()
 
@@ -298,6 +291,5 @@ class span(nn.Module):
         return self.upsampler(out)
 
 
-@ARCH_REGISTRY.register()
 def span_fast(**kwargs):
     return span(feature_channels=32, bias=False, fast=True, **kwargs)

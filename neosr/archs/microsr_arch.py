@@ -3,10 +3,7 @@ import math
 import torch
 from torch import nn
 
-from neosr.archs.arch_util import DropPath, net_opt, to_2tuple
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
+from neosr.archs.arch_util import DropPath, to_2tuple
 
 
 class ChannelAttention(nn.Module):
@@ -601,7 +598,6 @@ class Upsample(nn.Sequential):
         super().__init__(*m)
 
 
-@ARCH_REGISTRY.register()
 class microsr(nn.Module):
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -631,13 +627,12 @@ class microsr(nn.Module):
         norm_layer=nn.LayerNorm,
         ape=False,
         patch_norm=True,
-        upscale=upscale,
+        upscale=4,
         img_range=1.0,
         upsampler="pixelshuffle",
         resi_connection="1conv",
         gc=32,
         rgb_norm=False,
-        **kwargs,  # noqa: ARG002
     ):
         super().__init__()
 
@@ -767,7 +762,6 @@ class microsr(nn.Module):
         return x
 
 
-@ARCH_REGISTRY.register()
 def microsr_light(**kwargs):
     return microsr(
         embed_dim=48,

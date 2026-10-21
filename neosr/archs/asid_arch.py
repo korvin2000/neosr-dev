@@ -4,11 +4,6 @@ from einops import rearrange
 from einops.layers.torch import Rearrange, Reduce
 from torch import einsum, nn
 
-from neosr.archs.arch_util import net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
-
 
 class LayerNormFunction(torch.autograd.Function):
     @staticmethod
@@ -727,7 +722,6 @@ class IDSG_A(nn.Module):
         return self.esa(out), a1, a2, a3, a4, a5, a6
 
 
-@ARCH_REGISTRY.register()
 class asid(nn.Module):
     def __init__(
         self,
@@ -737,7 +731,7 @@ class asid(nn.Module):
         res_num=3,
         block_num=1,
         window_size=8,
-        scale=upscale,
+        scale=4,
         flash_attn=True,
         d8=False,
         pe=False,
@@ -851,6 +845,5 @@ class asid(nn.Module):
         return out[:, :, : H * self.up_scale, : W * self.up_scale]
 
 
-@ARCH_REGISTRY.register()
 def asid_d8(**kwargs):
     return asid(res_num=8, d8=True, **kwargs)

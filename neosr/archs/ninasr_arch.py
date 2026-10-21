@@ -1,11 +1,6 @@
 import torch
 import torch.nn as nn
 
-from neosr.archs.arch_util import net_opt
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
-
 
 class AttentionBlock(nn.Module):
     """
@@ -71,10 +66,9 @@ class Rescale(nn.Module):
         return x + self.bias
 
 
-@ARCH_REGISTRY.register()
 class ninasr(nn.Module):
     def __init__(
-        self, n_resblocks=26, n_feats=32, n_colors=3, scale=upscale, expansion=2.0
+        self, n_resblocks=26, n_feats=32, n_colors=3, scale=4, expansion=2.0
     ):
         super().__init__()
         self.scale = scale
@@ -115,11 +109,9 @@ class ninasr(nn.Module):
         return self.tail(res)
 
 
-@ARCH_REGISTRY.register()
-def ninasr_b0(**kwargs):  # noqa: ARG001
-    return ninasr(n_resblocks=10, n_feats=16)
+def ninasr_b0(**kwargs):
+    return ninasr(n_resblocks=10, n_feats=16, **kwargs)
 
 
-@ARCH_REGISTRY.register()
-def ninasr_b2(**kwargs):  # noqa: ARG001
-    return ninasr(n_resblocks=84, n_feats=56)
+def ninasr_b2(**kwargs):
+    return ninasr(n_resblocks=84, n_feats=56, **kwargs)

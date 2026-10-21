@@ -4,10 +4,7 @@ import torch.nn.functional as F
 from collections import OrderedDict
 from torch import nn
 
-from neosr.archs.arch_util import net_opt, to_2tuple
-from neosr.utils.registry import ARCH_REGISTRY
-
-upscale, __ = net_opt()
+from neosr.archs.arch_util import to_2tuple
 
 
 class LocalModule(nn.Sequential):
@@ -460,7 +457,6 @@ def conv_block(
     return sequential(p, c, n, a)
 
 
-@ARCH_REGISTRY.register()
 class dctlsa(nn.Module):
     def __init__(
         self,
@@ -468,9 +464,8 @@ class dctlsa(nn.Module):
         nf=55,
         num_modules=6,
         out_nc=3,
-        upscale=upscale,
+        upscale=4,
         num_head=5,
-        **kwargs,
     ):
         super(dctlsa, self).__init__()
         self.fea_conv = conv_layer(in_nc, nf, kernel_size=3)

@@ -127,15 +127,13 @@ class DySample(nn.Module):
         offset = self.offset(x) * self.scope(x).sigmoid() * 0.5 + self.init_pos
         B, _, H, W = offset.shape
         offset = offset.view(B, 2, -1, H, W)
-        coords_h = torch.arange(H, device=x.device) + 0.5
-        coords_w = torch.arange(W, device=x.device) + 0.5
-
+        # fp32 grid, then cast (the rounding order of the original)
+        coords_h = torch.arange(H, device=x.device, dtype=torch.float32) + 0.5
+        coords_w = torch.arange(W, device=x.device, dtype=torch.float32) + 0.5
         coords = (
             torch.stack(torch.meshgrid([coords_w, coords_h], indexing="ij"))
-            .transpose(1, 2)
-            .unsqueeze(1)
-            .unsqueeze(0)
-            .type(x.dtype)
+            .transpose(1, 2)[None, :, None]
+            .to(x.dtype)
         )
         normalizer = torch.tensor([W, H], dtype=x.dtype, device=x.device).view(
             1, 2, 1, 1, 1
@@ -199,7 +197,7 @@ def drop_path(
 
 
 class DropPath(nn.Module):
-    """Drop paths (Stochastic Depth) per sample.
+    """Drop paths (Stochastic Depth) per sample, only in train mode (.train()/.eval() drive it).
     From: https://github.com/rwightman/pytorch-image-models/blob/master/timm/models/layers/drop.py
     """
 
@@ -207,8 +205,6 @@ class DropPath(nn.Module):
         super().__init__()
         self.drop_prob = drop_prob
         self.scale_by_keep = scale_by_keep
-        __, training = net_opt()
-        self.training = training
 
     def forward(self, x: Tensor) -> Tensor:
         return drop_path(x, self.drop_prob, self.training, self.scale_by_keep)
