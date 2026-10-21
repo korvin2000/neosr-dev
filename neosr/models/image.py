@@ -7,10 +7,11 @@ from typing import Any
 
 import torch
 from torch import Tensor, nn
+from torch.ao.quantization import FakeQuantizeBase
 from tqdm import tqdm
 
 from neosr.archs import build_network
-from neosr.config import ConfigError
+from neosr.config import ConfigError, qat_schedule
 from neosr.data.augmentations import apply_augment
 from neosr.losses import build_losses
 from neosr.losses.base import Context
@@ -22,6 +23,20 @@ from neosr.runtime import Runtime
 from neosr.utils import get_root_logger, imwrite, tc, tensor2img
 
 
+@contextmanager
+def observers_frozen(net: nn.Module) -> Generator[None]:
+    """QAT: evaluation must not move activation ranges; eval() does not stop observers (T5 D11)."""
+    fqs = [m for m in net.modules() if isinstance(m, FakeQuantizeBase)]
+    flags = [m.observer_enabled.clone() for m in fqs]
+    for m in fqs:
+        m.disable_observer()
+    try:
+        yield
+    finally:
+        for m, f in zip(fqs, flags, strict=True):
+            m.observer_enabled.copy_(f)
+
+
 class image(base):
     """Paired SR training and inference. `otf` overrides only how a training batch is made."""
 
@@ -30,6 +45,7 @@ class image(base):
         # model-side memory format follows AMP, as before; training inputs now match it (T4 P6)
         self.mf = torch.channels_last if opt.get("use_amp") else torch.contiguous_format
         resuming = self.is_train and opt["path"].get("resume_state") is not None
+        self._qat_pretrain: tuple | None = None  # a QAT file waits for prepare_qat
         self.net_g = self._build("network_g", resuming)
         self._prepare_qat()  # topology is final after this line
         self.nets = {"net_g": self.net_g}
@@ -90,17 +106,77 @@ class image(base):
             log = get_root_logger()
             log.info(f"loading {key} from {path}")
             sd = read_weights(path, p.get(f"param_key_{s}"))
-            load_weights(net, sd, p.get(f"strict_load_{s}", True), log)
+            strict = p.get(f"strict_load_{s}", True)
+            qat_state = getattr(net, "qat_state", None) if key == "network_g" else None
+            if qat_state is not None and (kw := qat_state(sd)) is not None:
+                self._qat_pretrain = (sd, kw, strict)
+            else:
+                load_weights(net, sd, strict, log)
         self.log_network(net, key)
         return net
 
     def _prepare_qat(self) -> None:
-        """T5 slot (T2 §3 step 3, filled in step C5): prepare QAT on the bare `self.net_g` after the
-        float load and load a QAT-kind pretrain. Everything that captures parameter identity (EMA,
-        optimizers, wrappers) is built after this call."""
-        if (self.opt.get("train") or {}).get("enable_qat"):
-            msg = "train.enable_qat is not supported yet; set it to false to train in float"
+        """T5 §2 (T2 §3 step 3): prepare QAT in place on the bare `self.net_g`, after the float/fused
+        pretrain load and before anything captures parameter identity (EMA, optimizers, wrappers),
+        then load a QAT-kind pretrain. Training sets the phase per update (`_qat_step`); inference
+        evaluates the fake-quant net with frozen ranges, as convert.py exports it."""
+        self.qat: tuple[int, int, int] | None = None
+        self._qat_phase: tuple[bool, bool, bool] | None = None
+        tr = (self.opt.get("train") or {}) if self.is_train else {}
+        pre, self._qat_pretrain = self._qat_pretrain, None
+        if not tr.get("enable_qat") and pre is None:
+            return
+        net, log = self.net_g, get_root_logger()
+        if not hasattr(net, "prepare_qat"):
+            name = self.opt["network_g"].get("type")
+            msg = f"train.enable_qat: network_g {name!r} has no QAT support"
             raise ConfigError(msg)
+        if self.is_train and not tr.get("enable_qat"):
+            msg = "path.pretrain_network_g is a QAT checkpoint: set train.enable_qat = true to train it"
+            raise ConfigError(msg)
+        # the resolved paths: validate_train cannot know whether auto_resume finds a state
+        p = self.opt["path"]
+        loads = p.get("pretrain_network_g") or p.get("resume_state")
+        if self.is_train and self.opt["network_g"].get("fused_init") and not loads:
+            msg = (
+                "network_g.fused_init=true builds the deploy topology (folded norms) and there is no "
+                "pretrain_network_g or training state to load; QAT from scratch needs fused_init=false"
+            )
+            raise ConfigError(msg)
+        kw = {k: tr[k] for k in ("qat_type", "quantize_residual") if k in tr}
+        net.prepare_qat(**((pre[1] if pre else {}) | kw))
+        if pre is not None:
+            load_weights(net, pre[0], pre[2], log)
+        if not self.is_train:
+            net.set_qat_phase(fake_quant=True, observe=False, freeze_norm=True)
+            return
+        total = (self.opt.get("logger") or {}).get("total_iter", 1000000)
+        self.qat = qat_schedule(tr, total)
+        src = " from a QAT checkpoint" if pre else ""
+        calib, norm_at, obs_at = self.qat
+        log.info(
+            f"QAT prepared{src}: observe-only through update {calib}, "
+            f"norms frozen from {norm_at}, observers from {obs_at} (-1 = never)"
+        )
+        if self.opt.get("use_amp") or self.opt.get("compile"):  # both pass T5 A7
+            log.warning(
+                "QAT under use_amp/compile works but fp32 eager is the reference; compile gains "
+                "little (dynamo does not trace torch.ao FakeQuantize: graph breaks, eager fallback)"
+            )
+        if self.rt.world_size > 1:
+            log.info("QAT under DDP: observer and norm statistics follow rank 0")
+
+    def _qat_step(self, it: int) -> None:
+        """The phase of update `it` is a pure function of `it` (T5 D12/D13): resume- and DDP-safe."""
+        calib, norm_at, obs_at = self.qat  # type: ignore[misc]
+        phase = (it > calib, not 0 <= obs_at <= it, 0 <= norm_at <= it)
+        if phase != self._qat_phase:
+            self.net_g.set_qat_phase(*phase)  # type: ignore[operator]
+            self._qat_phase = phase
+            get_root_logger().info(
+                f"QAT update {it}: fake_quant={phase[0]}, observers={phase[1]}, "
+                f"norms_frozen={phase[2]}"
+            )
 
     def _phase(
         self, name: str, net: nn.Module, terms: list, amp: dict[str, Any]
@@ -138,6 +214,8 @@ class image(base):
 
     def optimize_parameters(self) -> bool:
         """One micro-batch. Returns True when it closed an update window (then `self.update` grew)."""
+        if self.qat is not None:
+            self._qat_step(self.update + 1)
         boundary = (self.micro + 1) % self.accumulate == 0
         with no_sync(self.net_g_fwd, boundary):  # forward + losses + backward
             with torch.autocast(**self.g.autocast):
@@ -163,6 +241,12 @@ class image(base):
         ok = {self.g: self.g.step()}
         if ok[self.g] and self.ema is not None:
             self.ema.update()
+        elif self.qat is not None and self.ema is not None and self.ema.lists is None:
+            # QAT: until the first successful update copies the net, the EMA mirrors its observed
+            # ranges and phase flags; the +-inf observer reset would fail check_finite (T5 D11)
+            with torch.no_grad():
+                buffers = [*self.ema.module.buffers()], [*self.net_g.buffers()]
+                torch._foreach_copy_(*buffers)
         if self.d is not None:
             ok[self.d] = self.d.step()
         # the mean over successful updates: a skipped one adds nothing
@@ -249,7 +333,8 @@ class image(base):
         save_tb = self.is_train and (self.opt.get("logger") or {}).get(
             "save_tb_img", False
         )
-        with self.eval_weights() as net:  # one swap per validation
+        # one swap per validation; QAT ranges stay put
+        with self.eval_weights() as net, observers_frozen(net):
             for data in loader:
                 img = Path(data["lq_path"][0]).stem
                 if pbar is not None:  # the image being inferred, not the last one done

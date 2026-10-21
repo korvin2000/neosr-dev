@@ -20,4 +20,4 @@ type = "aether_small"
 fused_init = true
 
 [path]
-pretrain_network_g = 'C:\model.pth' # a fused (deployed) aether checkpoint
+pretrain_network_g = 'C:\model.pth' # a fused (deployed) aether checkpoint; a QAT net_g_*.pth also loads (fake-quant inference)

@@ -40,6 +40,8 @@ qat_type = "int8"
 fused_init = true
 quantize_residual = false
 calibration_iters = 500
+#qat_freeze_norm_iter = 700000 # default 0.7 * total_iter, -1 = never
+#qat_freeze_observers_iter = 800000 # default 0.8 * total_iter, -1 = never
 
 [train.optim_g]
 type = "adamw"

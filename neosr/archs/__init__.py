@@ -12,6 +12,8 @@ __all__ = ["ARCHS", "build_network"]
 # One row per class AND factory; the scale kwarg keeps the arch's native name.
 # fmt: off
 ARCHS: dict[str, tuple[str, str | None]] = {
+    "aether": ("aether_arch", "scale"), "aether_small": ("aether_arch", "scale"),
+    "aether_medium": ("aether_arch", "scale"), "aether_large": ("aether_arch", "scale"),
     "asid": ("asid_arch", "scale"), "asid_d8": ("asid_arch", "scale"),
     "atd": ("atd_arch", "upscale"), "atd_light": ("atd_arch", "upscale"),
     "catanet": ("catanet_arch", "upscale"),

@@ -407,3 +407,58 @@ def validate_train(cfg: dict[str, Any]) -> None:
     if ds.get("persistent_workers") and ds.get("num_worker_per_gpu") == 0:
         msg = "datasets.train.persistent_workers needs num_worker_per_gpu > 0"
         raise ConfigError(msg)
+    if train.get("enable_qat"):
+        _validate_qat(cfg, train)
+
+
+def qat_schedule(train: dict[str, Any], total_iter: int) -> tuple[int, int, int]:
+    """QAT phase boundaries in updates (design T5 D12/D13): (calibration_iters, qat_freeze_norm_iter,
+    qat_freeze_observers_iter). Updates <= calibration only observe; freezes start at their update;
+    -1 = never."""
+    return (
+        train.get("calibration_iters", 0),
+        train.get("qat_freeze_norm_iter", int(0.7 * total_iter)),
+        train.get("qat_freeze_observers_iter", int(0.8 * total_iter)),
+    )
+
+
+def _validate_qat(cfg: dict[str, Any], train: dict[str, Any]) -> None:
+    if (kind := train.get("qat_type", "int8")) != "int8":
+        msg = f"train.qat_type={kind!r} is not supported; use 'int8' (symmetric QDQ for TensorRT/ONNX Runtime)"
+        raise ConfigError(msg)
+    if not train.get("fused_init", True):
+        msg = "train.fused_init=false (QAT on unfused reparam branches) is not supported; remove it"
+        raise ConfigError(msg)
+    net = cfg["network_g"]
+    t_res, n_res = train.get("quantize_residual"), net.get("quantize_residual")
+    if t_res is not None and n_res is not None and t_res != n_res:
+        msg = f"train.quantize_residual={t_res} contradicts network_g.quantize_residual={n_res}"
+        raise ConfigError(msg)
+    p = cfg.get("path") or {}
+    if net.get("fused_init") and not (
+        p.get("pretrain_network_g") or p.get("resume_state") or cfg.get("auto_resume")
+    ):
+        msg = (
+            "network_g.fused_init=true builds the deploy topology (folded norms); QAT from scratch "
+            "needs fused_init=false, or set path.pretrain_network_g"
+        )
+        raise ConfigError(msg)
+    total = (cfg.get("logger") or {}).get("total_iter", 1000000)
+    calib, norm_at, obs_at = qat_schedule(train, total)
+    if calib < 0:
+        msg = f"train.calibration_iters must be >= 0, got {calib}"
+        raise ConfigError(msg)
+    # defaults: 0.7 / 0.8 * logger.total_iter
+    for key, at, low in (
+        ("qat_freeze_norm_iter", norm_at, calib),
+        ("qat_freeze_observers_iter", obs_at, max(calib, 1)),
+    ):
+        if at != -1 and at <= low:
+            msg = (
+                f"train.{key}={at} must be -1 (never) or > {low}: train.calibration_iters={calib} "
+                "and at least one observed update come first"
+            )
+            raise ConfigError(msg)
+    if -1 not in (norm_at, obs_at) and norm_at > obs_at:
+        msg = f"train.qat_freeze_norm_iter={norm_at} must be <= train.qat_freeze_observers_iter={obs_at}"
+        raise ConfigError(msg)

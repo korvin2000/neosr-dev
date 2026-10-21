@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch import nn
+from torch.ao.quantization import FakeQuantizeBase
 
 from neosr.archs import build_network
 from neosr.cli import convert_args
@@ -82,12 +83,72 @@ def load_net(args: argparse.Namespace) -> nn.Module:
     if args.window:
         net_opt["window_size"] = args.window
     net = build_network(net_opt, scale=args.scale)
-    load_weights(net, read_weights(args.input), True, get_root_logger())
+    sd = read_weights(args.input)
+    qat_state = getattr(net, "qat_state", None)
+    if qat_state is not None and (kw := qat_state(sd)) is not None:
+        net.prepare_qat(**kw)  # the QAT topology exists before its tensors load (T5 §2)
+    load_weights(net, sd, True, get_root_logger())
     net.eval()
+    if is_qat(net):  # QDQ export: frozen ranges, fake quant on, folded norms
+        net.set_qat_phase(fake_quant=True, observe=False, freeze_norm=True)
+        net.fold_norms()
     if args.prune:  # plainusr's block deploy is broken: export the trained form
         log.warning("--prune: no network supports reparametrization; exported unfused")
     print(f"-------- Successfully loaded network [{args.network}].")
     return net
+
+
+def is_qat(net: nn.Module) -> bool:
+    return any(isinstance(m, FakeQuantizeBase) for m in net.modules())
+
+
+def scalarize_qdq(path: str) -> None:
+    """ORT fuses QDQ patterns (QLinearAdd/Mul) only with 0-d per-tensor scale and zero point."""
+    import onnx  # noqa: PLC0415
+
+    mdl = onnx.load(path)
+    inits = {i.name: i for i in mdl.graph.initializer}
+    alias = {n.output[0]: n.input[0] for n in mdl.graph.node if n.op_type == "Identity"}
+    for node in mdl.graph.node:
+        if node.op_type in {"QuantizeLinear", "DequantizeLinear"}:
+            for name in node.input[1:3]:
+                root = name  # constant folding shares initializers through Identity
+                while root in alias:
+                    root = alias[root]
+                if root in inits and list(inits[root].dims) == [1]:
+                    del inits[root].dims[:]
+    onnx.save(mdl, path)
+
+
+def verify_qat(args: argparse.Namespace, onnx_model, torch_model) -> None:
+    """Fake-quant torch vs ORT. Rounding ties flip single int8 steps, so QAT has its own tolerance
+    (T5 S4): unoptimized max <= 5e-3, mean <= 1e-4; ORT's default (fused int8 kernels) mean <= 2e-3."""
+    import onnxruntime  # noqa: PLC0415
+
+    shape = (1, *args.static) if args.static is not None else (1, 3, 40, 32)
+    x = torch.rand(shape, generator=torch.Generator().manual_seed(0))
+    with torch.inference_mode():
+        ref = torch_model(x).numpy()
+    level = onnxruntime.GraphOptimizationLevel
+    for opt_level, max_tol, mean_tol in (
+        (level.ORT_DISABLE_ALL, 5e-3, 1e-4),
+        (level.ORT_ENABLE_ALL, float("inf"), 2e-3),
+    ):
+        so = onnxruntime.SessionOptions()
+        so.graph_optimization_level = opt_level
+        sess = onnxruntime.InferenceSession(
+            onnx_model, so, providers=["CPUExecutionProvider"]
+        )
+        out = sess.run(None, {sess.get_inputs()[0].name: x.numpy()})[0]
+        err = np.abs(out - ref)
+        print(
+            f"-------- QDQ parity ({opt_level.name}): max {err.max():.2e}, mean {err.mean():.2e}"
+        )
+        # NaN compares False: a non-finite output (either side) fails outright
+        if not np.isfinite(err).all() or err.max() > max_tol or err.mean() > mean_tol:
+            msg = f"QDQ ONNX deviates from the fake-quant model ({opt_level.name})"
+            raise RuntimeError(msg)
+    print("-------- Model successfully verified.")
 
 
 def assert_verify(args: argparse.Namespace, onnx_model, torch_model) -> None:
@@ -131,6 +192,10 @@ def to_onnx(args: argparse.Namespace) -> None:
     model = load_net(args)
     # set model to eval mode
     model.eval()
+    qat = is_qat(model)
+    if qat and args.opset < 13:
+        msg = f"a QAT model needs --opset >= 13 (per-channel QuantizeLinear), got {args.opset}"
+        raise ConfigError(msg)
 
     # set static or dynamic
     if args.static is not None:
@@ -166,12 +231,14 @@ def to_onnx(args: argparse.Namespace) -> None:
             output_fp32,
             export_params=True,
             opset_version=args.opset,
-            do_constant_folding=False,
+            do_constant_folding=qat,  # QAT: Q/DQ scale/zero point become initializers
             dynamo=False,  # the TorchScript exporter: torch>=2.9 defaults to dynamo (needs onnxscript)
             **(dyn_axes or {}),  # type: ignore
         )
 
     print("-------- Conversion was successful. Verifying...")
+    if qat:
+        scalarize_qdq(output_fp32)
     # verify onnx
     load_onnx = onnx.load(output_fp32)
     onnx.checker.check_model(load_onnx)
@@ -180,7 +247,7 @@ def to_onnx(args: argparse.Namespace) -> None:
     )
     # verify outputs
     if args.nocheck is False:
-        assert_verify(args, output_fp32, model)
+        (verify_qat if qat else assert_verify)(args, output_fp32, model)
 
     if args.optimize:
         print("-------- Running ONNX optimization...")
