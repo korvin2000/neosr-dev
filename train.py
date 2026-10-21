@@ -21,6 +21,7 @@ from neosr.data.data_sampler import EnlargedSampler
 from neosr.data.prefetch_dataloader import CUDAPrefetcher
 from neosr.models import build_model
 from neosr.models.checkpoint import latest_state
+from neosr.models.image import observers_frozen
 from neosr.runtime import Runtime, setup_runtime
 from neosr.utils import (
     AvgTimer,
@@ -165,9 +166,10 @@ def log_macs(model: Any, cfg: dict[str, Any]) -> None:
             modes = [(m, m.training) for m in net.modules()]
             net.eval()
             try:
-                macs = profile_macs(net, x)
-                if net is model.net_g:
-                    x = net(x)  # D sees what G produces
+                with observers_frozen(net):  # eval() leaves QAT observers running
+                    macs = profile_macs(net, x)
+                    if net is model.net_g:
+                        x = net(x)  # D sees what G produces
             finally:
                 for m, t in modes:
                     m.training = t

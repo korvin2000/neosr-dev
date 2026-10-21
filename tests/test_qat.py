@@ -461,6 +461,30 @@ def test_qat_export_as_pretrain_and_for_inference(tmp_path):
             assert torch.equal(m.net_g.eval()(x), ref(x))
 
 
+def test_log_macs_leaves_qat_observers_and_ranges_alone(monkeypatch):
+    """The MAC probe runs on noise before restore_rng(): it must not move activation ranges."""
+    import sys  # noqa: PLC0415
+    import types  # noqa: PLC0415
+
+    import train  # noqa: PLC0415
+
+    def profile_macs(net, x):  # torchprofile traces: a real forward
+        net(x)
+        return 1
+
+    monkeypatch.setitem(
+        sys.modules, "torchprofile", types.SimpleNamespace(profile_macs=profile_macs)
+    )
+    net = net_small()
+    net.prepare_qat()
+    observed(net)  # observers on, ranges set
+    sd = {k: v.clone() for k, v in net.state_dict().items()}
+    model = argparse.Namespace(net_g=net, net_d=None, device=torch.device("cpu"))
+    train.log_macs(model, {"input_size": 8})
+    assert all(m.observer_enabled.item() == 1 for m in fqs(net))
+    assert all(torch.equal(v, sd[k]) for k, v in net.state_dict().items())
+
+
 # ------------------------------------------------------------------ convert.py
 @pytest.fixture
 def convert_py():

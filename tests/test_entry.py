@@ -683,6 +683,32 @@ def test_convert_main_exports_verified_onnx_on_cpu(tmp_path, out):
     assert (tmp_path / ("m_fp32.onnx" if out else "w_fp32.onnx")).is_file()
 
 
+NAN, INF = float("nan"), float("inf")
+
+
+@pytest.mark.parametrize(
+    ("ref", "out"), [(NAN, NAN), (INF, INF), (0.0, NAN), (INF, 0.0)]
+)
+def test_float_onnx_verification_rejects_non_finite_outputs(monkeypatch, ref, out):
+    """assert_allclose passes matching NaN/inf: a non-finite output on either side fails."""
+    ort = pytest.importorskip("onnxruntime")
+
+    class Session:
+        def __init__(self, *_a, **_k) -> None:
+            pass
+
+        def get_inputs(self):
+            return [types.SimpleNamespace(name="input")]
+
+        def run(self, _names, feed):
+            return [np.full_like(feed["input"], out)]
+
+    monkeypatch.setattr(ort, "InferenceSession", Session)
+    args = types.SimpleNamespace(static=None)
+    with pytest.raises(RuntimeError, match="non-finite"):
+        convert_py.assert_verify(args, "unused.onnx", lambda x: torch.full_like(x, ref))
+
+
 def test_convert_unknown_network_returns_2(tmp_path):
     torch.save({"params": {}}, tmp_path / "w.pth")
     assert (

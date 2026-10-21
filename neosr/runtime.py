@@ -94,8 +94,9 @@ def setup_runtime(cfg: dict[str, Any], *, launcher: str = "none") -> Runtime:
     torch.use_deterministic_algorithms(deterministic, warn_only=True)
     torch.utils.deterministic.fill_uninitialized_memory = deterministic  # type: ignore[attr-defined]
     if cfg.get("fast_matmul"):
+        # "medium" already enables TF32 matmul; also setting the legacy allow_tf32 flag makes
+        # get_float32_matmul_precision() raise (mixed APIs, torch 2.9), which breaks inductor
         torch.set_float32_matmul_precision("medium")
-        torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
         torch.backends.cuda.matmul.allow_fp16_accumulation = True
 

@@ -221,10 +221,13 @@ def assert_verify(args: argparse.Namespace, onnx_model, torch_model) -> None:
     with torch.inference_mode():
         torch_outputs = torch_model(dummy_input)
 
+    ref = torch_outputs.detach().cpu().numpy()
+    # assert_allclose treats matching NaN/inf as equal: a non-finite output fails outright
+    if not (np.isfinite(ref).all() and np.isfinite(ort_outs[0]).all()):
+        msg = "ONNX verification failed: non-finite output (torch or onnxruntime)"
+        raise RuntimeError(msg)
     # float export: rtol 1e-2, atol 1e-3 (looser than numpy's 1e-7/0: ORT reorders reductions)
-    np.testing.assert_allclose(
-        torch_outputs.detach().cpu().numpy(), ort_outs[0], rtol=0.01, atol=0.001
-    )
+    np.testing.assert_allclose(ref, ort_outs[0], rtol=0.01, atol=0.001)
     print("-------- Model successfully verified.")
 
 

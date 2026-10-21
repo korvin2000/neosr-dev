@@ -3,7 +3,7 @@ import io
 import pytest
 import torch
 
-from neosr.optimizers import adamw_sf, adamw_win, adan, adan_sf
+from neosr.optimizers import adamw_sf, adan, adan_sf
 
 LR = 1e-2
 
@@ -29,8 +29,6 @@ FACTORIES = {
     "adan_sf": lambda ps: adan_sf(ps, lr=LR, warmup_steps=4),
     "adan_nosf": lambda ps: adan_sf(ps, lr=LR, warmup_steps=4, schedule_free=False),
     "adamw_sf": lambda ps: adamw_sf(ps, lr=LR, warmup_steps=4),
-    "adamw_win": lambda ps: adamw_win(ps, lr=LR, acceleration_mode="win"),
-    "adamw_win2": lambda ps: adamw_win(ps, lr=LR, acceleration_mode="win2"),
 }
 
 
@@ -55,21 +53,6 @@ def test_adan_sf_warmup_scales_update_without_sf():
         _run(opt, p, 1)
         deltas.append(p.detach() - p0)
     torch.testing.assert_close(deltas[1], deltas[0] / 10)
-
-
-@pytest.mark.parametrize("mode", ["win", "win2"])
-def test_adamw_win_lr_zero(mode):
-    p = _param()
-    p0 = p.detach().clone()
-    opt = adamw_win([p], lr=0.0, acceleration_mode=mode)
-    _run(opt, p, 3)
-    assert torch.isfinite(p).all()
-    torch.testing.assert_close(p.detach(), p0)
-
-
-def test_adamw_win2_requires_positive_reckless_step():
-    with pytest.raises(ValueError):
-        adamw_win([_param()], reckless_steps=(0.0, 8.0), acceleration_mode="win2")
 
 
 @pytest.mark.parametrize("name", ["adan_sf", "adamw_sf"])
@@ -104,7 +87,7 @@ def test_state_dict_round_trip(name):
     torch.testing.assert_close(q.detach(), p.detach())
 
 
-@pytest.mark.parametrize("name", ["adan", "adan_sf", "adamw_win2"])
+@pytest.mark.parametrize("name", ["adan", "adan_sf"])
 def test_closure_runs_with_grad(name):
     p = _param()
     opt = FACTORIES[name]([p])
@@ -123,7 +106,6 @@ CLIP_FACTORIES = {
     "adan": lambda ps, **kw: adan(ps, lr=LR, **kw),
     "adan_single": lambda ps, **kw: adan(ps, lr=LR, foreach=False, **kw),
     "adan_sf": lambda ps, **kw: adan_sf(ps, lr=LR, **kw),
-    "adamw_win2": lambda ps, **kw: adamw_win(ps, lr=LR, **kw),
 }
 
 
@@ -177,8 +159,6 @@ def test_constructor_validation():
 @pytest.mark.parametrize(
     ("opt", "kwargs", "group"),
     [
-        (adamw_win, {"acceleration_mode": "win2"}, {"reckless_steps": (0.0, 8.0)}),
-        (adamw_win, {"acceleration_mode": "win"}, {"acceleration_mode": "win2", "reckless_steps": (0.0, 8.0)}),
         (adamw_sf, {}, {"betas": (0.0, 0.99)}),
         (adamw_sf, {}, {"schedule_free": False}),
         (adan_sf, {}, {"betas": (0.0, 0.92, 0.99)}),

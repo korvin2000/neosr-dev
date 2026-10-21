@@ -17,7 +17,8 @@ import torch
 from torch import nn
 
 from neosr.config import ConfigError
-from neosr.utils import rng as neosr_rng
+from neosr.utils.rng import get_state as neosr_get_state
+from neosr.utils.rng import set_state as neosr_set_state
 
 STATE_FORMAT = 2
 _PREFIXES = ("module.", "_orig_mod.")
@@ -146,17 +147,11 @@ def prune_states(d: str | Path, keep: int) -> None:
         p.unlink(missing_ok=True)
 
 
-def _neosr_rng(name: str):
-    # get_state/set_state arrive with the T3 rng rewrite; until then the stream is not captured
-    return getattr(neosr_rng, name, None)
-
-
 def rng_state(
     device: torch.device | None = None, loader_gen: torch.Generator | None = None
 ) -> dict:
     """Snapshot of every process-wide stream; loads with torch.load(weights_only=True)."""
     _, key, pos, has_gauss, gauss = np.random.get_state()
-    get = _neosr_rng("get_state")
     cuda = device is not None and device.type == "cuda"
     return {
         "python": random.getstate(),
@@ -166,7 +161,7 @@ def rng_state(
             "has_gauss": int(has_gauss),
             "gauss": float(gauss),
         },
-        "neosr": get() if get is not None else None,
+        "neosr": neosr_get_state(),
         "torch": torch.get_rng_state(),
         "cuda": torch.cuda.get_rng_state(device) if cuda else None,
         "loader": loader_gen.get_state() if loader_gen is not None else None,
@@ -187,9 +182,8 @@ def set_rng_state(
         n["has_gauss"],
         n["gauss"],
     ))
-    put = _neosr_rng("set_state")
-    if s["neosr"] is not None and put is not None:
-        put(s["neosr"])
+    if s["neosr"] is not None:  # None in states saved before the stream was captured
+        neosr_set_state(s["neosr"])
     torch.set_rng_state(s["torch"])
     if s["cuda"] is not None and device is not None and device.type == "cuda":
         torch.cuda.set_rng_state(s["cuda"], device)
