@@ -178,8 +178,13 @@ class base:
         if dist:
             torch.distributed.barrier()
         if self.rt.rank == 0:
-            with preserved_rng(self.device):
-                self.validate(dataloader, current_iter, tb_logger, save_img)
+            from neosr.metrics.calculate import release_metric_nets  # noqa: PLC0415
+
+            try:
+                with preserved_rng(self.device):
+                    self.validate(dataloader, current_iter, tb_logger, save_img)
+            finally:  # DISTS/TOPIQ weights live for one validation pass only
+                release_metric_nets()
         if dist:
             torch.distributed.barrier()
 

@@ -1,6 +1,7 @@
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -10,6 +11,7 @@ import torch
 from neosr.config import ConfigError
 from neosr.metrics import build_metric, calculate
 from neosr.metrics.calculate import release_metric_nets
+from neosr.models.base import base
 from neosr.utils.img_util import img2tensor, tensor2img
 
 VAL_GT = Path("/home/korvin/apps/data/val/GT")
@@ -276,3 +278,45 @@ def test_tensor2img_gray_keeps_one_channel():
 @pytest.mark.parametrize("shape", [(1, 7), (1, 1), (5, 6)])
 def test_tensor2img_2d_shapes(shape):
     assert tensor2img(torch.rand(shape)).shape == shape
+
+
+def test_ssim_negative_for_inverted_image_and_replaceable_as_best():
+    gt = _synthetic_pair()["img2"]
+    inverted = calculate.calculate_ssim(255 - gt, gt, crop_border=4)
+    assert -1 <= inverted < 0
+    model = SimpleNamespace(
+        opt={"val": {"metrics": {"ssim": {"better": "higher"}}}}, best_metric_results={}
+    )
+    base.update_best(model, "val", "ssim", inverted, 1)
+    base.update_best(model, "val", "ssim", 1.0, 2)
+    assert model.best_metric_results["val"]["ssim"] == {
+        "better": "higher",
+        "val": 1.0,
+        "iter": 2,
+    }
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_validation_releases_metric_nets(monkeypatch, fail):
+    monkeypatch.setitem(calculate._metric_builders, "dists", _FakeNet)
+    img = np.zeros((8, 8, 3), dtype=np.uint8)
+
+    def validate(*_):
+        calculate.calculate_dists(img, img, device="cpu")
+        assert calculate._metric_nets
+        if fail:
+            msg = "boom"
+            raise RuntimeError(msg)
+
+    model = SimpleNamespace(
+        rt=SimpleNamespace(rank=0), device=torch.device("cpu"), validate=validate
+    )
+    try:
+        if fail:
+            with pytest.raises(RuntimeError, match="boom"):
+                base.validation(model, None, 1, None)
+        else:
+            base.validation(model, None, 1, None)
+        assert not calculate._metric_nets
+    finally:
+        release_metric_nets()

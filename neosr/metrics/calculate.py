@@ -159,15 +159,12 @@ def calculate_ssim(
 
     ssims = []
     ssims.extend([_ssim(img[..., i], img2[..., i]) for i in range(img.shape[2])])
-    ssim_result = np.array(ssims).mean()
-    if ssim_result <= 0:
-        return float("inf")
-    return ssim_result
+    return float(np.array(ssims).mean())
 
 
 # Building DISTS/TOPIQ costs far more than one forward pass, so each network is
-# built once per (name, device) and reused. Call release_metric_nets() after
-# validation to free the weights during training.
+# built once per (name, device) and reused for one validation pass; the model's
+# validation() calls release_metric_nets() afterwards to free the weights.
 _metric_nets: dict[tuple[str, torch.device], nn.Module] = {}
 
 

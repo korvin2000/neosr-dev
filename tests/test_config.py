@@ -121,6 +121,11 @@ def test_unknown_root_key_warns(tmp_path: Path) -> None:
             "removed",
         ),
         (HEAD, BASE.replace("[datasets.val]", "[datasets.valid]"), "unknown phase"),
+        (
+            HEAD,
+            BASE + '\n[datasets.train_2]\ntype = "paired"\n',
+            r"\[datasets\.train_2\] unknown phase",
+        ),
         (HEAD + 'network_d = "metagan"\n', BASE, "network_d must be a table"),
         (HEAD, "name = = 1\n", None),
     ],
@@ -170,6 +175,17 @@ def test_unknown_degradation_key_warns(tmp_path: Path) -> None:
             is_train=True,
             root=tmp_path,
         )
+
+
+@pytest.mark.parametrize("key", ["blur_kernel_size", "blur_kernel_size2"])
+def test_removed_blur_kernel_size_warns(tmp_path: Path, key: str) -> None:
+    with pytest.warns(ConfigWarning, match=rf"degradations\.{key}\b"):
+        cfg = load_config(
+            write(tmp_path, BASE + f"\n[degradations]\n{key} = 7\n"),
+            is_train=True,
+            root=tmp_path,
+        )
+    assert key not in cfg["datasets"]["train"]
 
 
 def test_unknown_degradation_key_does_not_overwrite_train(tmp_path: Path) -> None:

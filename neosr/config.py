@@ -38,7 +38,6 @@ _DEGRADATIONS: dict[str, Any] = {
         f"{k}{s}": t
         for s in ("", "2")
         for k, t in {
-            "blur_kernel_size": int,
             "kernel_list": list,
             "kernel_prob": list,
             "blur_sigma": list,
@@ -219,7 +218,8 @@ def load_config(
             raise ConfigError(msg)
     _check(cfg, "")
     for phase in cfg["datasets"]:
-        if phase.split("_")[0] not in PHASES:
+        # train has no suffix: loaders read the literal [datasets.train]
+        if phase != "train" and phase.split("_")[0] not in PHASES - {"train"}:
             msg = f"[datasets.{phase}] unknown phase; use train, val[_N] or test[_N]"
             raise ConfigError(msg)
     _derive(
