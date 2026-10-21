@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from neosr.utils.registry import LOSS_REGISTRY
+from neosr.losses.base import Loss
 
 
 class GaussianPyramid(nn.Module):
@@ -100,17 +100,13 @@ def color_space_transform(input_color, rgb2xyz, inv_illuminant):
     return torch.cat((L, a, b), 1)
 
 
-@LOSS_REGISTRY.register()
-class msswd_loss(nn.Module):
+class msswd_loss(Loss):
     """
     Adapted from: https://github.com/real-hjq/MS-SWD
     """
 
-    def __init__(
-        self, num_scale=3, num_proj=24, patch_size=11, stride=1, c=3, loss_weight=1.0
-    ):
+    def __init__(self, num_scale=3, num_proj=24, patch_size=11, stride=1, c=3):
         super().__init__()
-        self.loss_weight = loss_weight
         self.num_scale = num_scale
         self.num_proj = num_proj
         self.patch_size = patch_size
@@ -168,6 +164,4 @@ class msswd_loss(nn.Module):
 
         ms_swd = ms_swd / self.num_scale
         # decrease magnitude to balance with other losses
-        ms_swd = ms_swd.mean() * 0.1
-
-        return ms_swd * self.loss_weight
+        return ms_swd.mean() * 0.1

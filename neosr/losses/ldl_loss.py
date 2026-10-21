@@ -4,15 +4,14 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
+from neosr.losses.base import Loss
 from neosr.losses.basic_loss import chc_loss
-from neosr.utils.registry import LOSS_REGISTRY
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 
-@LOSS_REGISTRY.register()
-class ldl_loss(nn.Module):
+class ldl_loss(Loss):
     """LDL loss. Adapted from 'Details or Artifacts: A Locally Discriminative
     Learning Approach to Realistic Image Super-Resolution':
     https://arxiv.org/abs/2203.09195.
@@ -20,16 +19,12 @@ class ldl_loss(nn.Module):
     Args:
     ----
         criterion (str): loss type. Default: 'huber'
-        loss_weight (float): weight for colorloss. Default: 1.0
         ksize (int): size of the local window. Default: 7
 
     """
 
-    def __init__(
-        self, criterion: str = "l1", loss_weight: float = 1.0, ksize: int = 7
-    ) -> None:
+    def __init__(self, criterion: str = "l1", ksize: int = 7) -> None:
         super().__init__()
-        self.loss_weight = loss_weight
         self.ksize = ksize
         self.criterion_type = criterion
         self.criterion: nn.L1Loss | nn.MSELoss | nn.HuberLoss | Callable
@@ -98,7 +93,4 @@ class ldl_loss(nn.Module):
 
     def forward(self, net_output: Tensor, gt: Tensor) -> Tensor:
         overall_weight = self.get_refined_artifact_map(gt, net_output)
-        return (
-            self.criterion(overall_weight * net_output, overall_weight * gt)
-            * self.loss_weight
-        )
+        return self.criterion(overall_weight * net_output, overall_weight * gt)

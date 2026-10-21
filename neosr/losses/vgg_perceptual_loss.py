@@ -4,15 +4,14 @@ from typing import TYPE_CHECKING
 from torch import Tensor, nn
 
 from neosr.archs.vgg_arch import VGGFeatureExtractor
+from neosr.losses.base import Loss
 from neosr.losses.basic_loss import chc_loss
-from neosr.utils.registry import LOSS_REGISTRY
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 
-@LOSS_REGISTRY.register()
-class vgg_perceptual_loss(nn.Module):
+class vgg_perceptual_loss(Loss):
     """Perceptual loss with VGG19.
 
     Args:
@@ -27,9 +26,6 @@ class vgg_perceptual_loss(nn.Module):
             Default: True.
         range_norm (bool): If True, norm images with range [-1, 1] to [0, 1].
             Default: False.
-        loss_weight (float): If `loss_weight > 0`, the perceptual
-            loss will be calculated and the loss will multiplied by the
-            weight. Default: 1.0.
         criterion (str): Criterion used for perceptual loss. Default: 'chc'
             (unclipped charbonnier).
 
@@ -41,11 +37,9 @@ class vgg_perceptual_loss(nn.Module):
         vgg_type: str = "vgg19",
         use_input_norm: bool = True,
         range_norm: bool = False,
-        loss_weight: float = 1.0,
         criterion: str = "chc",
     ) -> None:
         super().__init__()
-        self.loss_weight = loss_weight
 
         if layer_weights is not None:
             self.layer_weights = layer_weights
@@ -104,4 +98,4 @@ class vgg_perceptual_loss(nn.Module):
                 * self.layer_weights[k]
             )
 
-        return percep_loss * self.loss_weight
+        return percep_loss

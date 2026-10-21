@@ -12,7 +12,7 @@ from torchvision.models import (
     vgg,
 )
 
-from neosr.utils.registry import LOSS_REGISTRY
+from neosr.losses.base import Loss
 
 
 class VGG(nn.Module):
@@ -249,11 +249,15 @@ class dinov2(nn.Module):
         return self.get_features(x)
 
 
-@LOSS_REGISTRY.register()
-class fdl_loss(nn.Module):
+class fdl_loss(Loss):
     """
     Adapted from: https://github.com/eezkni/FDL
+
+    The random projections come from a CPU generator seeded with `seed`, so every
+    build (and every resumed run) optimises the same objective.
     """
+
+    fp32 = True
 
     def __init__(
         self,
@@ -266,7 +270,7 @@ class fdl_loss(nn.Module):
         dino_weights=None,
         dino_norm=False,
         phase_weight=1.0,
-        loss_weight=1.0,
+        seed=0,
     ):
         super().__init__()
         model = model.lower()
@@ -285,15 +289,15 @@ class fdl_loss(nn.Module):
             raise NotImplementedError(msg)
 
         self.phase_weight = phase_weight
-        self.loss_weight = loss_weight
         self.stride = stride
 
-        for i in range(len(self.model.chns)):
-            rand = torch.randn(num_proj, self.model.chns[i], patch_size, patch_size)
-            rand = rand / rand.view(rand.shape[0], -1).norm(dim=1).unsqueeze(
-                1
-            ).unsqueeze(2).unsqueeze(3)
-            self.register_buffer(f"rand_{i}", rand)
+        g = torch.Generator().manual_seed(seed)
+        for i, chns in enumerate(self.model.chns):
+            rand = torch.randn(
+                num_proj, chns, patch_size, patch_size, generator=g, device="cpu"
+            )
+            rand = rand / rand.flatten(1).norm(dim=1).view(-1, 1, 1, 1)
+            self.register_buffer(f"rand_{i}", rand, persistent=False)
 
     def forward_once(self, x, y, idx):
         """
@@ -312,7 +316,6 @@ class fdl_loss(nn.Module):
         # compute the mean of the sorted convolved input
         return torch.abs(projx - projy).mean([1, 2])
 
-    @torch.amp.custom_fwd(cast_inputs=torch.float32, device_type="cuda")
     def forward(self, x, y):
         x = self.model(x)
         y = self.model(y)
@@ -335,5 +338,4 @@ class fdl_loss(nn.Module):
 
         score = sum(score)
         # decrease magnitude to balance with other losses
-        score = score.mean() * 0.01 if self.model_name != "dinov2" else score.mean()
-        return score * self.loss_weight
+        return score.mean() * 0.01 if self.model_name != "dinov2" else score.mean()

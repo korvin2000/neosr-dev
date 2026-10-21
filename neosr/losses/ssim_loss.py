@@ -2,7 +2,7 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
-from neosr.utils.registry import LOSS_REGISTRY
+from neosr.losses.base import Loss
 
 
 class GaussianFilter2D(nn.Module):
@@ -60,8 +60,9 @@ class GaussianFilter2D(nn.Module):
         )
 
 
-@LOSS_REGISTRY.register()
-class mssim_loss(nn.Module):
+class mssim_loss(Loss):
+    fp32 = True
+
     def __init__(
         self,
         window_size: int = 11,
@@ -71,7 +72,6 @@ class mssim_loss(nn.Module):
         K2: float = 0.03,
         L: int = 1,
         padding: int | None = None,
-        loss_weight: float = 1.0,
     ) -> None:
         """Adapted from 'A better pytorch-based implementation for the mean structural
             similarity. Differentiable simpler SSIM and MS-SSIM.':
@@ -89,7 +89,6 @@ class mssim_loss(nn.Module):
             L (int): The dynamic range of the pixel values (255 for 8-bit grayscale images). Defaults to 1.
             padding (int, optional): The padding of the gaussian filter. Defaults to None. If it is set to None,
                 the filter will use window_size//2 as the padding. Another common setting is 0.
-            loss_weight (float): Weight of final loss value.
 
         """
         super().__init__()
@@ -97,7 +96,6 @@ class mssim_loss(nn.Module):
         self.window_size = window_size
         self.C1 = (K1 * L) ** 2  # equ 7 in ref1
         self.C2 = (K2 * L) ** 2  # equ 7 in ref1
-        self.loss_weight = loss_weight
 
         self.gaussian_filter = GaussianFilter2D(
             window_size=window_size,
@@ -106,7 +104,6 @@ class mssim_loss(nn.Module):
             padding=padding,
         )
 
-    @torch.amp.custom_fwd(cast_inputs=torch.float32, device_type="cuda")
     def forward(self, x: Tensor, y: Tensor) -> Tensor:
         """x, y (Tensor): tensors of shape (N,C,H,W)
         Returns: Tensor.
@@ -119,9 +116,7 @@ class mssim_loss(nn.Module):
         if y.type() != self.gaussian_filter.gaussian_window.type():
             y = y.type_as(self.gaussian_filter.gaussian_window)
 
-        loss = 1.0 - self.msssim(x, y)
-
-        return self.loss_weight * loss
+        return 1.0 - self.msssim(x, y)
 
     def _ssim(self, x: Tensor, y: Tensor) -> tuple[Tensor, Tensor]:
         mu_x = self.gaussian_filter(x)  # equ 14

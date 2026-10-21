@@ -1,10 +1,10 @@
 import pytest
 import torch
 
+from neosr import losses as losses_pkg
 from neosr.config import ConfigError
-
 from neosr.losses import build_loss
-from neosr.utils.registry import LOSS_REGISTRY
+from neosr.losses.base import Context
 
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 SHAPE = (2, 3, 64, 64)
@@ -51,8 +51,8 @@ def make_pair(case: str, dev: str = DEV) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 def build(name: str, dev: str = DEV) -> torch.nn.Module:
-    if name == "kl_loss" and name not in LOSS_REGISTRY:  # slated for deletion (G5.M6)
-        pytest.skip("kl_loss not registered")
+    if name == "kl_loss" and name not in losses_pkg.LOSSES:  # slated for deletion (G5.M6)
+        pytest.skip("kl_loss not in the loss table")
     return build_loss({"type": name, **LOSSES[name][0]}).to(dev)
 
 
@@ -93,6 +93,55 @@ def test_loss_forward_backward(losses, name, case):
 def test_loss_on_cpu(name):
     """No hidden dependency on CUDA or on torch.set_default_device."""
     check_forward_backward(build(name, "cpu"), *make_pair("random", "cpu"))
+
+
+@pytest.mark.parametrize(
+    "name", ["L1Loss", "MSELoss", "HuberLoss", "chc_loss", "mssim_loss", "ncc_loss", "kl_loss"]
+)
+def test_compute_applies_weight(name):
+    """forward is the unweighted kernel; compute(ctx) weights it once (and runs fp32 kernels in fp32)."""
+    loss_fn = build(name)
+    loss_fn.loss_weight = 0.5
+    pred, target = make_pair("random")
+    ref = loss_fn(pred, target) * 0.5
+    sr = pred.clone().requires_grad_()
+    value = loss_fn.compute(Context(sr=sr, gt=target, lq=target, it=0))
+    torch.testing.assert_close(value, ref)
+    value.backward()
+    assert torch.isfinite(sr.grad).all()
+    assert loss_fn.fp32 is (name == "mssim_loss")  # only mssim had custom_fwd(cast_inputs=float32)
+
+
+@pytest.mark.parametrize("target", ["gt", "lq_up"])
+@pytest.mark.parametrize("name", ["consistency_loss", "msswd_loss", "ldl_loss", "ff_loss"])
+def test_compute_weights_kernel(name, target):
+    """compute(ctx) at weight 0.5 == 0.5 * forward(sr, ref) at weight 1, in value and sr.grad.
+
+    A kernel that still weights itself fails; msswd is reseeded per call; ff (fp32) is also
+    checked under bf16 autocast against the fp32 kernel on the upcast input.
+    """
+    loss_fn = build(name)
+    loss_fn.target = target
+    assert loss_fn.fp32 is (name == "ff_loss")  # only ff had custom_fwd(cast_inputs=float32)
+    pred, gt = make_pair("random")
+    lq = torch.rand(2, 3, 32, 32, device=DEV, generator=torch.Generator(DEV).manual_seed(1))
+    ref_in = gt if target == "gt" else Context(sr=pred, gt=gt, lq=lq, it=0).lq_up
+    for amp in (False, True) if name == "ff_loss" else (False,):
+        base = pred.bfloat16() if amp else pred
+        x = base.detach().float().requires_grad_()
+        loss_fn.loss_weight = 1.0
+        torch.manual_seed(0)
+        ref = loss_fn(x, ref_in) * 0.5
+        ref.backward()
+        sr = base.clone().requires_grad_()
+        loss_fn.loss_weight = 0.5
+        torch.manual_seed(0)
+        with torch.autocast(DEV, dtype=torch.bfloat16, enabled=amp):
+            value = loss_fn.compute(Context(sr=sr, gt=gt, lq=lq, it=0))
+        value.backward()
+        assert value.dtype == torch.float32
+        torch.testing.assert_close(value, ref, rtol=1e-6, atol=1e-6)
+        torch.testing.assert_close(sr.grad, x.grad.to(sr.dtype), rtol=1e-6, atol=1e-6)
 
 
 def test_dists_metric_path():
@@ -174,16 +223,125 @@ def test_frozen_weights_and_options():
         build_loss({"type": "vgg_perceptual_loss", "vgg_type": "vgg16"})
 
 
-@pytest.mark.parametrize("target_is_real", [True, False])
-@pytest.mark.parametrize("gan_type", ["bce", "mse", "huber"])
-def test_gan_loss(gan_type, target_is_real):
-    weight = 0.25
-    loss_fn = build_loss({"type": "gan_loss", "gan_type": gan_type, "loss_weight": weight})
-    logits = torch.randn(4, 1, 8, 8, device=DEV, requires_grad=True)
-    d_loss = loss_fn(logits, target_is_real, is_disc=True)
-    g_loss = loss_fn(logits, target_is_real, is_disc=False)
-    assert torch.isfinite(d_loss)
-    assert torch.isfinite(g_loss)
-    assert g_loss.item() == pytest.approx(d_loss.item() * weight, rel=1e-5)
-    g_loss.backward()
-    assert torch.isfinite(logits.grad).all()
+PRE_B1 = "c48252d"  # last revision whose kernels still applied loss_weight themselves
+
+
+def pre_b1_loss(name: str, file: str | None = None, **kwargs) -> torch.nn.Module:
+    """The kernel as it was before B1, built from that revision's source (unregistered)."""
+    import subprocess  # ruff: ignore[import-outside-top-level, suspicious-subprocess-import]
+    import types  # ruff: ignore[import-outside-top-level]
+    from pathlib import Path  # ruff: ignore[import-outside-top-level]
+
+    root, path = Path(__file__).parents[1], f"neosr/losses/{file or name}.py"
+    try:
+        src = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
+            ["git", "show", f"{PRE_B1}:{path}"],  # ruff: ignore[start-process-with-partial-path]
+            cwd=root, capture_output=True, text=True, check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        pytest.skip(f"pre-B1 source of {path} not available")
+    mod = types.ModuleType(f"pre_b1_{file or name}")
+    mod.__file__ = str(root / path)  # DISTS finds its weights next to the module
+    exec(compile(src.replace("@LOSS_REGISTRY.register()\n", ""), path, "exec"), mod.__dict__)  # ruff: ignore[exec-builtin]
+    if "chc_loss" in mod.__dict__ and (file or name) != "basic_loss":  # VGG's criterion: pin it to pre-B1 too
+        mod.chc_loss = type(pre_b1_loss("chc_loss", "basic_loss"))
+    return getattr(mod, name)(**kwargs)
+
+
+B1_W3 = {"fdl_loss": {"model": "vgg"}, "vgg_perceptual_loss": {}, "dists_loss": {}}
+
+
+@pytest.mark.parametrize("amp", [False, True, "bf16-sr"])
+@pytest.mark.parametrize("name", B1_W3)
+def test_b1_matches_pre_b1(name, amp):
+    """B1 is mechanical: compute(ctx) at weight w equals the old old(x, y) at loss_weight=w, values and grads.
+
+    "bf16-sr" feeds a bf16 generator output (gt fp32) under autocast: custom_fwd's input cast must survive.
+    """
+    if amp and DEV != "cuda":
+        pytest.skip("custom_fwd only acted under CUDA autocast")
+    w, kw = 0.37, B1_W3[name]
+    old = pre_b1_loss(name, loss_weight=w, **kw).to(DEV)
+    new = build_loss({"type": name, **kw}).to(DEV)
+    state = old.state_dict()
+    new.load_state_dict({k: v for k, v in state.items() if not k.startswith("rand_")})
+    for k, v in state.items():  # FDL projections are non-persistent now: copy them in
+        if k.startswith("rand_"):
+            getattr(new, k).copy_(v)
+    new.loss_weight = w
+    pred, target = make_pair("random")
+    if amp == "bf16-sr":
+        pred = pred.bfloat16()
+    x_old, x_new = pred.clone().requires_grad_(), pred.clone().requires_grad_()
+    with torch.autocast("cuda", dtype=torch.bfloat16, enabled=bool(amp)):
+        ref = old(x_old, target)
+        value = new.compute(Context(sr=x_new, gt=target, lq=target, it=0))
+    ref.backward()
+    value.backward()
+    assert value.dtype == ref.dtype == torch.float32
+    assert x_new.grad.dtype == pred.dtype
+    assert x_new.grad.abs().sum() > 0
+    torch.testing.assert_close(value, ref, rtol=1e-6, atol=1e-6)
+    # a bf16 grad is the fp32 one rounded: cuDNN backward is not bitwise deterministic, so old-vs-old
+    # already differs by 1 bf16 ulp there (measured); compare at the bf16 default tolerance
+    tol = {} if amp == "bf16-sr" else {"rtol": 1e-6, "atol": 1e-6}
+    torch.testing.assert_close(x_new.grad, x_old.grad, **tol)
+
+
+# id -> (pre-B1 file, build kwargs); old-vs-new is the B1 acceptance (D31) for the W1 kernels
+B1_W1 = {
+    "L1Loss": ("basic_loss", {}),
+    "MSELoss": ("basic_loss", {}),
+    "HuberLoss": ("basic_loss", {}),
+    "HuberLoss-delta": ("basic_loss", {"delta": 0.1}),
+    "chc_loss": ("basic_loss", {}),
+    "chc_loss-l1": ("basic_loss", {"criterion": "l1", "loss_lambda": 0.02}),
+    "mssim_loss": ("ssim_loss", {}),
+    "ncc_loss": ("ncc_loss", {}),
+    "kl_loss": ("kl_loss", {}),
+}
+
+
+@pytest.mark.parametrize("amp", [False, True])
+@pytest.mark.parametrize("case", B1_W1)
+def test_b1_w1_matches_pre_b1(case, amp):
+    """compute(ctx) at weight w == old(x, y) at loss_weight=w, values and sr.grad, fp32 and CUDA bf16."""
+    if amp and DEV != "cuda":
+        pytest.skip("custom_fwd only acted under CUDA autocast")
+    name, (file, kw), w = case.split("-")[0], B1_W1[case], 0.37
+    old = pre_b1_loss(name, file, loss_weight=w, **kw).to(DEV)
+    new = build_loss({"type": name, **kw}).to(DEV)
+    new.load_state_dict(old.state_dict())
+    new.loss_weight = w
+    pred, target = make_pair("random")
+    x_old, x_new = pred.clone().requires_grad_(), pred.clone().requires_grad_()
+    with torch.autocast("cuda", dtype=torch.bfloat16, enabled=amp):
+        ref = old(x_old, target)
+        value = new.compute(Context(sr=x_new, gt=target, lq=target, it=0))
+    ref.backward()
+    value.backward()
+    assert value.dtype == ref.dtype == torch.float32
+    torch.testing.assert_close(value, ref, rtol=1e-6, atol=1e-6)
+    torch.testing.assert_close(x_new.grad, x_old.grad, rtol=1e-6, atol=1e-6)
+
+
+def test_fdl_projections_are_seeded():
+    """D30: rand_* do not depend on the global RNG, are not checkpointed and follow .to()."""
+    torch.manual_seed(1)
+    a = build_loss({"type": "fdl_loss", "model": "vgg"})
+    torch.manual_seed(2)
+    b = build_loss({"type": "fdl_loss", "model": "vgg"}).to(DEV)
+    c = build_loss({"type": "fdl_loss", "model": "vgg", "seed": 1})
+    rand = [k for k, _ in a.named_buffers() if k.startswith("rand_")]
+    assert len(rand) == len(a.model.chns)
+    assert all(torch.equal(getattr(a, k), getattr(b, k).cpu()) for k in rand)
+    assert not any(torch.equal(getattr(a, k), getattr(c, k)) for k in rand)
+    assert all(getattr(b, k).device.type == DEV for k in rand)
+    assert not any(k.startswith("rand_") for k in a.state_dict())
+    with torch.device(DEV):  # a device context must not move the draw off the CPU generator
+        d = build_loss({"type": "fdl_loss", "model": "vgg"})
+    assert all(torch.equal(getattr(a, k), getattr(d, k).cpu()) for k in rand)
+    norms = a.rand_0.flatten(1).norm(dim=1)
+    torch.testing.assert_close(norms, torch.ones_like(norms))
+
+

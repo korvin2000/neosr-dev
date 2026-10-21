@@ -17,9 +17,6 @@ PATTERNS = {
     "registry": r"_REGISTRY\b",
 }
 
-_LOSSES = (
-    "basic consistency dists fdl ff gan kl ldl msswd ncc ssim vgg_perceptual"
-).split()
 
 # pattern -> files (relative to neosr/) that may still contain it
 ALLOW: dict[str, set[str]] = {
@@ -41,7 +38,6 @@ ALLOW: dict[str, set[str]] = {
         "utils/options.py",
     },
     "registry": {
-        *(f"losses/{loss}_loss.py" for loss in _LOSSES),
         "models/__init__.py",
         "models/image.py",
         "models/otf.py",

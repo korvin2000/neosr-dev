@@ -2,7 +2,7 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
-from neosr.utils.registry import LOSS_REGISTRY
+from neosr.losses.base import Loss
 
 _reduction_modes: list[str] = ["none", "mean", "sum"]
 
@@ -21,28 +21,25 @@ def huber_loss(
     return F.huber_loss(pred, target, reduction=reduction, delta=delta)
 
 
-@LOSS_REGISTRY.register()
-class L1Loss(nn.Module):
+class L1Loss(Loss):
     """L1 (mean absolute error, MAE) loss.
 
     Args:
     ----
-        loss_weight (float): Loss weight for L1 loss. Default: 1.0.
         reduction (str): Specifies the reduction to apply to the output.
             Supported choices are 'none' | 'mean' | 'sum'. Default: 'mean'.
 
     """
 
-    def __init__(self, loss_weight: float = 1.0, reduction: str = "mean") -> None:
+    def __init__(self, reduction: str = "mean") -> None:
         super().__init__()
         if reduction not in {"none", "mean", "sum"}:
             msg = f"Unsupported reduction mode: {reduction}. Supported ones are: {_reduction_modes}"
             raise ValueError(msg)
 
-        self.loss_weight = loss_weight
         self.reduction = reduction
 
-    def forward(self, pred: Tensor, target: Tensor, **kwargs) -> Tensor:  # noqa: ARG002
+    def forward(self, pred: Tensor, target: Tensor) -> Tensor:
         """Args:
         ----
             pred (Tensor): of shape (N, C, H, W). Predicted tensor.
@@ -50,31 +47,28 @@ class L1Loss(nn.Module):
             weight (Tensor, optional): of shape (N, C, H, W). Element-wise weights. Default: None.
 
         """
-        return self.loss_weight * l1_loss(pred, target, reduction=self.reduction)
+        return l1_loss(pred, target, reduction=self.reduction)
 
 
-@LOSS_REGISTRY.register()
-class MSELoss(nn.Module):
+class MSELoss(Loss):
     """MSE (L2) loss.
 
     Args:
     ----
-        loss_weight (float): Loss weight for MSE loss. Default: 1.0.
         reduction (str): Specifies the reduction to apply to the output.
             Supported choices are 'none' | 'mean' | 'sum'. Default: 'mean'.
 
     """
 
-    def __init__(self, loss_weight: float = 1.0, reduction: str = "mean") -> None:
+    def __init__(self, reduction: str = "mean") -> None:
         super().__init__()
         if reduction not in {"none", "mean", "sum"}:
             msg = f"Unsupported reduction mode: {reduction}. Supported ones are: {_reduction_modes}"
             raise ValueError(msg)
 
-        self.loss_weight = loss_weight
         self.reduction = reduction
 
-    def forward(self, pred: Tensor, target: Tensor, **kwargs) -> Tensor:  # noqa: ARG002
+    def forward(self, pred: Tensor, target: Tensor) -> Tensor:
         """Args:
         ----
             pred (Tensor): of shape (N, C, H, W). Predicted tensor.
@@ -82,16 +76,14 @@ class MSELoss(nn.Module):
             weight (Tensor, optional): of shape (N, C, H, W). Element-wise weights. Default: None.
 
         """
-        return self.loss_weight * mse_loss(pred, target, reduction=self.reduction)
+        return mse_loss(pred, target, reduction=self.reduction)
 
 
-@LOSS_REGISTRY.register()
-class HuberLoss(nn.Module):
+class HuberLoss(Loss):
     """HuberLoss
 
     Args:
     ----
-        loss_weight (float): Loss weight. Default: 1.0.
         reduction (str): Specifies the reduction to apply to the output.
             Supported choices are 'none' | 'mean' | 'sum'. Default: 'mean'.
         delta (float): Specifies the threshold at which to change between
@@ -99,24 +91,16 @@ class HuberLoss(nn.Module):
 
     """
 
-    def __init__(
-        self, loss_weight: float = 1.0, reduction: str = "mean", delta: float = 1.0
-    ) -> None:
+    def __init__(self, reduction: str = "mean", delta: float = 1.0) -> None:
         super().__init__()
         if reduction not in {"none", "mean", "sum"}:
             msg = f"Unsupported reduction mode: {reduction}. Supported ones are: {_reduction_modes}"
             raise ValueError(msg)
 
-        self.loss_weight = loss_weight
         self.reduction = reduction
         self.delta = delta
 
-    def forward(
-        self,
-        pred: Tensor,
-        target: Tensor,
-        **kwargs,  # noqa: ARG002
-    ) -> Tensor:
+    def forward(self, pred: Tensor, target: Tensor) -> Tensor:
         """Args:
         ----
             pred (Tensor): of shape (N, C, H, W). Predicted tensor.
@@ -124,13 +108,10 @@ class HuberLoss(nn.Module):
             weight (Tensor, optional): of shape (N, C, H, W). Element-wise weights. Default: None.
 
         """
-        return self.loss_weight * huber_loss(
-            pred, target, delta=self.delta, reduction=self.reduction
-        )
+        return huber_loss(pred, target, delta=self.delta, reduction=self.reduction)
 
 
-@LOSS_REGISTRY.register()
-class chc_loss(nn.Module):
+class chc_loss(Loss):
     """Clipped pseudo-Huber with Cosine Similarity Loss.
 
        For reference on research, see:
@@ -139,7 +120,6 @@ class chc_loss(nn.Module):
 
     Args:
     ----
-        loss_weight (float): Loss weight. Default: 1.0.
         reduction (str): Specifies the reduction to apply to the output.
             Supported choices are 'none' | 'mean' | 'sum'. Default: 'mean'.
         criterion (str): Specifies the loss to apply.
@@ -152,7 +132,6 @@ class chc_loss(nn.Module):
 
     def __init__(
         self,
-        loss_weight: float = 1.0,
         reduction: str = "mean",
         criterion: str = "huber",
         loss_lambda: float = 0,
@@ -169,7 +148,6 @@ class chc_loss(nn.Module):
             msg = f"{criterion} not implemented."
             raise NotImplementedError(msg)
 
-        self.loss_weight = loss_weight
         self.reduction = reduction
         self.criterion = criterion
         self.similarity = nn.CosineSimilarity(dim=1)
@@ -177,12 +155,7 @@ class chc_loss(nn.Module):
         self.clip_min = clip_min  # 1/255 = 0.003921
         self.clip_max = clip_max
 
-    def forward(
-        self,
-        pred: Tensor,
-        target: Tensor,
-        **kwargs,  # noqa: ARG002
-    ) -> Tensor:
+    def forward(self, pred: Tensor, target: Tensor) -> Tensor:
         """Args:
         ----
             pred (Tensor): of shape (N, C, H, W). Predicted tensor.
@@ -204,4 +177,4 @@ class chc_loss(nn.Module):
             loss = loss.mean()
         elif self.reduction == "sum":
             loss = loss.sum()
-        return self.loss_weight * loss
+        return loss

@@ -4,15 +4,14 @@ import torch
 from torch import Tensor, nn
 from torchvision.transforms import GaussianBlur
 
+from neosr.losses.base import Loss
 from neosr.losses.basic_loss import chc_loss
-from neosr.utils.registry import LOSS_REGISTRY
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 
-@LOSS_REGISTRY.register()
-class consistency_loss(nn.Module):
+class consistency_loss(Loss):
     """Color and Luma Consistency loss using Oklab and CIE L*.
 
     Args:
@@ -21,7 +20,6 @@ class consistency_loss(nn.Module):
         avgpool (bool): apply downscaling after conversion. Default: False
         scale (int): value used by avgpool. Default: 4
         cosim (bool): add the luma/chroma cosine-similarity term near convergence. Default: True
-        loss_weight (float): weight for colorloss. Default: 1.0
 
     """
 
@@ -32,14 +30,12 @@ class consistency_loss(nn.Module):
         cosim: bool = True,
         saturation: float = 1.0,
         brightness: float = 1.0,
-        loss_weight: float = 1.0,
     ) -> None:
         super().__init__()
         self.use_blur = blur
         self.cosim = cosim
         self.saturation = saturation
         self.brightness = brightness
-        self.loss_weight = loss_weight
         self.register_buffer(
             "mean", torch.tensor((0.5, 0.5)).view(1, 2, 1, 1), persistent=False
         )
@@ -195,4 +191,4 @@ class consistency_loss(nn.Module):
             cosim = 0.5 * cosim_chroma + 0.5 * cosim_luma
             loss = loss + torch.where(cosim < 1e-3, cosim, 0.0)
 
-        return loss * self.loss_weight
+        return loss

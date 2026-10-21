@@ -1,20 +1,10 @@
-from torch import Tensor, nn
+from torch import Tensor
 
-from neosr.utils.registry import LOSS_REGISTRY
+from neosr.losses.base import Loss
 
 
-@LOSS_REGISTRY.register()
-class ncc_loss(nn.Module):
-    """Normalized Cross-Correlation loss.
-
-    Args:
-    ----
-        loss_weight (float): weight for the loss. Default: 1.0
-    """
-
-    def __init__(self, loss_weight: float = 1.0) -> None:
-        super().__init__()
-        self.loss_weight = loss_weight
+class ncc_loss(Loss):
+    """Normalized Cross-Correlation loss."""
 
     def _cc(self, net_output: Tensor, gt: Tensor) -> Tensor:
         # correlate per (N, C); flatten() also handles channels_last
@@ -28,4 +18,4 @@ class ncc_loss(nn.Module):
 
     def forward(self, net_output: Tensor, gt: Tensor) -> Tensor:
         cc_value = self._cc(net_output, gt)
-        return (1 - ((cc_value + 1) * 0.5)) * self.loss_weight
+        return 1 - ((cc_value + 1) * 0.5)

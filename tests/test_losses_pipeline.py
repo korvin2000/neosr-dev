@@ -162,14 +162,6 @@ def test_fp32_disables_autocast(dev):
 # ---- build_loss (T3 L-D) ----------------------------------------------------------------------
 
 
-def test_build_loss_positional_old_trainer_call():
-    cfg = {"type": "L1Loss", "loss_weight": 2.0}
-    loss = build_loss(cfg)  # image.py calls build_loss(train_opt["pixel_opt"]) until W3
-    assert type(loss).__name__ == "L1Loss"
-    assert loss.loss_weight == 2.0
-    assert cfg == {"type": "L1Loss", "loss_weight": 2.0}  # input is not mutated
-
-
 def test_build_loss_errors():
     with pytest.raises(
         ConfigError, match=r"\[train.pixel_opt\] unknown type 'L1loss'.*'L1Loss'"

@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 from torchvision import models
 
-from neosr.utils.registry import LOSS_REGISTRY
+from neosr.losses.base import Loss
 
 
 class L2pooling(nn.Module):
@@ -33,8 +33,7 @@ class L2pooling(nn.Module):
         return (out + 1e-12).sqrt()
 
 
-@LOSS_REGISTRY.register()
-class dists_loss(nn.Module):
+class dists_loss(Loss):
     r"""DISTS. "Image Quality Assessment: Unifying Structure and Texture Similarity":
     https://arxiv.org/abs/2004.07728.
 
@@ -42,23 +41,20 @@ class dists_loss(nn.Module):
     ----
         as_loss (bool): True to use as loss, False for metric.
             Default: True.
-        loss_weight (float).
-            Default: 1.0.
         load_weights (bool): loads pretrained weights for DISTS.
-            Default: False.
+            Default: True.
 
     """
+
+    fp32 = True
 
     def __init__(
         self,
         as_loss: bool = True,
-        loss_weight: float = 1.0,
         load_weights: bool = True,
-        **kwargs,  # noqa: ARG002
     ) -> None:
         super().__init__()
         self.as_loss = as_loss
-        self.loss_weight = loss_weight
 
         vgg_pretrained_features = models.vgg16(weights="DEFAULT").features
         self.stage1 = torch.nn.Sequential()
@@ -136,7 +132,6 @@ class dists_loss(nn.Module):
         h_relu5_3 = h
         return [x, h_relu1_2, h_relu2_2, h_relu3_3, h_relu4_3, h_relu5_3]
 
-    @torch.amp.custom_fwd(cast_inputs=torch.float32, device_type="cuda")
     def forward(self, x: Tensor, y: Tensor) -> Tensor:
         feats0 = self.forward_once(x)
         feats1 = self.forward_once(y)
@@ -164,7 +159,6 @@ class dists_loss(nn.Module):
 
         if self.as_loss:
             out = 1 - (dist1 + dist2).mean()  # type: ignore[attr-defined]
-            out *= self.loss_weight
         else:
             out = 1 - (dist1 + dist2).squeeze()  # type: ignore[attr-defined]
 

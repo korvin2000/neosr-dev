@@ -1,18 +1,16 @@
 import torch
 import torch.fft
-from torch import Tensor, nn
+from torch import Tensor
 
-from neosr.utils.registry import LOSS_REGISTRY
+from neosr.losses.base import Loss
 
 
-@LOSS_REGISTRY.register()
-class ff_loss(nn.Module):
+class ff_loss(Loss):
     """Focal Frequency Loss.
        From: https://github.com/EndlessSora/focal-frequency-loss.
 
     Args:
     ----
-        loss_weight (float): weight for focal frequency loss. Default: 1.0
         alpha (float): the scaling factor alpha of the spectrum weight matrix for flexibility. Default: 1.0
         patch_factor (int): the factor to crop image patches for patch-based focal frequency loss. Default: 1
         ave_spectrum (bool): whether to use minibatch average spectrum. Default: False
@@ -21,9 +19,10 @@ class ff_loss(nn.Module):
 
     """
 
+    fp32 = True
+
     def __init__(
         self,
-        loss_weight: float = 1.0,
         alpha: float = 1.0,
         patch_factor: int = 1,
         ave_spectrum: bool = True,
@@ -31,7 +30,6 @@ class ff_loss(nn.Module):
         batch_matrix: bool = False,
     ) -> None:
         super().__init__()
-        self.loss_weight = loss_weight
         self.alpha = alpha
         self.patch_factor = patch_factor
         self.ave_spectrum = ave_spectrum
@@ -114,13 +112,8 @@ class ff_loss(nn.Module):
         loss = weight_matrix * freq_distance
         return torch.mean(loss)
 
-    @torch.amp.custom_fwd(cast_inputs=torch.float32, device_type="cuda")
     def forward(
-        self,
-        pred: Tensor,
-        target: Tensor,
-        matrix: Tensor | None = None,
-        **kwargs,  # noqa: ARG002
+        self, pred: Tensor, target: Tensor, matrix: Tensor | None = None
     ) -> Tensor:
         """Forward function to calculate focal frequency loss.
 
@@ -142,6 +135,4 @@ class ff_loss(nn.Module):
 
         # calculate focal frequency loss
         # lambda 50 to increase weight compared to other losses
-        loss = self.loss_formulation(pred_freq, target_freq, matrix) * 50
-
-        return loss * self.loss_weight
+        return self.loss_formulation(pred_freq, target_freq, matrix) * 50

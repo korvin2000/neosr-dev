@@ -1,22 +1,12 @@
 import torch
-from torch import Tensor, nn
+from torch import Tensor
 from torch.nn import functional as F
 
-from neosr.utils.registry import LOSS_REGISTRY
+from neosr.losses.base import Loss
 
 
-@LOSS_REGISTRY.register()
-class kl_loss(nn.Module):
-    """KL-Divergence loss.
-
-    Args:
-    ----
-        loss_weight (float): weight for the loss. Default: 1.0
-    """
-
-    def __init__(self, loss_weight: float = 1.0) -> None:
-        super().__init__()
-        self.loss_weight = loss_weight
+class kl_loss(Loss):
+    """KL-Divergence loss."""
 
     def forward(self, net_output: Tensor, gt: Tensor):
         # Convert net_output and gt to probability distributions
@@ -27,5 +17,4 @@ class kl_loss(nn.Module):
         # Compute KL divergence
         loss = F.kl_div(net_output_log_prob, gt_prob, reduction="batchmean")
         # balance loss to avoid issues
-        loss = loss * 0.03
-        return loss * self.loss_weight
+        return loss * 0.03
