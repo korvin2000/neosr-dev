@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from neosr.config import ConfigError
-from neosr.metrics import build_metric, calculate, calculate_metric
+from neosr.metrics import build_metric, calculate
 from neosr.metrics.calculate import release_metric_nets
 from neosr.utils.img_util import img2tensor, tensor2img
 
@@ -75,8 +75,8 @@ def test_psnr_ssim_match_synthetic_reference():
     data = _synthetic_pair()
     for metric, opt in METRICS.items():
         built = build_metric(opt | {"better": "higher"}, torch.device("cpu"))
-        for value in (calculate_metric(data, opt), built(data["img"], data["img2"])):
-            assert value == pytest.approx(SYNTHETIC_REFERENCE[metric], rel=1e-12, abs=0)
+        value = built(data["img"], data["img2"])
+        assert value == pytest.approx(SYNTHETIC_REFERENCE[metric], rel=1e-12, abs=0)
 
 
 def test_build_metric_config_errors():
@@ -102,7 +102,7 @@ def test_build_metric_config_errors():
 def test_psnr_ssim_match_reference(name):
     data = _pair(name)
     for metric, opt in METRICS.items():
-        value = calculate_metric(data, opt)
+        value = build_metric(opt, torch.device("cpu"))(data["img"], data["img2"])
         assert value == pytest.approx(REFERENCE[name][metric], rel=1e-12, abs=0)
 
 
@@ -204,21 +204,6 @@ def test_build_metric_forwards_exact_device(monkeypatch):
     build_metric({"type": "calculate_dists"}, device)(img, img)
     build_metric({"type": "calculate_topiq"}, device)(img, img)
     assert seen == [device, device]
-
-
-def test_calculate_metric_legacy_device_key(monkeypatch):
-    seen = []
-    monkeypatch.setattr(
-        calculate, "_calculate_net_metric", lambda *a: seen.append(a[-1]) or 0.0
-    )
-    img = np.zeros((8, 8, 3), dtype=np.uint8)
-    opt = {"type": "calculate_dists", "device": "cpu", "better": "lower"}
-    calculate_metric({"img": img, "img2": img}, opt)
-    assert seen == [torch.device("cpu")]
-    assert opt["device"] == "cpu"  # input not mutated
-    img = np.zeros((16, 16, 3), dtype=np.uint8)
-    psnr = {"type": "calculate_psnr", "device": "cpu"}
-    assert calculate_metric({"img": img, "img2": img}, psnr) == float("inf")
 
 
 LAZY_PROBE = """

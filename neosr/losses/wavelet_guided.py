@@ -419,10 +419,3 @@ class AdvView(nn.Module):
                 1, keepdim=True
             )  # RGB -> Y, as BT.601 * 255
             return self.swt(y)[0][:, 1:4] * self.band_w  # LH, HL, HH; LL dropped
-
-
-@torch.no_grad()
-def wavelet_guided(output: Tensor, gt: Tensor) -> tuple[Tensor, Tensor]:
-    """TRANSITIONAL: only keeps `import neosr` alive through image.py:17; deleted with the old trainer (W3)."""
-    view = AdvView().to(gt.device)
-    return view(output, 0), view(gt, 0)

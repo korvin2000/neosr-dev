@@ -1,5 +1,6 @@
 import errno
 import logging
+import os
 import random
 from collections import OrderedDict
 from pathlib import Path
@@ -244,6 +245,16 @@ def test_atomic_save_overwrites(tmp_path):
     ck.atomic_save({"a": 2}, p)
     assert torch.load(p, weights_only=True) == {"a": 2}
     assert _no_tmp(tmp_path)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+def test_atomic_save_honours_umask(tmp_path):
+    old = os.umask(0o027)
+    try:
+        ck.atomic_save({"a": 1}, tmp_path / "x.pth")
+    finally:
+        os.umask(old)
+    assert (tmp_path / "x.pth").stat().st_mode & 0o777 == 0o640  # mkstemp gives 0600
 
 
 # latest_state / prune_states

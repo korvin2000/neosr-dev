@@ -91,11 +91,19 @@ def load_weights(
         log.warning(f"unexpected: {k}")
 
 
+def _umask() -> int:
+    mask = os.umask(0)  # the only portable way to read it
+    os.umask(mask)
+    return mask
+
+
 def atomic_save(obj: Any, path: str | Path, attempts: int = 3) -> None:
     """Write to a sibling temp file, fsync, then rename over `path`: readers never see a partial file."""
     path = Path(path)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
+        # mkstemp makes 0600; torch.save used to honour the umask
+        Path(tmp).chmod(0o666 & ~_umask())
         with os.fdopen(fd, "wb") as f:
             torch.save(obj, f)
             f.flush()

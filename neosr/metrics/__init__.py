@@ -10,7 +10,7 @@ import torch
 from neosr.config import ConfigError
 from neosr.utils.factory import resolve
 
-__all__ = ["METRICS", "build_metric", "calculate_metric"]
+__all__ = ["METRICS", "build_metric"]
 
 METRICS = {
     "calculate_psnr": ("calculate", None),
@@ -40,12 +40,3 @@ def build_metric(
         msg = f"[{section}] {name}: {err}"
         raise ConfigError(msg) from err
     return partial(fn, **kwargs, **extra)
-
-
-def calculate_metric(data: Mapping[str, np.ndarray], opt: Mapping[str, Any]) -> float:
-    """Transitional: the old `models/image.py` call shape, until wave W3 builds each metric once."""
-    opt = dict(opt)  # a legacy `device` key still picks the device here
-    device = torch.device(
-        opt.pop("device", None) or ("cuda" if torch.cuda.is_available() else "cpu")
-    )
-    return build_metric(opt, device)(data["img"], data["img2"])

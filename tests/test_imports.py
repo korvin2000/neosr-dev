@@ -22,6 +22,7 @@ MODULES = [
     "neosr.utils.dist_util",
     "neosr.losses",
     "neosr.metrics",
+    "neosr.models",
     "neosr.optimizers",
     *sorted(XFAIL),
 ]

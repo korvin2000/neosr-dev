@@ -24,8 +24,6 @@ ALLOW: dict[str, set[str]] = {
     "parse_options": {"archs/arch_util.py", "optimizers/soap_sf.py", "utils/options.py"},
     "set_default_device": set(),
     "sys.exit": {
-        "models/base.py",
-        "models/image.py",
         "utils/lmdb_util.py",
         "utils/options.py",
     },
@@ -33,14 +31,10 @@ ALLOW: dict[str, set[str]] = {
     "bare except": {
         "archs/arch_util.py",
         "archs/esrgan_arch.py",
-        "models/base.py",
         "utils/img_util.py",
         "utils/options.py",
     },
     "registry": {
-        "models/__init__.py",
-        "models/image.py",
-        "models/otf.py",
         "utils/registry.py",
     },
 }

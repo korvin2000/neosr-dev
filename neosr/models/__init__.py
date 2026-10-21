@@ -1,48 +1,26 @@
-import importlib
-from collections.abc import Callable
-from copy import deepcopy
-from pathlib import Path
-from typing import Any
+"""Trainer table (design T3 §3.2): `model_type` -> class in `neosr.models.<module>`, imported on use."""
 
-from neosr.utils import get_root_logger, scandir
-from neosr.utils.registry import MODEL_REGISTRY
+from typing import TYPE_CHECKING, Any
 
+from neosr.utils import get_root_logger
+from neosr.utils.factory import resolve
 
-__all__ = ["build_model"]
+if TYPE_CHECKING:
+    from neosr.models.base import base
+    from neosr.runtime import Runtime
 
-# automatically scan and import model modules for registry
-# scan all the python files under the 'models' folder and collect files
-model_folder = Path(Path(__file__).resolve()).parent
-model_filenames = [
-    Path(v).stem
-    for v in scandir(str(model_folder), suffix=".py")
-    if Path(v).stem != "__init__"
-]
+__all__ = ["MODELS", "build_model"]
 
-# import all the model modules
-_model_modules = [
-    importlib.import_module(f"neosr.models.{file_name}")
-    for file_name in model_filenames
-]
+MODELS: dict[str, tuple[str, str | None]] = {
+    "image": ("image", None),
+    "otf": ("otf", None),
+}
 
 
-def build_model(opt: dict[str, Any]) -> Callable | object:
-    """Build model from options.
-
-    Args:
-    ----
-        opt (dict): Configuration. It must contain:
-            model_type (str): Model type.
-
-    """
-    opt = deepcopy(opt)
-    model = MODEL_REGISTRY.get(opt["model_type"])(opt)  # type: ignore[operator]
-    logger = get_root_logger()
-    logger.info(f"Using model [{model.__class__.__name__}].")
-    total_params = sum(p.numel() for p in model.net_g.parameters())
-    logger.info(f'[{model.__class__.__name__}] generator parameters: {total_params:,d}')
-    if model.net_d is not None:
-        total_params = sum(p.numel() for p in model.net_d.parameters())
-        logger.info(f'[{model.__class__.__name__}] discriminator parameters: {total_params:,d}')
-
+def build_model(opt: dict[str, Any], runtime: "Runtime") -> "base":
+    """Build the trainer; with `path.resume_state` set (training) it also resumes (T2 §3 step 7)."""
+    model = resolve(MODELS, "neosr.models", "model_type", opt["model_type"])(
+        opt, runtime
+    )
+    get_root_logger().info(f"Using model [{type(model).__name__}].")
     return model
