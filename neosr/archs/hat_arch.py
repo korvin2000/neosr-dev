@@ -5,6 +5,7 @@ import torch
 from einops import rearrange
 from torch import nn
 from torch.nn.init import trunc_normal_
+from torch.utils.checkpoint import checkpoint
 
 from neosr.archs.arch_util import DropPath, net_opt, to_2tuple
 from neosr.utils.registry import ARCH_REGISTRY
@@ -201,7 +202,7 @@ class WindowAttention(nn.Module):
             nw = mask.shape[0]
             attn = attn.view(b_ // nw, nw, self.num_heads, n, n) + mask.unsqueeze(
                 1
-            ).unsqueeze(0)
+            ).unsqueeze(0).to(attn.dtype)
             attn = attn.view(-1, self.num_heads, n, n)
             attn = self.softmax(attn)
         else:
@@ -855,6 +856,7 @@ class hat(nn.Module):
         img_range: Image range. 1. or 255.
         upsampler: The reconstruction reconstruction module. 'pixelshuffle'/'pixelshuffledirect'/'nearest+conv'/None
         resi_connection: The convolutional block before residual connection. '1conv'/'3conv'
+        use_checkpoint (bool): Activation checkpointing per RHAG while training. Default: False
 
     """
 
@@ -893,9 +895,11 @@ class hat(nn.Module):
         img_range=1.0,
         upsampler="",
         resi_connection="1conv",
+        use_checkpoint=False,
         **kwargs,
     ):
         super(hat, self).__init__()
+        self.use_checkpoint = use_checkpoint
 
         self.window_size = window_size
         self.shift_size = window_size // 2
@@ -905,11 +909,10 @@ class hat(nn.Module):
         num_out_ch = in_chans
         num_feat = 64
         self.img_range = img_range
-        if in_chans == 3:
-            rgb_mean = (0.5, 0.5, 0.5)
-            self.mean = torch.Tensor(rgb_mean).view(1, 3, 1, 1)
-        else:
-            self.mean = torch.zeros(1, 1, 1, 1)
+        mean = (
+            torch.full((1, 3, 1, 1), 0.5) if in_chans == 3 else torch.zeros(1, 1, 1, 1)
+        )
+        self.register_buffer("mean", mean, persistent=False)
         self.upscale = upscale
         self.upsampler = upsampler
 
@@ -1067,10 +1070,10 @@ class hat(nn.Module):
         relative_position_index = relative_coords.sum(-1)
         return relative_position_index
 
-    def calculate_mask(self, x_size):
+    def calculate_mask(self, x_size, device=None):
         # calculate attention mask for SW-MSA
         h, w = x_size
-        img_mask = torch.zeros((1, h, w, 1))  # 1 h w 1
+        img_mask = torch.zeros((1, h, w, 1), device=device)  # 1 h w 1
         h_slices = (
             slice(0, -self.window_size),
             slice(-self.window_size, -self.shift_size),
@@ -1111,7 +1114,7 @@ class hat(nn.Module):
 
         # Calculate attention mask and relative position index in advance to speed up inference.
         # The original code is very time-cosuming for large window size.
-        attn_mask = self.calculate_mask(x_size).to(x.device)
+        attn_mask = self.calculate_mask(x_size, x.device)
         params = {
             "attn_mask": attn_mask,
             "rpi_sa": self.relative_position_index_SA,
@@ -1124,16 +1127,31 @@ class hat(nn.Module):
         x = self.pos_drop(x)
 
         for layer in self.layers:
-            x = layer(x, x_size, params)
+            if self.use_checkpoint and self.training:
+                x = checkpoint(layer, x, x_size, params, use_reentrant=False)
+            else:
+                x = layer(x, x_size, params)
 
         x = self.norm(x)  # b seq_len c
         x = self.patch_unembed(x, x_size)
 
         return x
 
+    def check_image_size(self, x):
+        # pad to a multiple of window_size (reflect needs pad < size)
+        _, _, h, w = x.size()
+        ph, pw = (-h) % self.window_size, (-w) % self.window_size
+        if ph or pw:
+            mode = "reflect" if ph < h and pw < w else "replicate"
+            x = nn.functional.pad(x, (0, pw, 0, ph), mode)
+        return x
+
     def forward(self, x):
-        self.mean = self.mean.type_as(x)
-        x = (x - self.mean) * self.img_range
+        h, w = x.shape[2:]
+        x = self.check_image_size(x)
+        wp = x.shape[3]
+        mean = self.mean.to(x)
+        x = (x - mean) * self.img_range
 
         if self.upsampler == "pixelshuffle":
             # for classical SR
@@ -1142,9 +1160,10 @@ class hat(nn.Module):
             x = self.conv_before_upsample(x)
             x = self.conv_last(self.upsample(x))
 
-        x = x / self.img_range + self.mean
+        x = x / self.img_range + mean
+        s = x.shape[3] // wp  # output/input scale
 
-        return x
+        return x[:, :, : h * s, : w * s]
 
 
 @ARCH_REGISTRY.register()

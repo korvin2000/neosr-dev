@@ -207,8 +207,8 @@ class Spatial_Attention(nn.Module):
         elif idx == 1:
             W_sp, H_sp = self.split_size[0], self.split_size[1]
         else:
-            print("ERROR MODE", idx)
-            exit(0)
+            msg = f"Spatial_Attention: idx must be 0 or 1, got {idx}"
+            raise ValueError(msg)
         self.H_sp = H_sp
         self.W_sp = W_sp
 
@@ -285,7 +285,7 @@ class Spatial_Attention(nn.Module):
             nW = mask.shape[0]
             attn = attn.view(B, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(
                 0
-            )
+            ).to(attn.dtype)
             attn = attn.view(-1, self.num_heads, N, N)
 
         attn = nn.functional.softmax(attn, dim=-1, dtype=attn.dtype)
@@ -400,11 +400,11 @@ class Axial_Spatial_Attention(nn.Module):
             nn.Conv2d(dim // 16, 1, kernel_size=1),
         )
 
-    def calculate_mask(self, H, W):
+    def calculate_mask(self, H, W, device=None):
         # The implementation builds on Swin Transformer code https://github.com/microsoft/Swin-Transformer/blob/main/models/swin_transformer.py
         # calculate attention mask for shift window
-        img_mask_0 = torch.zeros((1, H, W, 1))  # 1 H W 1 idx=0
-        img_mask_1 = torch.zeros((1, H, W, 1))  # 1 H W 1 idx=1
+        img_mask_0 = torch.zeros((1, H, W, 1), device=device)  # 1 H W 1 idx=0
+        img_mask_1 = torch.zeros((1, H, W, 1), device=device)  # 1 H W 1 idx=1
         h_slices_0 = (
             slice(0, -self.split_size[0]),
             slice(-self.split_size[0], -self.shift_size[0]),
@@ -526,9 +526,9 @@ class Axial_Spatial_Attention(nn.Module):
             qkv_1 = qkv_1.view(3, B, _L, C // 2)
 
             if self.patches_resolution != _H or self.patches_resolution != _W:
-                mask_tmp = self.calculate_mask(_H, _W)
-                x1_shift = self.attns[0](qkv_0, _H, _W, mask=mask_tmp[0].to(x.device))
-                x2_shift = self.attns[1](qkv_1, _H, _W, mask=mask_tmp[1].to(x.device))
+                mask_tmp = self.calculate_mask(_H, _W, x.device)
+                x1_shift = self.attns[0](qkv_0, _H, _W, mask=mask_tmp[0])
+                x2_shift = self.attns[1](qkv_1, _H, _W, mask=mask_tmp[1])
             else:
                 x1_shift = self.attns[0](qkv_0, _H, _W, mask=self.attn_mask_0)
                 x2_shift = self.attns[1](qkv_1, _H, _W, mask=self.attn_mask_1)
@@ -965,11 +965,10 @@ class dat(nn.Module):
         num_out_ch = in_chans
         num_feat = 64
         self.img_range = img_range
-        if in_chans == 3:
-            rgb_mean = (0.5, 0.5, 0.5)
-            self.mean = torch.Tensor(rgb_mean).view(1, 3, 1, 1)
-        else:
-            self.mean = torch.zeros(1, 1, 1, 1)
+        mean = (
+            torch.full((1, 3, 1, 1), 0.5) if in_chans == 3 else torch.zeros(1, 1, 1, 1)
+        )
+        self.register_buffer("mean", mean, persistent=False)
         self.upscale = upscale
         self.upsampler = upsampler
 
@@ -1058,8 +1057,8 @@ class dat(nn.Module):
 
     def forward(self, x):
         """Input: x: (B, C, H, W)"""
-        self.mean = self.mean.type_as(x)
-        x = (x - self.mean) * self.img_range
+        mean = self.mean.to(x)
+        x = (x - mean) * self.img_range
 
         if self.upsampler == "pixelshuffle":
             # for image SR
@@ -1073,7 +1072,7 @@ class dat(nn.Module):
             x = self.conv_after_body(self.forward_features(x)) + x
             x = self.upsample(x)
 
-        x = x / self.img_range + self.mean
+        x = x / self.img_range + mean
         return x
 
 

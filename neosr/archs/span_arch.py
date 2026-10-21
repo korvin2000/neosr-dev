@@ -41,8 +41,7 @@ def sequential(*args):
     modules = []
     for module in args:
         if isinstance(module, nn.Sequential):
-            for submodule in module.children():
-                modules = list(submodule)
+            modules.extend(module.children())
         elif isinstance(module, nn.Module):
             modules.append(module)
     return nn.Sequential(*modules)
@@ -55,13 +54,33 @@ def pixelshuffle_block(in_channels, out_channels, upscale_factor=2, kernel_size=
     return sequential(conv, pixel_shuffle)
 
 
+def fuse_conv3xc(sk: nn.Conv2d, conv: nn.Sequential):
+    """Fold the 1x1 skip and the 1x1-3x3-1x1 branch into one 3x3 kernel (fp32 under autocast)."""
+    with torch.autocast(sk.weight.device.type, enabled=False):
+        w1, w2, w3 = (c.weight for c in conv)
+        w = (
+            F.conv2d(w1.flip(2, 3).permute(1, 0, 2, 3), w2, padding=2, stride=1)
+            .flip(2, 3)
+            .permute(1, 0, 2, 3)
+        )
+        w = (
+            F.conv2d(w.flip(2, 3).permute(1, 0, 2, 3), w3, padding=0, stride=1)
+            .flip(2, 3)
+            .permute(1, 0, 2, 3)
+        )
+        w = w + F.pad(sk.weight, (1, 1, 1, 1))
+        if sk.bias is None:
+            return w, None
+        b1, b2, b3 = (c.bias for c in conv)
+        b = (w2 * b1.reshape(1, -1, 1, 1)).sum((1, 2, 3)) + b2
+        b = (w3 * b.reshape(1, -1, 1, 1)).sum((1, 2, 3)) + b3
+        return w, b + sk.bias
+
+
 class Conv3XC(nn.Module):
     def __init__(self, c_in, c_out, gain1=1, s=1, bias=True):
         super().__init__()
         self.bias = bias
-        self.weight_concat = None
-        self.bias_concat = None
-        self.update_params_flag = False
         self.stride = s
         gain = gain1
 
@@ -98,6 +117,7 @@ class Conv3XC(nn.Module):
             ),
         )
 
+        # deploy conv (export): fused kernel, refreshed on eval() and state_dict()
         self.eval_conv = nn.Conv2d(
             in_channels=c_in,
             out_channels=c_out,
@@ -105,61 +125,34 @@ class Conv3XC(nn.Module):
             padding=1,
             stride=s,
             bias=bias,
-        )
+        ).requires_grad_(requires_grad=False)
 
-        if self.training is False:
-            self.eval_conv.weight.requires_grad = False
-            self.eval_conv.bias.requires_grad = False
-            self.update_params()
+    def fused_kernel(self):
+        return fuse_conv3xc(self.sk, self.conv)
 
+    @torch.no_grad()
     def update_params(self):
-        w1 = self.conv[0].weight.data.clone().detach()
-        w2 = self.conv[1].weight.data.clone().detach()
-        w3 = self.conv[2].weight.data.clone().detach()
-        w = (
-            F.conv2d(w1.flip(2, 3).permute(1, 0, 2, 3), w2, padding=2, stride=1)
-            .flip(2, 3)
-            .permute(1, 0, 2, 3)
-        )
+        """Copy the fused kernel into eval_conv in place (parameter identity is kept)."""
+        w, b = self.fused_kernel()
+        self.eval_conv.weight.copy_(w)
+        if b is not None:
+            self.eval_conv.bias.copy_(b)
 
-        self.weight_concat = (
-            F.conv2d(w.flip(2, 3).permute(1, 0, 2, 3), w3, padding=0, stride=1)
-            .flip(2, 3)
-            .permute(1, 0, 2, 3)
-        )
+    def _save_to_state_dict(self, destination, prefix, keep_vars):
+        self.update_params()  # saved deploy kernel matches weights changed in any mode
+        super()._save_to_state_dict(destination, prefix, keep_vars)
 
-        sk_w = self.sk.weight.data.clone().detach()
-
-        if self.bias:
-            b1 = self.conv[0].bias.data.clone().detach()
-            b2 = self.conv[1].bias.data.clone().detach()
-            b3 = self.conv[2].bias.data.clone().detach()
-            b = (w2 * b1.reshape(1, -1, 1, 1)).sum((1, 2, 3)) + b2
-            self.bias_concat = (w3 * b.reshape(1, -1, 1, 1)).sum((1, 2, 3)) + b3
-            sk_b = self.sk.bias.data.clone().detach()
-
-        target_kernel_size = 3
-
-        H_pixels_to_pad = (target_kernel_size - 1) // 2
-        W_pixels_to_pad = (target_kernel_size - 1) // 2
-        sk_w = F.pad(
-            sk_w, [H_pixels_to_pad, H_pixels_to_pad, W_pixels_to_pad, W_pixels_to_pad]
-        )
-        self.weight_concat = self.weight_concat + sk_w
-        self.eval_conv.weight.data = self.weight_concat
-        if self.bias:
-            self.bias_concat = self.bias_concat + sk_b
-            self.eval_conv.bias.data = self.bias_concat
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if not mode:
+            self.update_params()
+        return self
 
     def forward(self, x):
         if self.training:
-            pad = 1
-            x_pad = F.pad(x, (pad, pad, pad, pad), "constant", 0)
-            out = self.conv(x_pad) + self.sk(x)
-        else:
-            self.update_params()
-            out = self.eval_conv(x)
-        return out
+            return self.conv(F.pad(x, (1, 1, 1, 1), "constant", 0)) + self.sk(x)
+        # fused on the fly: never stale, whatever changed the branch weights in eval mode
+        return F.conv2d(x, *self.fused_kernel(), stride=self.stride, padding=1)
 
 
 class SPAB(nn.Module):
@@ -223,7 +216,8 @@ class span(nn.Module):
         self.fast = fast
         self.upscale = upscale
         self.img_range = img_range
-        self.mean = torch.Tensor(rgb_mean).view(1, 3, 1, 1)
+        mean = torch.tensor(rgb_mean).view(1, 3, 1, 1)
+        self.register_buffer("mean", mean, persistent=False)
 
         self.no_norm: torch.Tensor | None
         if not norm:
@@ -276,8 +270,7 @@ class span(nn.Module):
 
     def forward(self, x):
         if self.is_norm:
-            self.mean = self.mean.type_as(x)
-            x = (x - self.mean) * self.img_range
+            x = (x - self.mean.to(x)) * self.img_range
 
         if not self.fast:
             out_feature = self.conv_1(x)

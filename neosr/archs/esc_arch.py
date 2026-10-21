@@ -112,55 +112,24 @@ class ConvolutionalAttention(nn.Module):
         nn.init.zeros_(self.dwc_proj[-1].bias)
 
     def forward(self, x: Tensor, lk_filter: Tensor) -> Tensor:
-        if self.training:
-            x1, x2 = torch.split(x, [self.pdim, x.shape[1] - self.pdim], dim=1)
+        x1, x2 = torch.split(x, [self.pdim, x.shape[1] - self.pdim], dim=1)
 
-            # Dynamic Conv
-            bs = x1.shape[0]
-            dynamic_kernel = self.dwc_proj(x[:, : self.pdim]).reshape(
-                -1, 1, self.sk_size, self.sk_size
-            )
-            x1_ = rearrange(x1, "b c h w -> 1 (b c) h w")
-            x1_ = F.conv2d(
-                x1_,
-                dynamic_kernel,
-                stride=1,
-                padding=self.sk_size // 2,
-                groups=bs * self.pdim,
-            )
-            x1_ = rearrange(x1_, "1 (b c) h w -> b c h w", b=bs, c=self.pdim)
+        # Dynamic Conv (per-sample kernels via grouped conv over the batch)
+        bs = x1.shape[0]
+        dynamic_kernel = self.dwc_proj(x1).reshape(-1, 1, self.sk_size, self.sk_size)
+        x1_ = rearrange(x1, "b c h w -> 1 (b c) h w")
+        x1_ = F.conv2d(
+            x1_,
+            dynamic_kernel,
+            stride=1,
+            padding=self.sk_size // 2,
+            groups=bs * self.pdim,
+        )
+        x1_ = rearrange(x1_, "1 (b c) h w -> b c h w", b=bs, c=self.pdim)
 
-            # Static LK Conv + Dynamic Conv
-            x1 = (
-                F.conv2d(x1, lk_filter, stride=1, padding=lk_filter.shape[-1] // 2)
-                + x1_
-            )
-
-            x = torch.cat([x1, x2], dim=1)
-        else:
-            # for GPU
-            dynamic_kernel = self.dwc_proj(x[:, : self.pdim]).reshape(
-                -1, 1, self.sk_size, self.sk_size
-            )
-            x[:, : self.pdim] = F.conv2d(
-                x[:, : self.pdim], lk_filter, stride=1, padding=13 // 2
-            ) + F.conv2d(
-                x[:, : self.pdim],
-                dynamic_kernel,
-                stride=1,
-                padding=self.sk_size // 2,
-                groups=self.pdim,
-            )
-
-            # For Mobile Conversion, uncomment the following code:
-            # x_1, x_2 = torch.split(x, [self.pdim, x.shape[1] - self.pdim], dim=1)
-            # dynamic_kernel = self.dwc_proj(x_1).reshape(16, 1, 3, 3)
-            # x_1 = F.conv2d(x_1, lk_filter, stride=1, padding=13 // 2) + F.conv2d(
-            #    x_1, dynamic_kernel, stride=1, padding=1, groups=16
-            # )
-            # x = torch.cat([x_1, x_2], dim=1)
-
-        return x
+        # Static LK Conv + Dynamic Conv
+        x1 = F.conv2d(x1, lk_filter, stride=1, padding=lk_filter.shape[-1] // 2) + x1_
+        return torch.cat([x1, x2], dim=1)
 
 
 class ConvAttnWrapper(nn.Module):
@@ -199,13 +168,14 @@ class DecomposedConvolutionalAttention(nn.Module):
         # Dynamic Conv
         kernel = self.proj(x1)
         kernel = rearrange(kernel, "b (c kh kw) 1 1 -> (b c) 1 kh kw", kh=3, kw=3)
-        n_pad = (13 - self.dynamic_kernel_size) // 2
+        ks = lk_spatial.shape[-1]
+        n_pad = (ks - self.dynamic_kernel_size) // 2
         kernel = F.pad(kernel, (n_pad, n_pad, n_pad, n_pad))
 
         x1 = F.conv2d(x1, lk_channel, padding=0)
         x1 = rearrange(x1, "b c h w -> 1 (b c) h w")
         lk_spatial = lk_spatial.repeat(b, 1, 1, 1)
-        x1 = F.conv2d(x1, kernel + lk_spatial, padding=13 // 2, groups=b * c)
+        x1 = F.conv2d(x1, kernel + lk_spatial, padding=ks // 2, groups=b * c)
         x1 = rearrange(x1, "1 (b c) h w -> b c h w", b=b, c=c)
         return torch.cat([x1, x2], dim=1)
 
@@ -616,8 +586,16 @@ def esc_light(**kwargs):
 
 
 @ARCH_REGISTRY.register()
-def esc_fp(**kwargs):
-    return esc(dim=48, num_heads=3, is_fp=True, realsr=False, **kwargs)
+def esc_fp(use_dysample: bool = False, **kwargs):
+    # DySample is realsr-only, so it must default to off here
+    return esc(
+        dim=48,
+        num_heads=3,
+        is_fp=True,
+        realsr=False,
+        use_dysample=use_dysample,
+        **kwargs,
+    )
 
 
 @ARCH_REGISTRY.register()

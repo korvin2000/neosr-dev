@@ -476,16 +476,14 @@ class HierarchicalTransformerBlock(nn.Module):
         mod_pad_h = (win_size[0] - h % win_size[0]) % win_size[0]
         mod_pad_w = (win_size[1] - w % win_size[1]) % win_size[1]
 
-        if mod_pad_h >= h or mod_pad_w >= w:
-            pad_h, pad_w = h - 1, w - 1
-            x = F.pad(x, (0, pad_w, 0, pad_h), "reflect")
-        else:
-            pad_h, pad_w = 0, 0
-
-        mod_pad_h = mod_pad_h - pad_h
-        mod_pad_w = mod_pad_w - pad_w
-
-        x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), "reflect")
+        # reflect pad must be smaller than the input, so pad in steps for windows > ~2x input;
+        # a singleton axis cannot be reflected, so fall back to replicate there
+        while mod_pad_h > 0 or mod_pad_w > 0:
+            pad_h = min(mod_pad_h, max(x.shape[2] - 1, 1))
+            pad_w = min(mod_pad_w, max(x.shape[3] - 1, 1))
+            mode = "reflect" if min(x.shape[2:]) > 1 else "replicate"
+            x = F.pad(x, (0, pad_w, 0, pad_h), mode)
+            mod_pad_h, mod_pad_w = mod_pad_h - pad_h, mod_pad_w - pad_w
         x = x.permute(0, 2, 3, 1).contiguous()
         return x
 
@@ -934,11 +932,10 @@ class hit_srf(nn.Module):
         num_out_ch = in_chans
         num_feat = 64
         self.img_range = img_range
-        if in_chans == 3:
-            rgb_mean = (0.5, 0.5, 0.5)
-            self.mean = torch.Tensor(rgb_mean).view(1, 3, 1, 1)
-        else:
-            self.mean = torch.zeros(1, 1, 1, 1)
+        mean = (
+            torch.full((1, 3, 1, 1), 0.5) if in_chans == 3 else torch.zeros(1, 1, 1, 1)
+        )
+        self.register_buffer("mean", mean, persistent=False)
         self.upscale = upscale
         self.upsampler = upsampler
         self.base_win_size = base_win_size
@@ -1090,8 +1087,8 @@ class hit_srf(nn.Module):
     def forward(self, x):
         H, W = x.shape[2:]
 
-        self.mean = self.mean.type_as(x)
-        x = (x - self.mean) * self.img_range
+        mean = self.mean.to(x)
+        x = (x - mean) * self.img_range
 
         if self.upsampler == "pixelshuffle":
             # for classical SR
@@ -1126,7 +1123,7 @@ class hit_srf(nn.Module):
             res = self.conv_after_body(self.forward_features(x_first)) + x_first
             x = x + self.conv_last(res)
 
-        x = x / self.img_range + self.mean
+        x = x / self.img_range + mean
 
         return x[:, :, : H * self.upscale, : W * self.upscale]
 

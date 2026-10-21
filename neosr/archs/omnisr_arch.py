@@ -159,7 +159,7 @@ class LayerNormFunction(torch.autograd.Function):
         eps = ctx.eps
 
         N, C, H, W = grad_output.size()
-        y, var, weight = ctx.saved_variables
+        y, var, weight = ctx.saved_tensors
         g = grad_output * weight.view(1, C, 1, 1)
         mean_g = g.mean(dim=1, keepdim=True)
 
@@ -616,10 +616,7 @@ class Dropsample(nn.Module):
         if self.prob == 0.0 or (not self.training):
             return x
 
-        keep_mask = (
-            torch.FloatTensor((x.shape[0], 1, 1, 1), device=device).uniform_()
-            > self.prob
-        )
+        keep_mask = torch.rand((x.shape[0], 1, 1, 1), device=device) > self.prob
         return x * keep_mask / (1 - self.prob)
 
 
@@ -1117,7 +1114,14 @@ class omnisr_net(nn.Module):
 
 
 @ARCH_REGISTRY.register()
-def omnisr(**kwargs):
+def omnisr(upsampling: int = upscale, window_size: int = 8, **kwargs):
     return omnisr_net(
-        res_num=5, block_num=1, bias=True, pe=True, ffn_bias=True, **kwargs
+        res_num=5,
+        block_num=1,
+        bias=True,
+        pe=True,
+        ffn_bias=True,
+        upsampling=upsampling,
+        window_size=window_size,
+        **kwargs,
     )

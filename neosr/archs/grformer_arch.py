@@ -1,4 +1,6 @@
 # type: ignore
+import math
+
 import torch
 from einops import rearrange
 from torch import nn
@@ -232,11 +234,7 @@ class GRSA(nn.Module):
         # cosine attention
         attn = F.normalize(q, dim=-1) @ F.normalize(k, dim=-1).transpose(-2, -1)
 
-        # send to device
-        self.logit_scale = self.logit_scale.to(x.device)
-        logit_scale = torch.clamp(
-            self.logit_scale, max=torch.log(torch.tensor(1.0 / 0.01))
-        ).exp()
+        logit_scale = torch.clamp(self.logit_scale, max=math.log(1.0 / 0.01)).exp()
         attn = attn * logit_scale
 
         relative_position_bias_table = self.ESRPB_MLP(
@@ -255,7 +253,7 @@ class GRSA(nn.Module):
             nw = mask.shape[0]
             attn = attn.view(b_ // nw, nw, self.num_heads, n, n) + mask.unsqueeze(
                 1
-            ).unsqueeze(0)
+            ).unsqueeze(0).to(attn.dtype)
             attn = attn.view(-1, self.num_heads, n, n)
         attn = self.softmax(attn)
 
@@ -327,10 +325,10 @@ class GRSAB(nn.Module):
             attn_mask = None
         self.register_buffer("attn_mask", attn_mask)
 
-    def calculate_mask(self, x_size):
+    def calculate_mask(self, x_size, device=None):
         # calculate mask for original windows
         h, w = x_size
-        img_mask = torch.zeros((1, h, w, 1))  # 1 h w 1
+        img_mask = torch.zeros((1, h, w, 1), device=device)  # 1 h w 1
         h_slices = (
             slice(0, -self.window_size[0]),
             slice(-self.window_size[0], -self.shift_size[0]),
@@ -387,7 +385,7 @@ class GRSAB(nn.Module):
             )  # nw*b, window_size*window_size, c
         else:
             attn_windows = self.attn(
-                shifted_x, mask=self.calculate_mask(x_size).to(x.device)
+                shifted_x, mask=self.calculate_mask(x_size, x.device)
             )
         attn_windows = window_reverse(attn_windows, self.window_size, h, w)
 
@@ -508,11 +506,10 @@ class grformer(nn.Module):
         num_in_ch = in_chans
         num_out_ch = in_chans
         self.img_range = img_range
-        if in_chans == 3:
-            rgb_mean = (0.5, 0.5, 0.5)
-            self.mean = torch.Tensor(rgb_mean).view(1, 3, 1, 1)
-        else:
-            self.mean = torch.zeros(1, 1, 1, 1)
+        mean = (
+            torch.full((1, 3, 1, 1), 0.5) if in_chans == 3 else torch.zeros(1, 1, 1, 1)
+        )
+        self.register_buffer("mean", mean, persistent=False)
         self.upscale = upscale
         self.window_size = window_size
         # ------------------------- 1, shallow feature extraction ------------------------- #
@@ -592,15 +589,15 @@ class grformer(nn.Module):
     def forward(self, x):
         H, W = x.shape[2:]
         x = self.check_image_size(x)
-        self.mean = self.mean.type_as(x)
-        x = (x - self.mean) * self.img_range
+        mean = self.mean.to(x)
+        x = (x - mean) * self.img_range
 
         # for lightweight SR
         x = self.conv_first(x)
         x = self.conv_after_body(self.forward_features(x)) + x
         x = self.upsample(x)
 
-        x = x / self.img_range + self.mean
+        x = x / self.img_range + mean
 
         return x[:, :, : H * self.upscale, : W * self.upscale]
 

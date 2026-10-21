@@ -5,6 +5,7 @@ from torch import nn
 from torch.nn.init import trunc_normal_
 
 from neosr.archs.arch_util import DySample, net_opt
+from neosr.archs.span_arch import fuse_conv3xc
 from neosr.utils.registry import ARCH_REGISTRY
 
 upscale, __ = net_opt()
@@ -15,9 +16,6 @@ class Conv3XC(nn.Module):
         self, c_in: int, c_out: int, gain: int = 1, s: int = 1, bias: bool = True
     ):
         super(Conv3XC, self).__init__()
-        self.weight_concat = None
-        self.bias_concat = None
-        self.update_params_flag = False
         self.stride = s
 
         self.sk = nn.Conv2d(
@@ -60,62 +58,37 @@ class Conv3XC(nn.Module):
             stride=s,
             bias=bias,
         )
-        if self.training:
-            trunc_normal_(self.sk.weight, std=0.02)
-            trunc_normal_(self.eval_conv.weight, std=0.02)
+        trunc_normal_(self.sk.weight, std=0.02)
+        trunc_normal_(self.eval_conv.weight, std=0.02)
+        # deploy conv (export): fused kernel, refreshed on eval() and state_dict()
+        self.eval_conv.requires_grad_(requires_grad=False)
 
-        if self.training is False:
-            self.eval_conv.weight.requires_grad = False
-            self.eval_conv.bias.requires_grad = False
-            self.update_params()
+    def fused_kernel(self):
+        return fuse_conv3xc(self.sk, self.conv)
 
+    @torch.no_grad()
     def update_params(self):
-        w1 = self.conv[0].weight.data.clone().detach()
-        b1 = self.conv[0].bias.data.clone().detach()
-        w2 = self.conv[1].weight.data.clone().detach()
-        b2 = self.conv[1].bias.data.clone().detach()
-        w3 = self.conv[2].weight.data.clone().detach()
-        b3 = self.conv[2].bias.data.clone().detach()
+        """Copy the fused kernel into eval_conv in place (parameter identity is kept)."""
+        w, b = self.fused_kernel()
+        self.eval_conv.weight.copy_(w)
+        if b is not None:
+            self.eval_conv.bias.copy_(b)
 
-        w = (
-            F.conv2d(w1.flip(2, 3).permute(1, 0, 2, 3), w2, padding=2, stride=1)
-            .flip(2, 3)
-            .permute(1, 0, 2, 3)
-        )
-        b = (w2 * b1.reshape(1, -1, 1, 1)).sum((1, 2, 3)) + b2
+    def _save_to_state_dict(self, destination, prefix, keep_vars):
+        self.update_params()  # saved deploy kernel matches weights changed in any mode
+        super()._save_to_state_dict(destination, prefix, keep_vars)
 
-        self.weight_concat = (
-            F.conv2d(w.flip(2, 3).permute(1, 0, 2, 3), w3, padding=0, stride=1)
-            .flip(2, 3)
-            .permute(1, 0, 2, 3)
-        )
-        self.bias_concat = (w3 * b.reshape(1, -1, 1, 1)).sum((1, 2, 3)) + b3
-
-        sk_w = self.sk.weight.data.clone().detach()
-        sk_b = self.sk.bias.data.clone().detach()
-        target_kernel_size = 3
-
-        H_pixels_to_pad = (target_kernel_size - 1) // 2
-        W_pixels_to_pad = (target_kernel_size - 1) // 2
-        sk_w = F.pad(
-            sk_w, [H_pixels_to_pad, H_pixels_to_pad, W_pixels_to_pad, W_pixels_to_pad]
-        )
-
-        self.weight_concat = self.weight_concat + sk_w
-        self.bias_concat = self.bias_concat + sk_b
-
-        self.eval_conv.weight.data = self.weight_concat
-        self.eval_conv.bias.data = self.bias_concat
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if not mode:
+            self.update_params()
+        return self
 
     def forward(self, x):
         if self.training:
-            x_pad = F.pad(x, (1, 1, 1, 1), "constant", 0)
-            out = self.conv(x_pad) + self.sk(x)
-        else:
-            self.update_params()
-            out = self.eval_conv(x)
-
-        return out
+            return self.conv(F.pad(x, (1, 1, 1, 1), "constant", 0)) + self.sk(x)
+        # fused on the fly: never stale, whatever changed the branch weights in eval mode
+        return F.conv2d(x, *self.fused_kernel(), stride=self.stride, padding=1)
 
 
 class SPAB(nn.Module):
@@ -158,8 +131,7 @@ class SPABS(nn.Module):
             feature_channels * 4, feature_channels, kernel_size=1, bias=True
         )
         self.dropout = nn.Dropout2d(drop)
-        if self.training:
-            trunc_normal_(self.conv_cat.weight, std=0.02)
+        trunc_normal_(self.conv_cat.weight, std=0.02)
 
     def forward(self, x):
         out_b1 = self.block_1(x)
@@ -188,11 +160,9 @@ class spanplus(nn.Module):
         super(spanplus, self).__init__()
 
         in_channels = num_in_ch
-        out_channels = num_out_ch if upsampler == "dys" else num_in_ch
+        out_channels = num_out_ch
         if not isinstance(blocks, list):
             blocks = [int(blocks)]
-        if not self.training:
-            drop_rate = 0
         self.feats = nn.Sequential(
             *[Conv3XC(in_channels, feature_channels, gain=2, s=1)]
             + [SPABS(feature_channels, n_blocks, drop_rate) for n_blocks in blocks]

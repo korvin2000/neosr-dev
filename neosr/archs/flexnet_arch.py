@@ -102,7 +102,7 @@ class OmniShift(nn.Module):
         )
         self.alpha = nn.Parameter(torch.randn(4), requires_grad=True)
 
-        # Define the layers for testing
+        # deploy conv (export): fused kernel, refreshed on eval() and state_dict()
         self.conv5x5_reparam = nn.Conv2d(
             in_channels=dim,
             out_channels=dim,
@@ -110,8 +110,7 @@ class OmniShift(nn.Module):
             padding=2,
             groups=dim,
             bias=False,
-        )
-        self.repram_flag = True
+        ).requires_grad_(requires_grad=False)
 
     def forward_train(self, x):
         out1x1 = self.conv1x1(x)
@@ -125,39 +124,38 @@ class OmniShift(nn.Module):
             + self.alpha[3] * out5x5
         )
 
+    def fused_kernel(self):
+        """Identity, conv1x1, conv3x3 and conv5x5 folded into one depth-wise 5x5 kernel."""
+        with torch.autocast(self.alpha.device.type, enabled=False):
+            padded_weight_1x1 = F.pad(self.conv1x1.weight, (2, 2, 2, 2))
+            padded_weight_3x3 = F.pad(self.conv3x3.weight, (1, 1, 1, 1))
+            identity_weight = F.pad(torch.ones_like(self.conv1x1.weight), (2, 2, 2, 2))
+            return (
+                self.alpha[0] * identity_weight
+                + self.alpha[1] * padded_weight_1x1
+                + self.alpha[2] * padded_weight_3x3
+                + self.alpha[3] * self.conv5x5.weight
+            )
+
+    @torch.no_grad()
     def reparam_5x5(self):
-        # Combine the parameters of conv1x1, conv3x3, and conv5x5 to form a single 5x5 depth-wise convolution
+        self.conv5x5_reparam.weight.copy_(self.fused_kernel())
 
-        padded_weight_1x1 = F.pad(self.conv1x1.weight, (2, 2, 2, 2))
-        padded_weight_3x3 = F.pad(self.conv3x3.weight, (1, 1, 1, 1))
+    def _save_to_state_dict(self, destination, prefix, keep_vars):
+        self.reparam_5x5()  # saved deploy kernel matches weights changed in any mode
+        super()._save_to_state_dict(destination, prefix, keep_vars)
 
-        identity_weight = F.pad(torch.ones_like(self.conv1x1.weight), (2, 2, 2, 2))
-
-        combined_weight = (
-            self.alpha[0] * identity_weight
-            + self.alpha[1] * padded_weight_1x1
-            + self.alpha[2] * padded_weight_3x3
-            + self.alpha[3] * self.conv5x5.weight
-        )
-
-        device = self.conv5x5_reparam.weight.device
-
-        combined_weight = combined_weight.to(device)
-
-        self.conv5x5_reparam.weight = nn.Parameter(combined_weight)
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if not mode:
+            self.reparam_5x5()
+        return self
 
     def forward(self, x):
         if self.training:
-            self.repram_flag = True
-            out = self.forward_train(x)
-        elif not self.training and self.repram_flag:
-            self.reparam_5x5()
-            self.repram_flag = False
-            out = self.conv5x5_reparam(x)
-        elif not self.training and not self.repram_flag:
-            out = self.conv5x5_reparam(x)
-
-        return out
+            return self.forward_train(x)
+        # fused on the fly: never stale, whatever changed the branch weights in eval mode
+        return F.conv2d(x, self.fused_kernel(), padding=2, groups=self.conv5x5.groups)
 
 
 class LMLTVIT(nn.Module):
@@ -212,7 +210,7 @@ class LMLTVIT(nn.Module):
 
     def get_lepe(self, x, func):
         B, _N, C = x.shape
-        H = W = 8
+        H = W = self.window_size
         x = x.transpose(-2, -1).contiguous().view(B, C, H, W)
 
         H_sp, W_sp = self.window_size, self.window_size
@@ -247,14 +245,16 @@ class LMLTVIT(nn.Module):
         v, lepe = self.get_lepe(v, self.get_v)
 
         if self.flash_attn:
-            with torch.no_grad():
-                x = (
-                    nn.functional.scaled_dot_product_attention(
-                        q, k, v, scale=self.scale, dropout_p=self.attn_drop_v
-                    )
-                    + lepe
+            x = (
+                F.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    scale=self.scale,
+                    dropout_p=self.attn_drop_v if self.training else 0.0,
                 )
-                x = x.transpose(1, 2).reshape(_B, _N, C)
+                + lepe
+            )
         else:
             attn = (q @ k.transpose(-2, -1)) * self.scale
             attn = attn.softmax(dim=-1)
@@ -641,11 +641,13 @@ class flexnet(nn.Module):
         if flash_attn:
             self.register_buffer("flash_attn", torch.zeros(1, dtype=torch.bool))
         self.pipeline_type = pipeline_type
+        # python int (not the buffer): no device sync / graph break when padding
+        self.pad_size = window_size * (8 if pipeline_type == "meta" else 1)
         self.scale = scale
         self.short_cut = ConvBlock(inp_channels, dim)
         self.in_to_feat = nn.Conv2d(inp_channels, dim, 3, 1, 1)
-        self.attn_drop = attn_drop if self.training else 0
-        self.proj_drop = proj_drop if self.training else 0
+        self.attn_drop = attn_drop
+        self.proj_drop = proj_drop
         self.pipeline = (
             LinearPipeline(
                 dim,
@@ -687,12 +689,12 @@ class flexnet(nn.Module):
 
     def check_img_size(self, x, resolution):
         h, w = resolution
-        scaled_size = self.window_size.to(int)
-        if self.pipeline_type == "meta":
-            scaled_size *= 8
+        scaled_size = self.pad_size
         mod_pad_h = (scaled_size - h % scaled_size) % scaled_size
         mod_pad_w = (scaled_size - w % scaled_size) % scaled_size
-        return F.pad(x, (0, mod_pad_w, 0, mod_pad_h), "reflect")
+        # reflect needs pad < size; tiny inputs fall back to replicate
+        mode = "reflect" if mod_pad_h < h and mod_pad_w < w else "replicate"
+        return F.pad(x, (0, mod_pad_w, 0, mod_pad_h), mode)
 
     def forward(self, x):
         _, _, h, w = x.size()

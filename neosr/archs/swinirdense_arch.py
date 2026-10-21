@@ -142,12 +142,10 @@ class WindowAttention(nn.Module):
             # The context manager might break graphs when using .compile(),
             # solution seems to use it outside SDPA instead.
 
-            with torch.no_grad():
-                # TODO
-                #with nn.attention.sdpa_kernel(nn.attention.SDPBackend.FLASH_ATTENTION):
-                with torch.backends.cuda.sdp_kernel(enable_math=False):
-                    x = nn.functional.scaled_dot_product_attention(q, k, v, scale=self.scale, dropout_p=self.dropout_p)
-                    x = x.transpose(1, 2).reshape(b_, n, c)
+            x = nn.functional.scaled_dot_product_attention(
+                q, k, v, scale=self.scale,
+                dropout_p=self.dropout_p if self.training else 0.0)
+            x = x.transpose(1, 2).reshape(b_, n, c)
 
         else:
             q = q * self.scale
@@ -162,7 +160,7 @@ class WindowAttention(nn.Module):
             if mask is not None:
                 nw = mask.shape[0]
                 attn = attn.view(b_ // nw, nw, self.num_heads, n,
-                                 n) + mask.unsqueeze(1).unsqueeze(0)
+                                 n) + mask.unsqueeze(1).unsqueeze(0).to(attn.dtype)
                 attn = attn.view(-1, self.num_heads, n, n)
                 attn = self.softmax(attn)
             else:
@@ -267,10 +265,10 @@ class SwinTransformerBlock(nn.Module):
 
         self.register_buffer('attn_mask', attn_mask)
 
-    def calculate_mask(self, x_size):
+    def calculate_mask(self, x_size, device=None):
         # calculate attention mask for SW-MSA
         h, w = x_size
-        img_mask = torch.zeros((1, h, w, 1))  # 1 h w 1
+        img_mask = torch.zeros((1, h, w, 1), device=device)  # 1 h w 1
         h_slices = (slice(0, -self.window_size), slice(-self.window_size,
                                                        -self.shift_size), slice(-self.shift_size, None))
         w_slices = (slice(0, -self.window_size), slice(-self.window_size,
@@ -319,7 +317,7 @@ class SwinTransformerBlock(nn.Module):
             attn_windows = self.attn(x_windows, mask=self.attn_mask)
         else:
             attn_windows = self.attn(
-                x_windows, mask=self.calculate_mask(x_size).to(x.device))
+                x_windows, mask=self.calculate_mask(x_size, x.device))
 
         # merge windows
         attn_windows = attn_windows.view(-1,
@@ -483,7 +481,7 @@ class BasicLayer(nn.Module):
     def forward(self, x, x_size):
         for blk in self.blocks:
             if self.use_checkpoint:
-                x = checkpoint.checkpoint(blk, x)
+                x = checkpoint.checkpoint(blk, x, x_size, use_reentrant=False)
             else:
                 x = blk(x, x_size)
         
@@ -596,7 +594,7 @@ class RSTBDense(nn.Module):
         elif resi_connection == '3conv':
             # to save parameters and memory
             self.conv = nn.Sequential(
-                nn.Conv2d(dim, dim // 4, 3, 1,
+                nn.Conv2d(2*dim, dim // 4, 3, 1,
                           1), nn.LeakyReLU(negative_slope=0.2, inplace=True),
                 nn.Conv2d(dim // 4, dim // 4, 1, 1,
                           0), nn.LeakyReLU(negative_slope=0.2, inplace=True),
@@ -815,11 +813,11 @@ class swinirdense(nn.Module):
         num_out_ch = out_chans
         num_feat = 64
         self.img_range = img_range
-        if in_chans == 3:
-            rgb_mean = (0.5, 0.5, 0.5)
-            self.mean = torch.Tensor(rgb_mean).view(1, 3, 1, 1)
-        else:
-            self.mean = torch.zeros(1, 1, 1, 1)
+        self.window_size = window_size
+        mean = (
+            torch.full((1, 3, 1, 1), 0.5) if in_chans == 3 else torch.zeros(1, 1, 1, 1)
+        )
+        self.register_buffer('mean', mean, persistent=False)
         self.upscale = upscale
         self.upsampler = upsampler
 
@@ -964,9 +962,22 @@ class swinirdense(nn.Module):
 
         return x
 
+    def check_image_size(self, x):
+        # pad to a multiple of the effective window (reflect needs pad < size)
+        _, _, h, w = x.size()
+        ws = min(self.window_size, *self.patches_resolution)  # blocks clamp to img_size
+        ph, pw = (-h) % ws, (-w) % ws
+        if ph or pw:
+            mode = 'reflect' if ph < h and pw < w else 'replicate'
+            x = nn.functional.pad(x, (0, pw, 0, ph), mode)
+        return x
+
     def forward(self, x):
-        self.mean = self.mean.type_as(x)
-        x = (x - self.mean) * self.img_range
+        h, w = x.shape[2:]
+        x = self.check_image_size(x)
+        wp = x.shape[3]
+        mean = self.mean.to(x)
+        x = (x - mean) * self.img_range
 
         if self.upsampler == 'pixelshuffle':
             # for classical SR
@@ -996,9 +1007,10 @@ class swinirdense(nn.Module):
                 self.forward_features(x_first)) + x_first
             x = x + self.conv_last(res)
 
-        x = x / self.img_range + self.mean
+        x = x / self.img_range + mean
+        s = x.shape[3] // wp  # output/input scale
 
-        return x
+        return x[:, :, : h * s, : w * s]
 
     def flops(self):
         flops = 0

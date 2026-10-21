@@ -14,12 +14,10 @@ class MeanShift(nn.Conv2d):
         self, rgb_range=1.0, rgb_mean=(0.5, 0.5, 0.5), rgb_std=(1.0, 1.0, 1.0), sign=-1
     ):
         super().__init__(3, 3, kernel_size=1)
-        std = torch.Tensor(rgb_std).to("cuda")
-        self.weight.data = torch.eye(3).view(3, 3, 1, 1) / std.view(3, 1, 1, 1).to(
-            "cuda"
-        )
-        self.bias.data = sign * rgb_range * torch.Tensor(rgb_mean).to("cuda")
-        self.bias.data.div_(std)
+        std = torch.tensor(rgb_std)
+        with torch.no_grad():  # copy_ works across devices (default device may differ)
+            self.weight.copy_(torch.eye(3).view(3, 3, 1, 1) / std.view(3, 1, 1, 1))
+            self.bias.copy_(sign * rgb_range * torch.tensor(rgb_mean) / std)
         self.requires_grad = False
 
 

@@ -1,6 +1,4 @@
 # type: ignore
-import math
-
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -261,37 +259,22 @@ class eimn(nn.Module):
                     mlp_ratio=mlp_ratios,
                     drop=drop_rate,
                     drop_path=dpr[cur + j],
-                    norm=nn.BatchNorm2d,
+                    norm=norm,
                 )
                 for j in range(depths_[i])
             ])
-            norm = nn.LayerNorm(embed_dims)
             cur += depths_[i]
 
             setattr(self, f"block{i + 1}", block)
-            setattr(self, f"norm{i + 1}", norm)
+            setattr(self, f"norm{i + 1}", nn.LayerNorm(embed_dims))
 
         if freeze_param:
-            self.freeze_para()
+            self.freeze_backbone()
 
-    def freeze_param(self):
+    def freeze_backbone(self):
+        # train only the upsampling tail; norm running stats still update in train()
         for name, param in self.named_parameters():
-            # print(name, param.shape)
-            if name.split(".")[0] == "tail":
-                param.requires_grad = True
-            else:
-                param.requires_grad = False
-
-    def init_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.trunc_normal_(m, std=0.02, bias=0.0)
-            elif isinstance(m, nn.LayerNorm):
-                nn.init.constant_(m, val=1.0, bias=0.0)
-            elif isinstance(m, nn.Conv2d):
-                fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                fan_out //= m.groups
-                nn.init.normal_(m, mean=0, std=math.sqrt(2.0 / fan_out), bias=0)
+            param.requires_grad = name.split(".")[0] == "tail"
 
     def forward(self, x):
         x = self.head(x)
@@ -310,10 +293,10 @@ class eimn(nn.Module):
 
 
 @ARCH_REGISTRY.register()
-def eimn_l(scale: int = 2) -> eimn:
-    return eimn(embed_dims=64, num_stages=16)
+def eimn_l(scale: int = upscale, **kwargs) -> eimn:
+    return eimn(embed_dims=64, num_stages=16, scale=scale, **kwargs)
 
 
 @ARCH_REGISTRY.register()
-def eimn_a(scale: int = 2) -> eimn:
-    return eimn(embed_dims=64, num_stages=14)
+def eimn_a(scale: int = upscale, **kwargs) -> eimn:
+    return eimn(embed_dims=64, num_stages=14, scale=scale, **kwargs)
