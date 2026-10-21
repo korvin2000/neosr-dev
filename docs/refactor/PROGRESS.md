@@ -70,3 +70,10 @@
   Suite 838 passed. C8 notes: wavelet_guided.py (428 l) can shrink to the level-1 SWT actually used.
 - W3+W4 launched as one chain (phase-C-wave3-4): C1 trainer (t4) -> D1 entry points (t3) -> Codex review -> fix (t4) -> GPU smoke
   S1-S8 (GAN bf16, NaN rate 8 seeds, fp16, accumulate, SIGINT+resume, OTF, tiled val, test.py, convert.py) -> final fix (t4).
+- Owner asked: commit + push everything, end state = all changes in the main branch (repo default branch is `master`).
+  Merge plan (main thread decision): merge into master only at a verified, runnable point, i.e. after W3+W4 smoke passes (between the
+  W2 and W3 commits the old trainer cannot build losses). Steps then: merge origin/master (1 remote commit 332db43, a comment-only edit
+  on a calculate_topiq line that the branch rewrote -> keep the branch version) into refactor/stabilize, fast-forward master to it in the
+  main checkout (owner's uncommitted files there are not touched by the branch), push master + refactor/stabilize. Later phases
+  (C5 aether/QAT, C6 perf, C7 stability acceptance, C8 docs/cleanup) merge into master again after each is verified.
+  `git push` was blocked by the session's permission classifier (needs the owner's permission); remote URL embeds a token (rotate it).
