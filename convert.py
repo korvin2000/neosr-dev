@@ -1,17 +1,25 @@
+"""Export a generator to ONNX (design T3 D26): CPU end to end, no Runtime; the scale comes from -s.
+Exit codes: 0 ok, 1 unexpected (traceback logged), 2 ConfigError (e.g. unknown network)."""
+
+import argparse
+import logging
+import sys
 import warnings
-from copy import deepcopy
+from collections.abc import Sequence
 from os import path as osp
 from pathlib import Path
 
 import numpy as np
-import onnx
-import onnxruntime
 import torch
+from torch import nn
 
-# from onnxconverter_common.float16 import convert_float_to_float16
-# from onnxsim import simplify
 from neosr.archs import build_network
-from neosr.utils.options import parse_options
+from neosr.cli import convert_args
+from neosr.config import ConfigError
+from neosr.models.checkpoint import load_weights, read_weights
+from neosr.utils import get_root_logger
+
+log = logging.getLogger("neosr")
 
 """
 TODO
@@ -41,7 +49,7 @@ def rep_rt4ksr(net):
 
             # second step: merge the first 1x1 convolution and the next 3x3 convolution
             merged_k0k1 = F.conv2d(input=k1, weight=k0.permute(1, 0, 2, 3))
-            merged_b0b1 = b0.view(1, -1, 1, 1) * torch.ones(1, mid_feats, 3, 3).cuda()
+            merged_b0b1 = b0.view(1, -1, 1, 1) * torch.ones(1, mid_feats, 3, 3, device=b0.device)
             merged_b0b1 = F.conv2d(input=merged_b0b1, weight=k1, bias=b1)
 
             # third step: merge the remain 1x1 convolution
@@ -67,73 +75,24 @@ def rep_rt4ksr(net):
 """
 
 
-def load_net():
-    # build_network
+def load_net(args: argparse.Namespace) -> nn.Module:
+    """Build `args.network` at `args.scale` on the CPU and load `args.input` (any read_weights layout)."""
     print(f"\n-------- Attempting to build network [{args.network}].")
-    if args.network is None:
-        msg = "Please select a network using the -net option"
-        raise ValueError(msg)
     net_opt = {"type": args.network}
-
-    if args.network == "omnisr":
-        net_opt["upsampling"] = args.scale
-        net_opt["window_size"] = args.window
-
     if args.window:
         net_opt["window_size"] = args.window
-
-    load_net = torch.load(
-        args.input, map_location=torch.device("cuda"), weights_only=True
-    )
-    # find parameter key
-    print("-------- Finding parameter key...")
-    param_key: str | None = None
-    try:
-        if "params-ema" in load_net:
-            param_key = "params-ema"
-        elif "params" in load_net:
-            param_key = "params"
-        elif "params_ema" in load_net:
-            param_key = "params_ema"
-        load_net = load_net[param_key]
-    except:
-        pass
-
-    # remove unnecessary 'module.'
-    for k, v in deepcopy(load_net).items():
-        if k.startswith("module."):
-            load_net[k[7:]] = v
-            load_net.pop(k)
-
     net = build_network(net_opt, scale=args.scale)
-    # TODO
-    """
-    if args.network.startswith("rt4ksr"):
-        net = rep_rt4ksr(net)
-    else:
-    """
-    # load_network and send to device and set to eval mode
-    net.load_state_dict(load_net, strict=True)  # type: ignore[reportAttributeAccessIssue,attr-defined]
+    load_weights(net, read_weights(args.input), True, get_root_logger())
     net.eval()
-
-    # plainusr
-    if args.network == "plainusr":
-        try:
-            for module in net.modules():
-                if hasattr(module, "switch_to_deploy"):
-                    module.switch_to_deploy(args.prune)
-            print("-------- Reparametrization completed successfully.")
-        except:
-            pass
-
-    net = net.to(device="cuda", non_blocking=True)  # type: ignore[reportAttributeAccessIssue,attr-defined]
+    if args.prune:  # plainusr's block deploy is broken: export the trained form
+        log.warning("--prune: no network supports reparametrization; exported unfused")
     print(f"-------- Successfully loaded network [{args.network}].")
-    torch.cuda.empty_cache()
-
     return net
 
 
-def assert_verify(onnx_model, torch_model) -> None:
+def assert_verify(args: argparse.Namespace, onnx_model, torch_model) -> None:
+    import onnxruntime  # noqa: PLC0415
+
     if args.static is not None:
         dummy_input = torch.randn(1, *args.static, requires_grad=True)
     else:
@@ -158,7 +117,10 @@ def assert_verify(onnx_model, torch_model) -> None:
     print("-------- Model successfully verified.")
 
 
-def to_onnx() -> None:
+def to_onnx(args: argparse.Namespace) -> None:
+    import onnx  # noqa: PLC0415
+    import onnxruntime  # noqa: PLC0415
+
     # error if network can't be converted
     net_error = ["craft", "ditn"]
     if args.network in net_error:
@@ -166,7 +128,7 @@ def to_onnx() -> None:
         raise RuntimeError(msg)
 
     # load network and send to device
-    model = load_net()
+    model = load_net(args)
     # set model to eval mode
     model.eval()
 
@@ -205,20 +167,20 @@ def to_onnx() -> None:
             export_params=True,
             opset_version=args.opset,
             do_constant_folding=False,
+            dynamo=False,  # the TorchScript exporter: torch>=2.9 defaults to dynamo (needs onnxscript)
             **(dyn_axes or {}),  # type: ignore
         )
 
     print("-------- Conversion was successful. Verifying...")
     # verify onnx
     load_onnx = onnx.load(output_fp32)
-    torch.cuda.empty_cache()
     onnx.checker.check_model(load_onnx)
     print(
         f"-------- Model successfully converted to ONNX format. Saved at: {output_fp32}."
     )
     # verify outputs
     if args.nocheck is False:
-        assert_verify(output_fp32, model)
+        assert_verify(args, output_fp32, model)
 
     if args.optimize:
         print("-------- Running ONNX optimization...")
@@ -294,9 +256,24 @@ def to_onnx() -> None:
         """
 
 
-if __name__ == "__main__":
-    torch.set_default_device("cuda")
+def main(argv: Sequence[str] | None = None) -> int:
+    args = convert_args(argv)  # argparse may SystemExit(2)
+    if args.output is None:
+        args.output = str(Path(args.input).with_suffix(".onnx"))
+    get_root_logger()
     warnings.filterwarnings("ignore", category=UserWarning)
-    root_path = Path(Path(__file__) / osp.pardir).resolve()
-    __, args = parse_options(str(root_path))
-    to_onnx()
+    try:
+        to_onnx(args)
+    except ConfigError as e:
+        print(f"config error: {e}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        return 130
+    except Exception:
+        log.exception("conversion failed")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

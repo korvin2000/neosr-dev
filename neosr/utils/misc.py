@@ -1,6 +1,6 @@
+import logging
 import os
 import random
-import shutil
 import time
 from collections.abc import Iterator
 from os import path as osp
@@ -10,18 +10,6 @@ from typing import Any
 import torch
 
 from neosr.utils.dist_util import master_only
-
-
-def check_disk_space() -> int:
-    """
-    Check if there's enough free disk space in the current path.
-
-    Returns (int):
-        Free disk space in MB.
-    """
-    current_path = Path.cwd()
-    disk_usage = shutil.disk_usage(str(current_path))
-    return disk_usage.free // (1024 * 1024)
 
 
 class tc:
@@ -61,28 +49,23 @@ def mkdir_and_rename(path: str) -> None:
     """
     if Path(path).exists():
         new_name = str(path) + "_archived_" + get_time_str()
-        print(f"Path already exists. Renaming it to {new_name}", flush=True)
+        logging.getLogger("neosr").info(f"{path} exists: archived as {new_name}")
         Path(path).rename(new_name)
     Path(path).mkdir(parents=True, exist_ok=True)
 
 
 @master_only
-def make_exp_dirs(opt: dict[str, Any]) -> None:
-    """Make dirs for experiments."""
-    path_opt = opt["path"].copy()
-    if opt["is_train"]:
-        mkdir_and_rename(path_opt.pop("experiments_root"))
-    else:
-        mkdir_and_rename(path_opt.pop("results_root"))
-    for key, path in path_opt.items():
-        if (
-            ("strict_load" in key)
-            or ("pretrain_network" in key)
-            or ("resume" in key)
-            or ("param_key" in key)
-        ):
-            continue
-        Path(path).mkdir(parents=True, exist_ok=True)
+def make_exp_dirs(opt: dict[str, Any], archive: bool = True) -> None:
+    """Create the run folders. `archive` (fresh runs) first renames an existing run folder; a
+    resume passes False and keeps whatever exists."""
+    p = opt["path"]
+    root = p["experiments_root" if opt["is_train"] else "results_root"]
+    if archive:
+        mkdir_and_rename(root)
+    Path(root).mkdir(parents=True, exist_ok=True)
+    for key in ("models", "training_states", "log", "visualization"):
+        if key in p:
+            Path(p[key]).mkdir(parents=True, exist_ok=True)
 
 
 def scandir(
@@ -127,43 +110,6 @@ def scandir(
                 continue
 
     return _scandir(dir_path, suffix=suffix, recursive=recursive)
-
-
-def check_resume(opt: dict[str, Any], resume_iter: int) -> None:
-    """Check resume states and pretrain_network paths.
-
-    Args:
-    ----
-        opt (dict): Options.
-        resume_iter (int): Resume iteration.
-
-    """
-    if opt["path"].get("resume_state", None):
-        # get all the networks
-        networks = [key for key in opt if key.startswith("network_")]
-        flag_pretrain = False
-        for network in networks:
-            if opt["path"].get(f"pretrain_{network}") is not None:
-                flag_pretrain = True
-        if flag_pretrain:
-            print("NOTICE: pretrain_network_* is ignored during resuming.")
-        # set pretrained model paths
-        for network in networks:
-            name = f"pretrain_{network}"
-            basename = network.replace("network_", "")
-            if opt["path"].get("ignore_resume_networks") is None or (
-                network not in opt["path"]["ignore_resume_networks"]
-            ):
-                opt["path"][name] = (
-                    Path(opt["path"]["models"]) / f"net_{basename}_{resume_iter}.pth"
-                )
-
-        # change param_key to params in resume
-        param_keys = [key for key in opt["path"] if key.startswith("param_key")]
-        for param_key in param_keys:
-            if opt["path"][param_key] == "params_ema":
-                opt["path"][param_key] = "params"
-                # print(f'Set {param_key} to params')
 
 
 @staticmethod

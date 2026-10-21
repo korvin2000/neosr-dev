@@ -2,7 +2,6 @@
 
 import argparse
 from collections.abc import Sequence
-from pathlib import Path
 
 
 def _parser(description: str) -> argparse.ArgumentParser:
@@ -45,9 +44,7 @@ def infer_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def convert_args(
-    argv: Sequence[str] | None = None, *, root: str | Path = "."
-) -> argparse.Namespace:
+def convert_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = _parser("model conversion")
     add = parser.add_argument
     add("--input", required=True, help="Input PyTorch model path.")
@@ -60,8 +57,17 @@ def convert_args(
         default=None,
         help="Window size, for archs that take one.",
     )
-    add("--output", default=str(root), help="Output ONNX model path.")
-    add("-onnx", "--onnx", action="store_true", help="Enables ONNX conversion.")
+    add(
+        "--output",
+        default=None,
+        help="Output ONNX model path. (default: the input path with an .onnx suffix)",
+    )
+    add(
+        "-onnx",
+        "--onnx",
+        action="store_true",
+        help="Accepted for compatibility: ONNX is always exported.",
+    )
     add(
         "-prune",
         "--prune",

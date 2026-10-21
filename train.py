@@ -1,684 +1,305 @@
-# This script orchestrates the training process for super-resolution models
-# within the neosr framework. It handles configuration parsing, data loading,
-# model building, optimization, logging, validation, and checkpoint management.
+"""Training entry point (design T3 §3.7, T2 §5.1). Library code raises; only main() maps exceptions
+to exit codes: 0 done or stopped by Ctrl-C, 1 unexpected (traceback logged), 2 ConfigError, 130 a
+second Ctrl-C (the last committed checkpoint stands)."""
 
 import datetime
-import importlib
 import logging
-import math
-import re
-import subprocess
+import signal
 import sys
 import time
-from os import path as osp
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any
 
 import torch
-from torch.utils import data
-from torch.utils.data.sampler import Sampler
+from torch.utils.data import DataLoader
 
+from neosr.cli import train_args
+from neosr.config import ConfigError, load_config, validate_train
 from neosr.data import build_dataloader, build_dataset
 from neosr.data.data_sampler import EnlargedSampler
 from neosr.data.prefetch_dataloader import CUDAPrefetcher
 from neosr.models import build_model
+from neosr.models.checkpoint import latest_state
+from neosr.runtime import Runtime, setup_runtime
 from neosr.utils import (
     AvgTimer,
     MessageLogger,
-    check_disk_space,
-    check_resume,
     get_root_logger,
     get_time_str,
     init_tb_logger,
     init_wandb_logger,
     make_exp_dirs,
     mkdir_and_rename,
-    scandir,
-    tc,
 )
-from neosr.utils.options import copy_opt_file, parse_options
+from neosr.utils.dist_util import master_only
+from neosr.utils.stop import StopFlag
 
-# Ensure a supported Python version (3.10+)
-if sys.version_info < (3, 10):
-    msg = f"{tc.red}Python 3.10 or newer is required.{tc.end}"
-    raise ValueError(msg)
-
-
-def init_tb_loggers(opt: Dict[str, Any]) -> Union[Any, None]:
-    """
-    Initializes Weights & Biases (WandB) and TensorBoard loggers based on the
-    provided options dictionary. WandB is initialized before TensorBoard to
-    allow proper synchronization.
-
-    Args:
-        opt (Dict[str, Any]): The options dictionary parsed from the configuration file,
-                              containing logging-related settings.
-
-    Returns:
-        Union[Any, None]: An initialized TensorBoard logger object if `use_tb_logger`
-                          is enabled, otherwise None.
-    """
-    # Initialize WandB logger if enabled and project name is provided
-    if (
-        (opt["logger"].get("wandb") is not None)
-        and (opt["logger"]["wandb"].get("project") is not None)
-        and ("debug" not in opt["name"])
-    ):
-        # Assert that TensorBoard is also enabled when using WandB, as WandB syncs with TB
-        assert opt["logger"].get("use_tb_logger") is True, (
-            "TensorBoard should be enabled when using WandB for proper synchronization."
-        )
-        init_wandb_logger(opt)
-
-    tb_logger = None
-    # Initialize TensorBoard logger if enabled and not in debug mode
-    if opt["logger"].get("use_tb_logger") and "debug" not in opt["name"]:
-        # Construct the log directory path relative to the project root
-        tb_logger_log_dir = Path(opt["root_path"]) / "experiments" / "tb_logger" / opt["name"]
-        tb_logger = init_tb_logger(log_dir=tb_logger_log_dir)
-    return tb_logger
+ROOT = Path(__file__).resolve().parent
+log = logging.getLogger("neosr")
 
 
-def get_profile_macs():
-    """Return the torchprofile ``profile_macs`` function when available.
-
-    Raises a clear error with installation guidance when the optional
-    dependency is missing. Import is deferred to avoid a hard dependency
-    when MAC computation is not requested.
-    """
-
-    if importlib.util.find_spec("torchprofile") is None:
-        msg = (
-            "torchprofile is required to compute MACs. Install it with "
-            "`pip install torchprofile` or remove `input_size` from the configuration "
-            "to skip MAC reporting."
-        )
-        raise ModuleNotFoundError(msg)
-
-    from torchprofile import profile_macs
-
-    return profile_macs
+@master_only
+def save_config_copy(src: str | Path, dst_dir: str | Path, argv: Sequence[str]) -> None:
+    """Copy the TOML into the run folder with a provenance header (T3 D27)."""
+    src = Path(src)
+    dst = Path(dst_dir) / f"{src.stem}_{get_time_str()}{src.suffix}"
+    header = f"# GENERATE TIME: {time.asctime()}\n# CMD:\n# {' '.join(argv)}\n\n"
+    dst.write_text(header + src.read_text(encoding="utf-8"), encoding="utf-8")
 
 
-def create_train_val_dataloader(
-    opt: Dict[str, Any], logger: logging.Logger
-) -> Tuple[Union[data.DataLoader, None], Sampler, List[data.DataLoader], int, int]:
-    """
-    Creates training and validation dataloaders based on the configuration options.
-
-    Args:
-        opt (Dict[str, Any]): The options dictionary.
-        logger (logging.Logger): The logger instance for logging informational messages.
-
-    Returns:
-        Tuple[Union[data.DataLoader, None], Sampler, List[data.DataLoader], int, int]:
-            A tuple containing:
-            - train_loader (Union[data.DataLoader, None]): The training DataLoader.
-            - train_sampler (Sampler): The sampler used for the training dataset.
-            - val_loaders (List[data.DataLoader]): A list of validation DataLoaders.
-            - total_epochs (int): The total number of training epochs.
-            - total_iters (int): The total number of training iterations.
-
-    Raises:
-        SystemExit: If an unknown dataset phase is encountered in the configuration.
-    """
-    train_loader, val_loaders = None, []
-
-    for phase, dataset_opt in opt["datasets"].items():
-        if phase == "train":
-            dataset_enlarge_ratio = dataset_opt.get("dataset_enlarge_ratio", 1)
-            # Add degradations section to dataset_opt if present in global options
-            if opt.get("degradations") is not None:
-                dataset_opt.update(opt["degradations"])
-
-            train_set = build_dataset(dataset_opt)
-            train_sampler = EnlargedSampler(
-                train_set, opt["world_size"], opt["rank"], dataset_enlarge_ratio
-            )
-            num_gpu = opt.get("num_gpu", "auto")
-            train_loader = build_dataloader(
-                train_set,  # type: ignore[reportArgumentType]
-                dataset_opt,
-                num_gpu=num_gpu,
-                dist=opt["dist"],
-                sampler=train_sampler,
-                seed=opt["manual_seed"],
-            )
-
-            accumulate = dataset_opt.get("accumulate", 1)
-            num_iter_per_epoch = math.ceil(
-                len(train_set)  # type: ignore[reportArgumentType]
-                * dataset_enlarge_ratio
-                / (dataset_opt["batch_size"] * accumulate * opt["world_size"])
-            )
-            total_iters = int(opt["logger"].get("total_iter", 1000000) * accumulate)
-            total_epochs: int = math.ceil(total_iters / num_iter_per_epoch)
-
-            logger.info(
-                "Training information:"
-                f"\n-------- Starting model: {opt['name']}"
-                f"\n-------- GPUs detected: {opt['world_size']}"
-                f"\n-------- Patch size: {dataset_opt['patch_size']}"
-                f"\n-------- Dataset size: {len(train_set)}"  # type: ignore[reportArgumentType]
-                f"\n-------- Batch size per GPU: {dataset_opt['batch_size']}"
-                f"\n-------- Accumulated batches: {dataset_opt['batch_size'] * accumulate}"
-                f"\n-------- Required iterations per epoch: {num_iter_per_epoch}"
-                f"\n-------- Total epochs: {total_epochs} for total iterations {total_iters // accumulate}."
-            )
-        elif phase.split("_")[0] == "val":
-            val_set = build_dataset(dataset_opt)
-            val_loader = build_dataloader(
-                val_set,  # type: ignore[reportArgumentType]
-                dataset_opt,
-                num_gpu=opt["num_gpu"],
-                dist=opt["dist"],
-                sampler=None,
-                seed=opt["manual_seed"],
-            )
-            logger.info(f"Number of validation images/folders: {len(val_set)}")  # type: ignore[reportArgumentType]
-            val_loaders.append(val_loader)
-        else:
-            msg = f"{tc.red}Dataset phase '{phase}' is not recognized. Please check your configuration.{tc.end}"
-            logger.error(msg)
-            sys.exit(1)
-
-    # Ensure train_loader and train_sampler are initialized, if not, raise an error or handle
-    if train_loader is None or train_sampler is None: # type: ignore[reportUnboundVariable]
-        raise ValueError("Training dataloader or sampler could not be created. Check 'train' dataset configuration.")
-
-    return train_loader, train_sampler, val_loaders, total_epochs, total_iters
-
-
-def load_resume_state(opt: Dict[str, Any]) -> Union[Dict[str, Any], None]:
-    """
-    Loads the training resume state from a checkpoint file if auto-resume is enabled
-    or a specific resume path is provided in the options.
-
-    Args:
-        opt (Dict[str, Any]): The options dictionary containing resume settings.
-
-    Returns:
-        Union[Dict[str, Any], None]: The loaded resume state dictionary (e.g., epoch, iter)
-                                     if successful, otherwise None.
-    """
-    resume_state_path = None
-    if opt["auto_resume"]:
-        # Path to the directory where training states are saved
-        state_path = opt["path"]["training_states"]
-        if Path(state_path).is_dir():
-            # Find all '.state' files and pick the one with the highest iteration number
-            states = list(
-                scandir(state_path, suffix="state", recursive=False, full_path=False)
-            )
-            if len(states) != 0:
-                states = [float(v.split(".state")[0]) for v in states]
-                resume_state_path = Path(state_path) / f"{max(states):.0f}.state"
-                opt["path"]["resume_state"] = resume_state_path # Update opt for consistency
-
-    elif opt["path"].get("resume_state"):
-        # Use the explicitly provided resume state path, ensuring it's absolute
-        resume_state_path = Path(opt["root_path"]) / opt["path"]["resume_state"]
-
-    resume_state = None
-    if resume_state_path:
-        print(f"{tc.light_green}Attempting to load resume state from: {resume_state_path}{tc.end}")
-        try:
-            # Load the state dictionary, mapping it to the current CUDA device
-            resume_state = torch.load(
-                resume_state_path, map_location=torch.device("cuda")
-            )
-            # Perform a consistency check to ensure the loaded state matches current opt
-            check_resume(opt, resume_state["iter"])
-            print(f"{tc.light_green}Successfully loaded resume state. "
-                  f"Epoch: {resume_state.get('epoch', 'N/A')}, "
-                  f"Iteration: {resume_state.get('iter', 'N/A')}{tc.end}")
-        except Exception as e:
-            # Log error if loading fails and set resume_state to None to start from scratch
-            print(f"{tc.red}Error loading resume state from {resume_state_path}: {e}{tc.end}")
-            resume_state = None
-    return resume_state
-
-def generate_calib_data(opt, calib_iters: int) -> data.DataLoader:
-    """Efficient calibration data with proper device handling"""
-    # Create synthetic calibration images (0.25-0.75 range)
-    num_samples = calib_iters * opt['datasets']['train']['batch_size']
-    calib_data = torch.rand(
-        num_samples,
-        opt.get('in_chans', 3),
-        opt['datasets']['train']['patch_size'],
-        opt['datasets']['train']['patch_size'],
-        device="cpu"
-    ) * 0.5 + 0.25
-
-    # Build dataset wrapper
-    class CalibDataset(data.Dataset):
-        def __len__(self):
-            return num_samples
-
-        def __getitem__(self, idx):
-            return calib_data[idx]  # Return tensor directly
-
-    # Create dataloader without pin_memory
-    return data.DataLoader(
-        CalibDataset(),
-        batch_size=opt['datasets']['train']['batch_size'],
-        shuffle=False,
-        num_workers=0,
-        pin_memory=False  # Critical fix: disable pinning
-    )
-
-def train_pipeline(project_root: str) -> None:
-    """
-    Main training pipeline for neosr. This function orchestrates the entire
-    training process from setup to completion.
-
-    Args:
-        project_root (str): The absolute path to the project's root directory
-                            (e.g., '/home/user/Documents/GitHub/neosr-fork').
-
-    Raises:
-        NotImplementedError: If PyTorch version is too old, CUDA is unavailable,
-                             or compilation is attempted on Windows.
-        RuntimeError: If system CUDA version is older than PyTorch's target CUDA.
-        ValueError: If a crucial configuration file cannot be copied.
-        SystemExit: For critical errors that prevent training from proceeding.
-    """
-    # Verify PyTorch version is 2.4 or newer
-    if int(torch.__version__.split(".")[1]) < 4:
-        msg = f"{tc.red}Pytorch >=2.4 is required, please upgrade.{tc.end}"
-        raise NotImplementedError(msg)
-
-    # Verify CUDA availability
-    if not torch.cuda.is_available():
-        msg = f"{tc.red}CUDA not available. Please install PyTorch with CUDA support.{tc.end}"
-        raise NotImplementedError(msg)
-
-    # Check for CUDA version consistency between system and PyTorch
-    try:
-        # Get NVIDIA CUDA driver version
-        nvcc_cmd = ["nvcc", "--version"]
-        nvcc_output = subprocess.run(
-            nvcc_cmd, check=False, capture_output=True, text=True
-        ).stdout
-        nvcc_cuda_version_match = re.search(r"release (\d+\.\d+)", nvcc_output)
-        if nvcc_cuda_version_match:
-            nvcc_cuda = nvcc_cuda_version_match[1]
-            torch_cuda = torch.version.cuda
-            # Compare versions as tuples for correct numerical comparison
-            if tuple(map(int, torch_cuda.split("."))) > tuple(map(int, nvcc_cuda.split("."))):
-                msg = (
-                    f"{tc.red}Your system CUDA version ({nvcc_cuda}) "
-                    f"appears to be older than PyTorch's target CUDA ({torch_cuda})! "
-                    "This might lead to compatibility issues.{tc.end}"
-                )
-                raise RuntimeError(msg)
-    except Exception:
-        # Suppress errors if nvcc command fails or version check is not possible
-        pass
-
-    # Set default device to CUDA for all new tensors
-    torch.set_default_device("cuda")
-
-    # Parse command-line options and configuration files.
-    # The 'project_root' is passed to `parse_options` to ensure correct path resolution.
-    opt, args = parse_options(project_root, is_train=True)
-    opt["root_path"] = project_root # Explicitly set/confirm the project root in options
-
-    # Dynamically set absolute paths for experiment-related directories
-    # This ensures all outputs go into the correct 'experiments' subfolder
-    opt['path']['experiments_root'] = Path(opt['root_path']) / "experiments" / opt['name']
-    opt['path']['models'] = Path(opt['path']['experiments_root']) / "models"
-    opt['path']['log'] = opt['path']['experiments_root'] # Log files reside in the experiment folder
-    opt['path']['validation'] = Path(opt['path']['experiments_root']) / "validation"
-    opt['path']['visualization'] = Path(opt['path']['experiments_root']) / "visualization"
-    opt['path']['training_states'] = Path(opt['path']['experiments_root']) / "training_states"
-
-    # Check for Triton compatibility on Windows if compilation is enabled
-    if sys.platform.startswith("win") and opt.get("compile", False) is True:
-        msg = f"{tc.red}PyTorch compilation (Triton backend) is not supported on Windows. Please disable 'compile' in your configuration file.{tc.end}"
-        raise NotImplementedError(msg)
-
-    # Configure Automatic Mixed Precision (AMP) and BFloat16 for faster matrix multiplication
-    if opt.get("fast_matmul", False):
-        torch.set_float32_matmul_precision("medium") # Enables TF32 for compatible GPUs
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
-        torch.backends.cuda.matmul.allow_fp16_accumulation = True
-
-    # Load previous training state if resuming
-    resume_state = load_resume_state(opt)
-
-    # Create experiment directories if not resuming, or if they don't exist
-    if resume_state is None:
-        make_exp_dirs(opt) # Creates experiment_root, models, log, etc.
-        # Create TensorBoard log directory separately if enabled
-        if (
-            opt["logger"].get("use_tb_logger")
-            and "debug" not in opt["name"]
-            and opt["rank"] == 0 # Only create for rank 0 in distributed training
-        ):
-            mkdir_and_rename(Path(opt["root_path"]) / "experiments" / "tb_logger" / opt["name"])
-
-    # Copy the training configuration file to the experiment root for reproducibility
-    try:
-        copy_opt_file(args.opt, opt["path"]["experiments_root"])
-    except Exception as e:
-        msg = (
-            f"{tc.red}Failed to copy option file. "
-            "Ensure the option 'name' in your config file is unique or matches "
-            f"the name of an existing resumable experiment. Error: {e}{tc.end}"
-        )
-        raise ValueError(msg)
-
-    # Initialize the root logger after directory setup
-    log_file = Path(opt["path"]["log"]) / f"train_{opt['name']}_{get_time_str()}.log"
-    logger = get_root_logger(
-        logger_name="neosr", log_level=logging.INFO, log_file=str(log_file)
-    )
-
-    # Log GPU driver version
-    smi_cmd = ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader,nounits"]
-    try:
-        driver_version = subprocess.run(
-            smi_cmd, check=False, capture_output=True, text=True
-        ).stdout.strip()
-    except Exception:
-        driver_version = "N/A (could not retrieve)"
-
-    logger.info(
-        f"\n------------------------ neosr ------------------------"
-        f"\nPyTorch Version: {torch.__version__}. Running on GPU: {torch.cuda.get_device_name()}, "
-        f"with driver: {driver_version}."
-    )
-
-    # Initialize WandB and TensorBoard loggers
-    tb_logger = init_tb_loggers(opt)
-
-    # Create training and validation dataloaders
-    train_loader, train_sampler, val_loaders, total_epochs, total_iters = create_train_val_dataloader(opt, logger)
-
-    # Build the model based on the configuration
-    model = build_model(opt)
-
-    input_size = opt.get('input_size')
-    if input_size is not None:
-        profile_macs = get_profile_macs()
-        inputs = torch.randn(1, input_size['in_channels'], input_size['size'], input_size['size'])
-        macs = profile_macs(model.net_g, inputs)
-        logger.info(f'Generator MACs: {macs:,d}')
-        if model.net_d is not None:
-            inputs = torch.randn(1, input_size['out_channels'], input_size['size'], input_size['size'])
-            macs = profile_macs(model.net_d, inputs)
-            logger.info(f'Discriminator MACs: {macs:,d}')
-
-    # --- Quantization-Aware Training Setup ---
-    if opt['train'].get('enable_qat', False):
-        logger.info(f"{tc.light_green}Initializing Quantization-Aware Training...{tc.end}")
-
-        # Step 1: Fuse model if not already fused
-        if hasattr(model.net_g, 'fuse_model'):
-            model.net_g.fuse_model()
-
-        # Step 2: Prepare QAT configuration
-        qat_config = {
-            'type': opt['train'].get('qat_type', 'int8'),
-            'fused_init': opt['train'].get('fused_init', True),
-            'quantize_residual': opt['train'].get('quantize_residual', True),
-            'calibration_iters': opt['train'].get('calibration_iters', 0)
-        }
-
-        # Step 3: Prepare QAT
-        model.net_g.prepare_qat(qat_config)
-
-        # Step 4: Calibration if specified
-        calib_iters = opt['train'].get('calibration_iters', 0)
-        if calib_iters > 0:
-            logger.info(f"Running calibration for {calib_iters} iterations")
-            calib_loader = generate_calib_data(opt, calib_iters)
-            model.net_g.calibrate(calib_loader, iters=calib_iters)
-
-        # Set QAT flag on model
-        model.is_qat_prepared = True
-
-        # Reinitialize EMA model to match QAT structure
-        if hasattr(model, 'net_g_ema'):
-            logger.info("Reinitializing EMA model for QAT compatibility")
-            model._init_ema()
-
-    accumulate = max(1, opt["datasets"]["train"].get("accumulate", 1))
-
-    if resume_state:  # resume training
-        # handle optimizers and schedulers
-        model.resume_training(resume_state)  # type: ignore[reportAttributeAccessIssue,attr-defined]
-        # Adjust iteration log for accumulation steps
-        resumed_iter_log = int(resume_state['iter'] // accumulate)
-        logger.info(
-            f"{tc.light_green}Resuming training from epoch: {resume_state['epoch']}, "
-            f"iteration (adjusted for accumulation): {resumed_iter_log}{tc.end}"
-        )
-        start_epoch = resume_state["epoch"]
-        current_iter = int(resume_state["iter"]) # Raw iteration count for internal tracking
-        torch.cuda.empty_cache() # Clear CUDA cache to free up memory
+def select_resume(cfg: dict[str, Any]) -> Path | None:
+    """T2 D17: an explicit path.resume_state wins and must be a file; else auto_resume takes the
+    newest <update>.state. The choice is stored in path.resume_state for the model."""
+    p = cfg["path"]
+    if explicit := p.get("resume_state"):
+        resume = Path(explicit)
+        if not resume.is_absolute():
+            resume = Path(cfg["root_path"]) / resume
+        if not resume.is_file():
+            msg = f"resume_state {resume} does not exist"
+            raise FileNotFoundError(msg)
+    elif cfg.get("auto_resume"):
+        resume = latest_state(Path(p["training_states"]))
     else:
-        start_epoch = 0
-        current_iter = 0
+        resume = None
+    p["resume_state"] = resume
+    return resume
 
-    # Initialize message logger for formatted console output
-    msg_logger = MessageLogger(opt, tb_logger, current_iter // accumulate)
 
-    # Initialize dataloader prefetcher for efficient data transfer to GPU
-    if train_loader is not None:
-        prefetcher = CUDAPrefetcher(train_loader, torch.device("cuda"))
-    else:
-        logger.error(f"{tc.red}Training dataloader could not be created. Exiting.{tc.end}")
-        sys.exit(1)
-
-    # Log AMP (Automatic Mixed Precision) and BFloat16 status
-    if opt.get("use_amp", False) and opt.get("bfloat16", False):
-        logger.info("AMP enabled with BF16.")
-    elif opt.get("use_amp", False) and not opt.get("bfloat16", False):
-        logger.info("AMP enabled (FP16).")
-    else:
-        logger.info("AMP disabled.")
-
-    # Error if BFloat16 is enabled without AMP
-    if not opt.get("use_amp", False) and opt.get("bfloat16", False):
-        msg = f"{tc.red}bfloat16 option has no effect without 'use_amp'. Please enable 'use_amp' for bfloat16 to function.{tc.end}"
-        logger.error(msg)
-        sys.exit(1)
-
-    # Detect GPU architecture and provide recommendations/warnings
-    major_cuda_version, minor_cuda_version = 0, 0
-    if torch.cuda.is_available():
-        major_cuda_version, minor_cuda_version = torch.cuda.get_device_capability()
-
-    is_ampere = major_cuda_version >= 8
-    is_turing = major_cuda_version == 7
-    is_pascal_or_older = major_cuda_version <= 6
-
-    # Recommend BF16 on Ampere or newer GPUs if not already enabled
-    if not opt.get("use_amp", False) and is_ampere:
-        msg = f"{tc.light_yellow}Modern GPU detected (Ampere or newer). Consider enabling AMP with bfloat16 for potential speedup.{tc.end}"
-        logger.warning(msg)
-
-    # Warn/Error about BF16 on older architectures
-    if opt.get("bfloat16", False) and is_turing:
-        msg = f"{tc.light_yellow}Turing GPU detected. bfloat16 support might be limited or inefficient. Consider disabling bfloat16.{tc.end}"
-        logger.warning(msg)
-    elif opt.get("bfloat16", False) and is_pascal_or_older:
-        msg = f"{tc.red}Pascal or older GPU detected. bfloat16 is NOT supported on this architecture. Please disable bfloat16.{tc.end}"
-        logger.error(msg)
-        sys.exit(1)
-
-    # Warn about AMP on Pascal or older GPUs
-    if opt.get("use_amp", False) and is_pascal_or_older:
-        msg = f"{tc.light_yellow}Pascal GPU doesn't have Tensor Cores. Consider disabling AMP as it may not provide benefits.{tc.end}"
-        logger.warning(msg)
-
-    # Log deterministic mode status
-    if opt["deterministic"]:
-        logger.info("Deterministic mode enabled.")
-
-    # Training loop parameters
-    print_freq = opt["logger"].get("print_freq", 100)
-    save_checkpoint_freq = opt["logger"]["save_checkpoint_freq"]
-    val_freq = opt["val"]["val_freq"] if opt.get("val") is not None else 100
-
-    logger.info(
-        f"{tc.light_green}Starting training from epoch: {start_epoch}, "
-        f"iteration (adjusted for accumulation): {current_iter // accumulate}{tc.end}"
+def prepare_run(cfg: dict[str, Any], argv: Sequence[str]) -> None:
+    """Resume selection, run folders (a fresh run archives an existing one; a resume never does),
+    config copy and the log file."""
+    p = cfg["path"]
+    # a resumed state may come from elsewhere: its run folders need not exist yet
+    make_exp_dirs(cfg, archive=select_resume(cfg) is None)
+    save_config_copy(cfg["opt_path"], p["experiments_root"], argv)
+    get_root_logger(
+        log_file=str(Path(p["log"]) / f"train_{cfg['name']}_{get_time_str()}.log")
     )
-    iter_timer = AvgTimer() # Timer for average iteration time
-    start_time = time.time() # Start time for total training duration
+    if p["resume_state"] is not None:
+        log.info(f"resuming from {p['resume_state']}")
 
-    # logging file with only losses
-    log_path = osp.join(opt["root_path"], "experiments", opt["name"])
-    accumulated_iter = current_iter // accumulate
 
+def init_tb_loggers(cfg: dict[str, Any], rt: Runtime, fresh: bool) -> Any:
+    lg, name = cfg["logger"], cfg["name"]
+    if rt.rank != 0 or "debug" in name:
+        return None
+    if (lg.get("wandb") or {}).get("project") is not None:
+        if not lg.get("use_tb_logger"):
+            msg = "logger.wandb syncs the tensorboard log: enable logger.use_tb_logger"
+            raise ConfigError(msg)
+        init_wandb_logger(cfg)
+    if not lg.get("use_tb_logger"):
+        return None
+    tb_dir = Path(cfg["path"]["experiments_root"]).parent / "tb_logger" / name
+    if fresh:
+        mkdir_and_rename(str(tb_dir))
+    return init_tb_logger(log_dir=str(tb_dir))
+
+
+def build_loaders(
+    cfg: dict[str, Any], rt: Runtime
+) -> tuple[DataLoader, EnlargedSampler, list[DataLoader]]:
+    """Train loader + sampler and the val loaders; empty loaders raise ConfigError (T2 D27)."""
+    loader = sampler = None
+    val_loaders = []
+    for phase, ds_cfg in cfg["datasets"].items():
+        kind = phase.split("_")[0]
+        if kind not in {"train", "val"}:
+            msg = f"[datasets.{phase}]: training configs take train and val* datasets"
+            raise ConfigError(msg)
+        ds = build_dataset(ds_cfg)
+        if kind == "val":
+            val_loaders.append(vl := build_dataloader(ds, ds_cfg, runtime=rt))
+            if len(vl) == 0:
+                msg = f"[datasets.{phase}] has no images"
+                raise ConfigError(msg)
+            log.info(f"validation set {ds_cfg.get('name', phase)}: {len(vl)} images")
+            continue
+        ratio = ds_cfg.get("dataset_enlarge_ratio", 1)
+        sampler = EnlargedSampler(ds, rt.world_size, rt.rank, ratio, seed=rt.seed)
+        loader = build_dataloader(ds, ds_cfg, runtime=rt, sampler=sampler)
+        if len(loader) == 0:
+            msg = (
+                f"[datasets.train] yields no batch: {len(ds)} images x enlarge ratio {ratio} "  # type: ignore[arg-type]
+                f"over {rt.world_size} process(es) is less than batch_size {ds_cfg['batch_size']}"
+            )
+            raise ConfigError(msg)
+        acc = ds_cfg.get("accumulate", 1)
+        log.info(
+            "Training information:"
+            f"\n-------- Model: {cfg['name']}"
+            f"\n-------- Processes: {rt.world_size}, device: {rt.device}"
+            f"\n-------- Patch size: {ds_cfg['patch_size']}"
+            f"\n-------- Dataset size: {len(ds)}"  # type: ignore[arg-type]
+            f"\n-------- Batch size per process: {ds_cfg['batch_size']}, accumulate: {acc}"
+            f"\n-------- Updates per epoch: {len(loader) / acc:.1f}"
+            f"\n-------- Total updates: {cfg['logger'].get('total_iter', 1000000)}"
+        )
+    if loader is None or sampler is None:
+        msg = "training needs a [datasets.train] section"
+        raise ConfigError(msg)
+    return loader, sampler, val_loaders
+
+
+def log_macs(model: Any, cfg: dict[str, Any]) -> None:
+    """T2 D28: bare nets, eval mode, no_grad, before restore_rng(); per-module train flags restored.
+    Only when `input_size` is set; torchprofile is optional."""
+    size = cfg.get("input_size")
+    if size is None:
+        return
     try:
-        for epoch in range(start_epoch, total_epochs + 1):
-            # Set epoch for distributed sampler to ensure data shuffling
-            train_sampler.set_epoch(epoch)  # type: ignore[attr-defined]
-            prefetcher.reset() # Reset prefetcher for new epoch
-            train_data = prefetcher.next() # Fetch first batch for the epoch
+        from torchprofile import profile_macs  # noqa: PLC0415
+    except ImportError:
+        log.warning(
+            "input_size is set but torchprofile is not installed: MACs not reported"
+        )
+        return
+    g = torch.Generator().manual_seed(0)  # leaves the run's RNG streams alone
+    x = torch.rand(1, cfg.get("in_chans", 3), size, size, generator=g).to(model.device)
+    with torch.no_grad():
+        for label, net in (("Generator", model.net_g), ("Discriminator", model.net_d)):
+            if net is None:
+                continue
+            modes = [(m, m.training) for m in net.modules()]
+            net.eval()
+            try:
+                macs = profile_macs(net, x)
+                if net is model.net_g:
+                    x = net(x)  # D sees what G produces
+            finally:
+                for m, t in modes:
+                    m.training = t
+            log.info(f"{label} MACs: {macs:,d}")
 
-            while train_data is not None:
-                current_iter += 1
-                if current_iter > total_iters:
-                    break # Stop training if total iterations exceeded
 
-                # Feed data to the model and optimize parameters
-                model.feed_data(train_data)  # type: ignore[reportAttributeAccessIssue,attr-defined]
-                model.optimize_parameters(current_iter)  # type: ignore[reportFunctionMemberAccess,attr-defined]
+def _freq(lg: dict[str, Any], key: str, default: int | None) -> int:
+    val = lg.get(key, default)
+    if val is None or val < 1:
+        msg = f"logger.{key} must be set to a positive number of updates"
+        raise ConfigError(msg)
+    return val
 
-                # Update learning rate based on schedule
-                model.update_learning_rate(  # type: ignore[reportFunctionMemberAccess,attr-defined]
-                    current_iter, warmup_iter=opt["train"].get("warmup_iter", -1)
-                )
 
-                model.update_loss_weights(current_iter)
+def train(cfg: dict[str, Any], rt: Runtime) -> None:
+    """T2 §5.1. Call prepare_run() first. Every frequency counts completed updates (model.update)."""
+    lg, val = cfg.setdefault("logger", {}), cfg.get("val") or {}
+    total = _freq(lg, "total_iter", 1000000)
+    print_freq = _freq(lg, "print_freq", 100)
+    save_freq = _freq(lg, "save_checkpoint_freq", None)
+    val_freq = val.get("val_freq")
+    save_img = val.get("save_img", True)
 
-                iter_timer.record()# Record time for current iteration
-                if current_iter == 1:
-                    msg_logger.reset_start_time() # Reset logger's timer on first iteration
+    gpu = (
+        f" ({torch.cuda.get_device_name(rt.device)})"
+        if rt.device.type == "cuda"
+        else ""
+    )
+    log.info(f"PyTorch {torch.__version__}, device {rt.device}{gpu}")
+    model = build_model(cfg, rt)  # resumes inside (T2 §3 step 7)
+    loader, sampler, val_loaders = build_loaders(cfg, rt)
+    model.data_generator = loader.generator  # part of the RNG state (T3 D18)
+    log_macs(model, cfg)
+    if model.update >= total:
+        log.info(f"nothing to do: update {model.update} >= total_iter {total}")
+        return
+    tb_logger = init_tb_loggers(cfg, rt, fresh=cfg["path"]["resume_state"] is None)
+    msg_logger = MessageLogger(cfg, tb_logger, start_iter=model.update)
+    timer, start = AvgTimer(), time.time()
+    amp = ("bf16" if cfg.get("bfloat16") else "fp16") if cfg.get("use_amp") else "off"
+    det = "deterministic" if cfg.get("deterministic") else "non-deterministic"
+    log.info(f"AMP: {amp}; {det}, seed {rt.seed}.")
+    log.info(f"Starting at epoch {model.epoch}, update {model.update}.")
 
-                accumulated_iter = (current_iter - 1) // accumulate + 1
-
-                # Log training progress only when an optimizer step has completed
-                if current_iter % accumulate == 0 and accumulated_iter % print_freq == 0:
-                    log_vars = {"epoch": epoch, "iter": accumulated_iter}
-                    log_vars.update({"lrs": model.get_current_learning_rate()})
-                    log_vars.update({"gan_weight": model.get_current_gan_weight()})
-                    log_vars.update({"time": iter_timer.get_avg_time()})
-                    iter_time = log_vars['time']
-                    log_vars.update(model.get_current_log())  # type: ignore[reportFunctionMemberAccess,attr-defined]
+    prev_sigint = signal.getsignal(signal.SIGINT)
+    stop = StopFlag()
+    stop.install()
+    try:
+        prefetcher = CUDAPrefetcher(loader, rt.device)
+        model.restore_rng()  # the last call before the loop
+        epoch = model.epoch
+        while True:
+            model.epoch = epoch
+            sampler.set_epoch(epoch)
+            prefetcher.reset()  # iter(loader) under sigint_ignored() (T2 D19)
+            while (batch := prefetcher.next()) is not None:
+                model.feed_data(batch)
+                if not model.optimize_parameters():  # inside a window
+                    continue
+                timer.record()
+                u = model.update
+                stopping = stop.requested(rt.device)  # all-reduced under DDP
+                done = stopping or u >= total
+                if u % print_freq == 0 or done:
+                    # get_current_log is a collective under DDP: every rank calls it
+                    log_vars = {"epoch": epoch, "iter": u, "lrs": model.current_lr()}
+                    log_vars |= {
+                        "time": timer.get_avg_time(),
+                        **model.get_current_log(),
+                    }
                     msg_logger(log_vars)
+                if done:
+                    if stopping:
+                        log.info(f"stop requested: saving update {u}")
+                    model.check_finite()  # raises before NaN reaches disk
+                    model.save(final=True)  # state first, then exports + *_latest
+                    if not stopping:
+                        for vl in val_loaders:
+                            model.validation(vl, u, tb_logger, save_img)
+                    elapsed = datetime.timedelta(seconds=int(time.time() - start))
+                    end = "Stopped" if stopping else "End of training"
+                    log.info(f"{end} at update {u}. Time consumed: {elapsed}")
+                    return
+                val_due = bool(val_loaders) and bool(val_freq) and u % val_freq == 0
+                save_due = u % save_freq == 0
+                if val_due or save_due:
+                    model.check_finite()  # all ranks
+                if val_due:
+                    for vl in val_loaders:
+                        model.validation(vl, u, tb_logger, save_img)
+                if save_due:
+                    log.info(f"saving update {u}")
+                    model.save()
+                timer.start()
+            epoch += 1
+    finally:
+        signal.signal(signal.SIGINT, prev_sigint)
+        if tb_logger is not None:
+            tb_logger.close()
 
-                    # iters per second
-                    iter_time = iter_time * 100
-                    iter_time = 100 / iter_time
-                    iter_time = iter_time / accumulate
-                    if iter_time < 0.5 and "debug" not in opt["name"]:
-                        logger.info("Interrupted, saving latest models.")
-                        model.save(epoch, accumulated_iter)
-                        sys.exit(0)
 
-                # save models and training states
-                if current_iter % accumulate == 0 and accumulated_iter % save_checkpoint_freq == 0:
-                    free_space = check_disk_space()
-                    if free_space < 500: # Check for at least 500 MB free space
-                        msg = (
-                            f"{tc.red}Not enough free disk space in {Path.cwd()}. "
-                            "Please free up at least 500 MB of space. "
-                            "Attempting to save current progress...{tc.end}"
-                        )
-                        logger.error(msg)
-                        model.save(epoch, accumulated_iter)  # type: ignore[reportFunctionMemberAccess,attr-defined]
-                        sys.exit(1) # Exit if disk space is critically low after saving
-
-                    logger.info(f"{tc.light_green}Saving models and training states.{tc.end}")
-                    model.save(epoch, accumulated_iter)  # type: ignore[reportFunctionMemberAccess,attr-defined]
-
-                # Perform validation periodically if configured
-                if (
-                    opt.get("val") is not None
-                    and current_iter % accumulate == 0
-                    and (accumulated_iter % val_freq == 0)
-                ):
-                    for val_loader in val_loaders:
-                        model.validation(  # type: ignore[reportFunctionMemberAccess,attr-defined]
-                            val_loader,
-                            accumulated_iter,
-                            tb_logger,
-                            opt["val"].get("save_img", True),
-                        )
-
-                iter_timer.start() # Restart timer for the next iteration
-                train_data = prefetcher.next() # Fetch next batch
-            # End of inner (iteration) loop
-
-        # End of outer (epoch) loop
-
-        # Log total training time and save the latest model at the end of training
-        consumed_time = str(datetime.timedelta(seconds=int(time.time() - start_time)))
-        logger.info(
-            f"{tc.light_green}End of training. Time consumed: {consumed_time}{tc.end}"
+def main(argv: Sequence[str] | None = None) -> int:
+    args = train_args(argv)  # argparse may SystemExit(2)
+    get_root_logger()
+    try:
+        cfg = load_config(
+            args.opt,
+            is_train=True,
+            root=ROOT,
+            debug=args.debug,
+            auto_resume=args.auto_resume,
         )
-        logger.info(f"{tc.light_green}Saving the latest model.{tc.end}")
-        model.save(epoch=-1, current_iter=-1) # -1 stands for the latest checkpoint
-
-    except KeyboardInterrupt:
-        # Handle graceful exit on KeyboardInterrupt (Ctrl+C)
-        msg = f"{tc.light_green}Training interrupted by user. Saving latest models.{tc.end}"
-        logger.info(msg)
-        # Save current progress before exiting
-        model.save(epoch, accumulated_iter)  # type: ignore[reportFunctionMemberAccess,attr-defined]
-        sys.exit(0)
-    except Exception as e:
-        # Catch any other unexpected exceptions during the training loop
-        logger.error(f"{tc.red}An unexpected error occurred during training: {e}{tc.end}")
-        import traceback
-        traceback.print_exc() # Print full traceback for debugging
-        sys.exit(1) # Exit with an error code
-
-    # Final validation after training completes
-    if opt.get("val") is not None:
-        for val_loader in val_loaders:
-            model.validation(  # type: ignore[reportFunctionMemberAccess,attr-defined]
-                val_loader,
-                int(current_iter // accumulate),
-                tb_logger,
-                opt["val"].get("save_img", True),
-            )
-    # Close TensorBoard logger if it was initialized
-    if tb_logger:
-        tb_logger.close()
-    if tb_logger:
-        logger.info('Closing Logger')
-        tb_logger.close()
-        logger.info('Logger Closed')
+        validate_train(cfg)
+        rt = setup_runtime(cfg, launcher=args.launcher)
+        get_root_logger()  # rank known now: ranks != 0 log errors only
+        prepare_run(cfg, sys.argv if argv is None else ["train.py", *argv])
+        train(cfg, rt)
+    except ConfigError as e:
+        print(f"config error: {e}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:  # second Ctrl-C: the last committed checkpoint stands
+        log.error("interrupted; the last saved checkpoint stands")
+        return 130
+    except Exception:
+        log.exception("training failed")
+        return 1
+    finally:
+        if torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
+    return 0
 
 
 if __name__ == "__main__":
-    # This block ensures that the script's entry point correctly sets up
-    # the Python path and starts the training pipeline.
-
-    # Determine the absolute path of the current file (train.py)
-    current_file_abs_path = Path(__file__).resolve()
-
-    # The project root (e.g., 'neosr-fork/') is the parent directory of train.py
-    project_root_directory = current_file_abs_path.parent
-
-    # The 'common' directory is expected to be a direct subfolder of the project root
-    common_dir_path = project_root_directory / "common"
-
-    # Add the 'common' directory to Python's system path if it's not already there.
-    # This is crucial for importing modules from the 'common' directory.
-    if str(common_dir_path) not in sys.path:
-        sys.path.insert(0, str(common_dir_path))
-        print(f"Added '{common_dir_path}' to sys.path for common modules (explicitly added from train.py).")
-
-    # Start the main training pipeline, passing the absolute project root path.
-    torch.multiprocessing.set_start_method('spawn')
-    #torch.multiprocessing.Queue(200)
-    train_pipeline(str(project_root_directory))
+    torch.multiprocessing.set_start_method("spawn")
+    sys.exit(main())

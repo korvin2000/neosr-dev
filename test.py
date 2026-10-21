@@ -1,73 +1,78 @@
+"""Inference entry point (design T3 §3.7): run the generator over every dataset of an inference config.
+Exit codes as train.py: 0 ok, 1 unexpected (traceback logged), 2 ConfigError, 130 Ctrl-C."""
+
 import logging
 import sys
-from os import path as osp
+import time
+from collections.abc import Sequence
 from pathlib import Path
-from time import time
+from typing import Any
 
 import torch
 
+from neosr.cli import infer_args
+from neosr.config import ConfigError, load_config
 from neosr.data import build_dataloader, build_dataset
 from neosr.models import build_model
+from neosr.runtime import Runtime, setup_runtime
 from neosr.utils import get_root_logger, get_time_str, make_exp_dirs, tc
-from neosr.utils.options import parse_options
+
+ROOT = Path(__file__).resolve().parent
+log = logging.getLogger("neosr")
 
 
-def test_pipeline(root_path: str) -> None:
-    # parse options, set distributed setting, set ramdom seed
-    opt, _ = parse_options(root_path, is_train=False)
-
-    torch.set_default_device("cuda")
-    torch.backends.cudnn.benchmark = True
-
-    # mkdir and initialize loggers
-    make_exp_dirs(opt)
-    log_file = Path(opt["path"]["log"]) / f"test_{opt['name']}_{get_time_str()}.log"
-    logger = get_root_logger(
-        logger_name="neosr", log_level=logging.INFO, log_file=str(log_file)
+def test(cfg: dict[str, Any], rt: Runtime) -> Any:
+    """Build the loaders and the eager inference model, then validate on each dataset. Returns the model."""
+    make_exp_dirs(cfg)
+    p = cfg["path"]
+    get_root_logger(
+        log_file=str(Path(p["log"]) / f"test_{cfg['name']}_{get_time_str()}.log")
     )
-
-    # create test dataset and dataloader
-    test_loaders = []
-    for _, dataset_opt in sorted(opt["datasets"].items()):
-        test_set = build_dataset(dataset_opt)
-        num_gpu = opt.get("num_gpu", "auto")
-        test_loader = build_dataloader(
-            test_set,  # type: ignore[reportArgumentType]
-            dataset_opt,
-            num_gpu=num_gpu,
-            dist=opt["dist"],
-            sampler=None,
-            seed=opt["manual_seed"],
+    loaders = []
+    for phase, ds_cfg in sorted(cfg["datasets"].items()):
+        loader = build_dataloader(build_dataset(ds_cfg), ds_cfg, runtime=rt)
+        if len(loader) == 0:
+            msg = f"[datasets.{phase}] has no images"
+            raise ConfigError(msg)
+        log.info(f"Number of test images in {ds_cfg['name']}: {len(loader.dataset)}")  # type: ignore[arg-type]
+        loaders.append(loader)
+    model = build_model(cfg, rt)
+    save_img = (cfg.get("val") or {}).get("save_img", True)
+    for loader in loaders:
+        log.info(f"Testing {loader.dataset.opt['name']}...")  # type: ignore[attr-defined]
+        start = time.perf_counter()
+        model.validation(
+            loader, current_iter=cfg["name"], tb_logger=None, save_img=save_img
         )
-        logger.info(f"Number of test images in {dataset_opt['name']}: {len(test_set)}")  # type: ignore[reportArgumentType]
-        test_loaders.append(test_loader)
+        took = time.perf_counter() - start
+        fps = len(loader.dataset) / took  # type: ignore[arg-type]
+        log.info(
+            f"{tc.light_green}Inference took {took:.2f} seconds, at {fps:.2f} fps.{tc.end}"
+        )
+    return model
 
-    # create model
-    model = build_model(opt)
 
+def main(argv: Sequence[str] | None = None) -> int:
+    args = infer_args(argv)  # argparse may SystemExit(2)
+    get_root_logger()
     try:
-        for test_loader in test_loaders:
-            test_set_name = test_loader.dataset.opt["name"]  # type: ignore[attr-defined]
-            logger.info(f"Testing {test_set_name}...")
-            start_time = time()
-            model.validation(  # type: ignore[reportAttributeAccessIssue,attr-defined]
-                test_loader,
-                current_iter=opt["name"],
-                tb_logger=None,
-                save_img=opt["val"].get("save_img", True),
-            )
-            end_time = time()
-            total_time = end_time - start_time
-            n_img = len(test_loader.dataset)  # type: ignore[arg-type]
-            fps = n_img / total_time
-            logger.info(
-                f"{tc.light_green}Inference took {total_time:.2f} seconds, at {fps:.2f} fps.{tc.end}"
-            )
+        cfg = load_config(args.opt, is_train=False, root=ROOT, debug=args.debug)
+        rt = setup_runtime(cfg, launcher=args.launcher)
+        test(cfg, rt)
+    except ConfigError as e:
+        print(f"config error: {e}", file=sys.stderr)
+        return 2
     except KeyboardInterrupt:
-        logger.info(f"{tc.red}Interrupted.{tc.end}")
-        sys.exit(0)
+        log.error("interrupted")
+        return 130
+    except Exception:
+        log.exception("inference failed")
+        return 1
+    finally:
+        if torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
+    return 0
 
 
 if __name__ == "__main__":
-    root_path = Path.resolve(Path(__file__) / osp.pardir)
-    test_pipeline(str(root_path))
+    sys.exit(main())

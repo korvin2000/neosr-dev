@@ -48,75 +48,39 @@ def get_root_logger(
     log_level: int = logging.INFO,
     log_file: str | None = None,
 ) -> logging.Logger:
-    """Get the root logger.
-
-    The logger will be initialized if it has not been initialized. By default a
-    StreamHandler will be added. If `log_file` is specified, a FileHandler will
-    also be added.
-
-    Args:
-    ----
-        logger_name (str): root logger name. Default: 'neosr'.
-        log_file (str | None): The log filename. If specified, a FileHandler
-            will be added to the root logger.
-        log_level (int): The root logger level. Note that only the process of
-            rank 0 is affected, while other processes will set the level to
-            "Error" and be silent most of the time.
-
-    Returns:
-    -------
-        logging.Logger: The root logger.
-
-    """
+    """The "neosr" logger: a stream handler once per process; rank 0 logs at `log_level`, other
+    ranks only errors. A `log_file` (rank 0) replaces the previous run's file handler."""
     logger = logging.getLogger(logger_name)
-    # if the logger has been initialized, just return it
-    if logger_name in initialized_logger:
-        return logger
-
-    format_str = "%(asctime)s %(levelname)s: %(message)s"
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(
-        logging.Formatter(format_str, datefmt="%d-%m-%Y %I:%M %p |")
-    )
-    logger.addHandler(stream_handler)
-    logger.propagate = False
     rank, _ = get_dist_info()
-    if rank != 0:
-        logger.setLevel("ERROR")
-    elif log_file is not None:
-        logger.setLevel(log_level)
-        # add file handler
+    format_str = "%(asctime)s %(levelname)s: %(message)s"
+    if logger_name not in initialized_logger:
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(
+            logging.Formatter(format_str, datefmt="%d-%m-%Y %I:%M %p |")
+        )
+        logger.addHandler(stream_handler)
+        logger.propagate = False
+        initialized_logger[logger_name] = True
+    logger.setLevel(log_level if rank == 0 else logging.ERROR)
+    if log_file is not None and rank == 0:
+        for h in [h for h in logger.handlers if isinstance(h, logging.FileHandler)]:
+            logger.removeHandler(h)
+            h.close()
         file_handler = logging.FileHandler(log_file, "w", encoding="utf-8")
         file_handler.setFormatter(logging.Formatter(format_str))
         file_handler.setLevel(log_level)
         logger.addHandler(file_handler)
-    initialized_logger[logger_name] = True
-
     return logger
 
 
 class MessageLogger:
-    """Message logger for printing.
+    """Formats the periodic training line. `iter` counts completed updates (T2 §4); `time` is the
+    mean seconds per update."""
 
-    Args:
-    ----
-        opt (dict): Config. It contains the following keys:
-            name (str): Exp name.
-            logger (dict): Contains 'print_freq' (str) for logger interval.
-            train (dict): Contains 'total_iter' (int) for total iters.
-            use_tb_logger (bool): Use tensorboard logger.
-        tb_logger (obj:`tb_logger`): Tensorboard logger. Default: None.
-        start_iter (int): Start iter. Default: 1.
-
-    """
-
-    def __init__(self, opt: dict[str, Any], tb_logger, start_iter: int = 1) -> None:
+    def __init__(self, opt: dict[str, Any], tb_logger, start_iter: int = 0) -> None:
         self.exp_name = opt["name"]
-        self.interval = opt["logger"].get("print_freq", 100)
-        self.accumulate = opt["datasets"]["train"].get("accumulate", 1)
         self.start_iter = start_iter
         self.max_iters = opt["logger"].get("total_iter", 1000000)
-        self.use_tb_logger = opt["logger"]["use_tb_logger"]
         self.tb_logger = tb_logger
         self.start_time = time.time()
         self.logger = get_root_logger()
@@ -125,57 +89,30 @@ class MessageLogger:
         self.start_time = time.time()
 
     @master_only
-    def __call__(self, log_vars: dict[str, Any]):
-        """Format logging message.
-
-        Args:
-        ----
-            log_vars (dict): It contains the following keys:
-                epoch (int): Epoch number.
-                iter (int): Current iter.
-                lrs (list): List for learning rates.
-
-                time (float): Iter time.
-
-        """
-        # epoch, iter, learning rates
+    def __call__(self, log_vars: dict[str, Any]) -> None:
         epoch: int = log_vars.pop("epoch")
-        current_iter: int = int(log_vars.pop("iter")) // self.accumulate
+        current_iter: int = int(log_vars.pop("iter"))
         lrs: list[Any] = log_vars.pop("lrs")
-
         message = (
             f"[ epoch:{epoch:4d} ] {tc.light_green}[ iter:{current_iter:7,d} ]{tc.end}"
         )
-
-        # time and estimated time
         if "time" in log_vars:
-            iter_time = 1 / log_vars.pop("time")
-            iter_time /= self.accumulate
-
-            total_time = time.time() - self.start_time
-
-            try:
-                time_sec_avg = total_time / (current_iter - self.start_iter - 1)
-            except ZeroDivisionError:
-                time_sec_avg = 0
-
-            eta_sec = time_sec_avg * (self.max_iters - current_iter - 1)
-            eta_str = str(datetime.timedelta(seconds=int(eta_sec)))
-            message += f" [ performance: {iter_time:.3f} it/s ] [ lr: "
-            for v in lrs:
-                message += f"{v:.2e}"
-            message += " ] "
-            message += f"[ eta: {eta_str} ] "
-
-        # other items, especially losses
+            iter_time = log_vars.pop("time")
+            done = current_iter - self.start_iter
+            time_sec_avg = (time.time() - self.start_time) / done if done > 0 else 0
+            eta = datetime.timedelta(
+                seconds=int(time_sec_avg * (self.max_iters - current_iter))
+            )
+            speed = 1 / iter_time if iter_time > 0 else 0.0
+            lr = " ".join(f"{v:.2e}" for v in lrs)
+            message += (
+                f" [ performance: {speed:.3f} it/s ] [ lr: {lr} ] [ eta: {eta} ] "
+            )
         for k, v in log_vars.items():
             message += f"[ {k}: {v:.4e} ] "
-            # tensorboard logger
-            if self.use_tb_logger and "debug" not in self.exp_name:
-                if k.startswith("l_"):
-                    self.tb_logger.add_scalar(f"losses/{k}", v, current_iter)
-                else:
-                    self.tb_logger.add_scalar(k, v, current_iter)
+            if self.tb_logger is not None:
+                tag = f"losses/{k}" if k.startswith("l_") else k
+                self.tb_logger.add_scalar(tag, v, current_iter)
         self.logger.info(message)
 
 
