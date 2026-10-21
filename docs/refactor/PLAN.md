@@ -22,30 +22,33 @@ Competitor rule: before changing an area, read `analysis/competitor/H*.md` (when
 Phase L launched 2026-10-20 as workflow `phase-L-leaf-fixes` (impl t3 -> Codex review -> fix pass); status -> review when it returns.
 
 ## Phase A — architecture fixes (parallel, disjoint arch files; state_dict keys must not change)
+Superseded (v1 table, historical): A1-A3 landed in 09ffccc via the v2 wave W0 **A-verify**; A4 was not taken up.
 | step | scope | files owned | status |
 |---|---|---|---|
-| A1 | H4 #1 FlexNet attention no-grad/layout/window, H4 #10 reparam lifecycle | flexnet, span, spanplus archs + tests/test_archs_a1.py | todo (WIP patch, unverified) |
-| A2 | H4 #3 window padding, H4 #11 mask dtype/exit/mean buffer | hat, drct, swinir, swinirdense, dat archs + tests/test_archs_a2.py | todo (WIP patch, unverified) |
-| A3 | H4 #12 EIMN, smoke: grformer/krgn device, esc_fp/omnisr defaults, hit_srf OOM check | eimn, grformer, krgn, esc, omnisr, hitsrf archs + tests/test_archs_a3.py | todo (WIP patch, unverified) |
-| A4 | later/optional: H4 #17 spectral_norm parametrization (needs D checkpoint key remap), #15 shared UniUpsample, #18 compact learn_residual, #19 capability flags | - | todo |
+| A1 | H4 #1 FlexNet attention no-grad/layout/window, H4 #10 reparam lifecycle | flexnet, span, spanplus archs + tests/test_archs_a1.py | superseded: done in W0 (09ffccc) |
+| A2 | H4 #3 window padding, H4 #11 mask dtype/exit/mean buffer | hat, drct, swinir, swinirdense, dat archs + tests/test_archs_a2.py | superseded: done in W0 (09ffccc) |
+| A3 | H4 #12 EIMN, smoke: grformer/krgn device, esc_fp/omnisr defaults, hit_srf OOM check | eimn, grformer, krgn, esc, omnisr, hitsrf archs + tests/test_archs_a3.py | superseded: done in W0 (09ffccc) |
+| A4 | later/optional: H4 #17 spectral_norm parametrization (needs D checkpoint key remap), #15 shared UniUpsample, #18 compact learn_residual, #19 capability flags | - | not taken (optional) |
 
 ## Phase C — core restructure (sequenced; refined from design/T1..T4, T6)
+Superseded (v1 table, historical): C1-C8 were executed as the waves W0-W7 of the v2 plan below; the status column
+names the wave and commits.
 | step | content | depends | status |
 |---|---|---|---|
-| C1 | Config/construction (T3): parse once, no import-time argv (net_opt/rng), scale injection into archs/losses, RNG ownership, exceptions instead of sys.exit, default-device policy | L* | todo |
-| C2 | Training step + loss pipeline (T1 + T6): LossContext, losses pull own inputs, GAN G/D terms (G1.*), one accumulation counter (G2.*), AMP policy, NaN/inf detection without per-iter sync, EMA gating, SAM/ECO handling | C1 | todo |
-| C3 | Model structure + checkpoints (T2): base/image/otf split, live+EMA+scaler+counters in state, atomic saves, compile/DDP unwrapping, resume semantics (G3.*), validation fixes (G7.1, G7.4, G7.M8) | C2 | todo |
-| C4 | train.py/test.py/convert.py loop rewrite: counters, epochs (G2.M1/M7), kill-switch removal, resume errors, logging (G2.*, G3.2, G7.3) | C3 | todo |
-| C5 | Aether registration + QAT end to end (T5; resolve canonical source: T5 says aether_arch v4, G8.4 says aether_core v5) | C3 | todo |
-| C6 | Performance pass (T4): syncs, layouts, compile mode, tiled val on GPU, profiler before/after | C4 | todo |
-| C7 | Stability acceptance (T6): NaN rate 0 over N seeds, D logits bounded, 2k-iter bf16+fp16 runs image+otf, resume equivalence; template defaults | C4 | todo |
-| C8 | Docs: readme/options templates cleanup, final review (Codex + Fable), remove temporary test hacks | all | todo |
+| C1 | Config/construction (T3): parse once, no import-time argv (net_opt/rng), scale injection into archs/losses, RNG ownership, exceptions instead of sys.exit, default-device policy | L* | superseded: W0-W1 (de925d4, 10876ed, 0c7b5b3) |
+| C2 | Training step + loss pipeline (T1 + T6): LossContext, losses pull own inputs, GAN G/D terms (G1.*), one accumulation counter (G2.*), AMP policy, NaN/inf detection without per-iter sync, EMA gating, SAM/ECO handling | C1 | superseded: W1-W3 (5c7e8ee, c48252d, 81a7fca, 7e5082a, 4d55315) |
+| C3 | Model structure + checkpoints (T2): base/image/otf split, live+EMA+scaler+counters in state, atomic saves, compile/DDP unwrapping, resume semantics (G3.*), validation fixes (G7.1, G7.4, G7.M8) | C2 | superseded: W0-W3 (998ce6c, 2e18ffe, 6968a2c, b5996be, 4d55315) |
+| C4 | train.py/test.py/convert.py loop rewrite: counters, epochs (G2.M1/M7), kill-switch removal, resume errors, logging (G2.*, G3.2, G7.3) | C3 | superseded: W4 (0ab383b) |
+| C5 | Aether registration + QAT end to end (T5; resolve canonical source: T5 says aether_arch v4, G8.4 says aether_core v5) | C3 | superseded: W5 (af5c7db) |
+| C6 | Performance pass (T4): syncs, layouts, compile mode, tiled val on GPU, profiler before/after | C4 | superseded: W6 (e31cd49) |
+| C7 | Stability acceptance (T6): NaN rate 0 over N seeds, D logits bounded, 2k-iter bf16+fp16 runs image+otf, resume equivalence; template defaults | C4 | superseded: W5 (fe4a176) |
+| C8 | Docs: readme/options templates cleanup, final review (Codex + Fable), remove temporary test hacks | all | superseded: W6-W7 (c3dc388) |
 
 G5.M4 DISTS normalisation (loss + metric) applied in 155f677 (DECISIONS #6).
 Open 3-model tie-break: canonical aether source (T5: aether_arch v4 vs G8.4: aether_core v5) — resolve at C5.
 
 ## Session-1 end state (2026-10-20) — start here next session
-1. Phase A: unverified WIP saved as `wip/phaseA_archs_unverified.patch` (+ `wip/test_archs_a*.py`); the worktree was reset clean.
+1. (Historical; landed in 09ffccc, `wip/` deleted in W7.) Phase A: unverified WIP saved as `wip/phaseA_archs_unverified.patch` (+ `wip/test_archs_a*.py`); the worktree was reset clean.
    Resume: `git apply docs/refactor/wip/phaseA_archs_unverified.patch`, copy the tests into tests/, then for each group A1-A3:
    verify (state_dict keys unchanged vs HEAD, forward equality, tests) -> Codex review -> fix -> commit. The workflow was stopped
    mid-run, so some groups may lack their Codex review/fix pass — treat all three as unreviewed.
@@ -67,7 +70,7 @@ Each lane: Opus implements -> Codex gpt-6-astra reviews -> Opus fix pass -> main
 | W2 | **T1-A2** gan_loss + AdvView; **T1-B1** loss kernel recipe (3 workers) incl. FDL seeded projections; **T2-A3** data/otf_degradation.py (Degrader, PairPool); **T2-B1** phase state_dict | done (81a7fca, 7e5082a, cbe26b0, b5996be) |
 | W3 | **C1** integration (one agent): models/base.py, image.py, otf.py, models/__init__ (T2 C1 + T1 B2 + T3 L-E + T5 QAT slot) | done (4d55315) |
 | W4 | **D1** entry points: train.py, test.py, convert.py, utils/logger.py, utils/misc.py, utils/__init__.py, prefetch reset (T2 D1 + T1 B3 + T3 L-E) | done (0ab383b); merged to master |
-| W5 | verification (T2 E1-E4, T3 I-1 smoke + DDP gloo + errors, T1 D step tests) + T3-Z cleanup; then C5 aether/QAT, C6 perf, C7 stability acceptance, C8 docs | todo |
+| W5 | verification (T2 E1-E4, T3 I-1 smoke + DDP gloo + errors, T1 D step tests) + T3-Z cleanup; then C5 aether/QAT, C6 perf, C7 stability acceptance, C8 docs | superseded by the W5 and W6 rows below |
 | W5 | **C5** aether + QAT (t4); **T3-Z** legacy cleanup (options.py, registry.py, net_opt, soap_sf/fsam, conftest argv hack; hygiene allowlist empty); **C7** acceptance tests (T2 E1-E3) + 2k-iter GPU runs -> analysis/acceptance.md | done (af5c7db, 8da8ae0, fe4a176); merged to master |
 | W6 | **EMA warmup** (ema_power, competitor recipe; acceptance showed EMA PSNR 6.5 vs live 23.5 at 1000 updates) + `convert.py --strip-qat` (T5 A9) + **C6** perf pass (T4 draft: profile first, DINOv2 precision, syncs, compile, layouts) + **C8** docs/readme/templates, factory.build helper, wavelet_guided shrink, README section "Adding an architecture" (ARCHS table row + scale kw), final Codex review | done (a924bf2, e31cd49, 9063c70, c3dc388); merged to master |
 | W7 | final whole-branch review (5 Codex areas + Fable strategic audit) -> Opus triage -> fix lanes -> Codex recheck; final merge | wip (workflow phase-C-wave7-final-review, run wf_c01c08ad-c53) |

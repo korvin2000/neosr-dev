@@ -19,7 +19,7 @@ Started 2026-10-20. Branch `refactor/stabilize`, checked out as the worktree `.w
 | `analysis/reviews/` | the three independent reviews (`opus.md`, `fable.md`, `codex.md`) and the shared `brief.md` |
 | `analysis/findings_round*.md` | consolidated finding lists that went through consensus verification |
 | `analysis/consensus/` | final verdict tables per group (G1..G8 = round 1, F = Fable-unique round 2) |
-| `design/` | final architecture designs T1..T5 (loss pipeline/step, model+checkpoint, config/imports, triage+perf, aether+QAT) |
+| `design/` | final architecture designs T1, T2, T3, T5 (loss pipeline/step, model+checkpoint, config/imports, aether+QAT). T4 (triage+perf) exists only as the draft `design/drafts/T4_feature_triage_perf.md`; T6_stability was never written (stability evidence: `analysis/stability/raw_summary.md` and `analysis/acceptance.md`) |
 
 ## Process used
 Three independent reviews (Opus 5.5 main thread, Fable 5.1 xhigh, Codex gpt-6-astra high) -> consolidated findings ->

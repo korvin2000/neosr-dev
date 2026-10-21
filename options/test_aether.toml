@@ -4,7 +4,6 @@ name = "test_aether"
 model_type = "image"
 scale = 2
 #use_amp = true
-#compile = true
 
 [datasets.test_1]
 name = "val_1"

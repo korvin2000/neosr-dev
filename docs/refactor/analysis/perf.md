@@ -167,17 +167,17 @@ of C6: E +6 % (201.0 -> 189.7 ms), O none (launch-bound, §6). With a warm induc
 | Candidate | Evidence | Decision |
 |---|---|---|
 | bf16 backbone for FDL `vgg` (and the other CNN backbones) | VGG, gt + noise candidate: sr-gradient relative L2 **2.1e5**, cos -0.02 (bf16 rounding leaves near-zero FFT bins whose `angle` gradient explodes); otherwise loss error <= 7.5e-4 and G-gradient cos 0.9993 | rejected (outlier criterion); `resnet`/`effnet` not measured, kept fp32 like VGG |
-| bf16 for `dists_loss`, `vgg_perceptual_loss`, `ff_loss`, `mssim_loss` (still `fp32 = True`) | not in either profiled template; mssim forward is 2.2 ms/update | unchanged: not shown by this profile |
+| bf16 for `dists_loss`, `ff_loss`, `mssim_loss` (still `fp32 = True`; `vgg_perceptual_loss` already runs in the autocast dtype, as at baseline) | not in either profiled template; mssim forward is 2.2 ms/update | unchanged: not shown by this profile |
 | more DataLoader workers or prefetch | prefetcher wait 0.2-0.3 ms/update at 4 workers on E (16 x 256 px PNG pairs) and O (8 x 256 px + kernels) | unchanged |
 | remove the gray-noise gate sync (≤ 2/update on O) | computing gray noise unconditionally reorders the `torch.poisson` / `randn` draws, so degradations would no longer match HEAD for a given seed | kept: one sync per noise call |
 | the 2 per-update syncs of `Phase.step` (one `isfinite` per G and D update) | designed (T2); a sync costs ≈ 0 on GPU-bound runs (T4, and §3.4 here) | unchanged (`phase.py` is not C6) |
 | compile D | crashes (§3.5) | rejected |
-| `compile_mode = "max-autotune-no-cudagraphs"` | with `fast_matmul = true` (the owner's setting) inductor fails while autotuning: `InductorError: ... PyTorch is checking the matmul precision without a specific backend name ... used mix of the legacy and new APIs`; with `fast_matmul = false` autotuning runs, but the run hit a CUDA OOM because another agent held 15 GiB, so no number | not a default; §5.3 |
+| `compile_mode = "max-autotune-no-cudagraphs"` | with `fast_matmul = true` (the owner's setting) inductor fails while autotuning: `InductorError: ... PyTorch is checking the matmul precision without a specific backend name ... used mix of the legacy and new APIs`; with `fast_matmul = false` autotuning runs, but the run hit a CUDA OOM because another agent held 15 GiB, so no number | not a default; the mixed-API failure is fixed (§5.3) |
 | `compile = true`, mode `"default"`, `fast_matmul = false` | E 4.89 it/s, warm-up 109 s with a cold cache | informational |
 
 ## 5. Needed outside C6 (measured with harness prototypes, not in the code)
 
-1. **`neosr/utils/diffjpeg.py`, `DiffJPEG.forward`**: the per-element `factor[i] = quality_to_factor(factor[i])`
+1. **[implemented in W7]** **`neosr/utils/diffjpeg.py`, `DiffJPEG.forward`**: the per-element `factor[i] = quality_to_factor(factor[i])`
    loop compares a 0-d CUDA tensor in Python: 8 syncs per JPEG call, **16 of the 20 syncs per update on
    O**. Vectorised with the same arithmetic (bitwise equal factors), for tensor `quality`:
    `factor = torch.where(quality < 50, 5000.0 / quality, 200.0 - quality * 2) / 100.0`.
@@ -186,9 +186,9 @@ of C6: E +6 % (201.0 -> 189.7 ms), O none (launch-bound, §6). With a warm induc
    e.g. `t.model = torch.compile(t.model, dynamic=False)` for `fdl_loss` terms). Prototype on the state
    before §3.2: E 214 -> 198.5 ms/update (+8 %), O 98.6 -> 91.4 ms/update (+8 %), ~20 s more warm-up.
    §3.2 removed part of what it compiles, so expect somewhat less now.
-3. **`neosr/runtime.py`, `fast_matmul`**: it mixes `torch.set_float32_matmul_precision("medium")`
-   with `allow_tf32`; inductor's autotuner then refuses (§4). Use one precision API, otherwise
-   `compile_mode = "max-autotune*"` cannot be used with `fast_matmul = true`.
+3. **`neosr/runtime.py`, `fast_matmul`** (fixed in W7 by removing the legacy `allow_tf32` assignment):
+   it mixed `torch.set_float32_matmul_precision("medium")` with `allow_tf32`; inductor's autotuner then
+   refused (§4) and `compile_mode = "max-autotune*"` could not be used with `fast_matmul = true`.
 4. **`neosr/models/image.py`**: under DDP + `compile`, `net_d_adv` is still `torch.compile(self.net_d)`.
    It works (one D forward before G's backward), but with D eager everywhere else it can simply be
    `self.net_d`.

@@ -12,9 +12,10 @@ reproducible research.
 - **Broad**: 45 generator families, 6 discriminators, 15 losses, schedule-free optimizers, on-the-fly
   (Real-ESRGAN) degradations and batch augmentations, all selected from a TOML file.
 - **Stable**: correct adversarial training, exact gradient accumulation, AMP (fp16/bf16) with non-finite update
-  skipping, EMA, and atomic, self-contained checkpoints that resume exactly.
-- **Reproducible**: `manual_seed` turns on deterministic kernels; a resumed run continues the saved weights,
-  optimizer, scheduler, scaler, counters and RNG streams.
+  skipping, EMA, and atomic, self-contained checkpoints.
+- **Reproducible**: `manual_seed` turns on deterministic kernels. A resume is a stochastic continuation: weights,
+  optimizer, EMA, scheduler, scaler and counters are restored exactly, model-side RNG on rank 0 only; data order
+  and augmentations are not order-exact.
 - **Simple**: plain Python, no registries or import-time magic; each package has one lookup table. Managed with
   [`uv`](https://docs.astral.sh/uv/) and [`ruff`](https://docs.astral.sh/ruff/).
 
@@ -69,7 +70,9 @@ uv run python convert.py --input net_g_10000.pth -net esrgan -s 4   # ONNX expor
   checks it against PyTorch with ONNX Runtime (`-nocheck` skips). Options: `-opset` (17), `-static C H W`
   (default: dynamic batch/height/width), `-window` (sets `window_size`), `-optimize` (adds
   `<output>_fp32_optimized.onnx`). `-fp16` is temporarily a no-op, `-fulloptimization` is disabled, and `craft`
-  and `ditn` cannot be exported. A QAT checkpoint exports as INT8 QDQ ONNX ([docs/aether.md](docs/aether.md)).
+  and `ditn` cannot be exported. A QAT checkpoint exports as INT8 QDQ ONNX; `--strip-qat` instead writes its
+  float deploy weights to `<input>_float.pth` (`--output` overrides), and with `--onnx` also their float ONNX
+  ([docs/aether.md](docs/aether.md)).
 - Templates live in [options/](options/): `train_<arch>.toml` (paired data), `train_<arch>_otf.toml`
   (on-the-fly degradations), `test_<arch>.toml` and `options/aether/`.
 
@@ -112,7 +115,8 @@ Configs are TOML (`.toml` only). Required keys: `name`, `model_type` (`image` or
 | `path.ignore_resume_networks` | `pretrain_network_*` for a new run |
 
 Top-level keys: `num_gpu` (`"auto"`), `manual_seed`, `use_amp`, `bfloat16`, `fast_matmul` (TF32 and reduced
-matmul precision), `compile` and `compile_mode` (not on Windows), `find_unused_parameters` (DDP),
+matmul precision), `compile` and `compile_mode` (training only, not on Windows; `test.py` runs eager),
+`find_unused_parameters` (DDP),
 `input_size`/`in_chans` (log MACs if `torchprofile` is installed), `print_network`.
 
 ### datasets
@@ -212,7 +216,9 @@ Files under `experiments/<name>/`:
   `<name>_archived_<time>`; a resume never does. Resume is strict: a changed set of networks, optimizer type or
   schedule-free mode, trainable parameter list or scheduler list is a configuration error ("use
   pretrain_network_* for a new run"). Other differences in the run record (network options, AMP, EMA, world
-  size) are warnings. Data order, augmentations and the OTF pool restart.
+  size) are warnings. A resume continues stochastically, not order-exactly: nets, EMA, optimizers, schedulers,
+  scalers and counters are exact; the model-side RNG (dropout, DropPath) is restored on rank 0 only (other DDP
+  ranks start fresh streams); data order, augmentations and the OTF pool restart.
 - **Pretrained weights**: `path.pretrain_network_g`/`_d` (ignored while resuming), `param_key_g`/`_d` (default:
   `params_ema`, `params-ema`, `params`, or a bare state dict), `strict_load_g`/`_d` (default true; false skips
   shape mismatches and logs missing and unexpected keys). Pre-refactor `net_g_*.pth` files load this way;
@@ -411,6 +417,8 @@ Ultra light).
   pretrained weights); only the newest `logger.keep_states` states are kept.
 - **Configuration**: unknown keys warn instead of being silently ignored, removed keys are errors, and
   `match_lq_colors` became the per-loss `target = "lq"`.
+- **`blur_kernel_size`, `blur_kernel_size2`** (OTF) were removed: they were never read. Kernel sizes are sampled
+  as odd values from 7 to 21, as before; old configs get an unknown-key warning.
 
 ## datasets
 

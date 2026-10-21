@@ -4,7 +4,6 @@ name = "test_plksr"
 model_type = "image"
 scale = 4
 #use_amp = true
-#compile = true
 
 [datasets.test_1]
 name = "val_1"

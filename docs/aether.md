@@ -34,7 +34,9 @@ loads into the behaviour it was saved with. Files written before the flag existe
 ## QAT training
 
 `[train] enable_qat = true` works from scratch (the shipped `options/aether/*.toml`) or from a float,
-deployed or QAT `pretrain_network_g`. The file kind is detected from its keys. The trainer calls
+deployed or QAT `pretrain_network_g`. Only a QAT file is detected from its keys (its fake-quant modules). A
+deployed float file (`fuse_model()` or `convert.py --strip-qat`) needs `[network_g] fused_init = true`, else the
+strict load fails; this is distinct from `[train] fused_init` below. The trainer calls
 `prepare_qat()` on the bare generator before EMA, optimizers, DDP and compile exist. It fuses the reparam
 convs, keeps the norms live and inserts fake quant. Weights are symmetric per-channel int8 (scale
 `max|w|/127`), activations symmetric per-tensor int8. `conv_first`, `conv_before_upsample.0`, `conv_last`
@@ -64,6 +66,7 @@ followed by a QAT fine-tune keeps the branch benefit.
 | float ONNX | the same command on a float file (exported unfused) |
 | evaluate a QAT file | `test.py` with `pretrain_network_g` = the QAT file: fake-quant inference, frozen ranges |
 | deployed float `.pth` | `net.eval(); net.fuse_model(); torch.save({"params": net.state_dict()}, ...)`, then load with `fused_init = true` (`options/test_aether.toml`) |
+| float `.pth` from a QAT file | `python convert.py --input net_g_N.pth -net aether_small -s 2 --strip-qat`: drops the QAT state, fuses and folds, checks parity, writes `net_g_N_float.pth` (`--output` overrides); `--onnx` also writes its float ONNX (`net_g_N_float_fp32.onnx`). Load the `.pth` with `[network_g] fused_init = true` |
 
 ## Limits and open points
 
@@ -71,7 +74,6 @@ followed by a QAT fine-tune keeps the branch benefit.
 - medium/large: the attention convs get weight Q/DQ, but their inputs stay float. x4 and x8: the convs after
   a PixelShuffle have no input Q/DQ.
 - TensorRT engine builds, native CPU INT8 (`torch.ao.quantization.convert`), multi-GPU DDP and `compile` with QAT are unverified.
-- A float "strip" export of a QAT file (QAT state removed, norms folded) has no CLI flag yet.
 
 ## History
 
