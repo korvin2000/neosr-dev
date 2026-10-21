@@ -86,3 +86,8 @@
 - Remaining: C5 aether + QAT (T5; resolve v4/v5 canonical source; image._prepare_qat hook currently raises on enable_qat),
   C6 perf pass (T4 draft), C7 stability acceptance (2k-iter runs, resume equivalence tests T2 E1-E4), C8 docs/templates/cleanup
   (factory.build helper, wavelet_guided.py shrink, readme, final Codex review).
+- W5 committed: aether+QAT af5c7db (v4 canonical on evidence; common/ removed), legacy cleanup 8da8ae0 (hygiene allowlist empty),
+  acceptance fe4a176 (exact resume CPU/CUDA/DDP; 2000-update bf16/fp16 GAN runs and 1000-update OTF: 0 skips, no NaN).
+  Full suite 1135 passed / 0 failed. Finding for W6: EMA (decay 0.999, first-update copy) validates far below live weights early
+  (6.55 vs 23.51 PSNR at 1000 updates) -> add EMA decay warmup (competitor ema_power). Owner asked how to register archs now:
+  answered (ARCHS row + native scale kw); README section planned in C8.
