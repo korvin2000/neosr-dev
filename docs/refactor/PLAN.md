@@ -68,3 +68,5 @@ Each lane: Opus implements -> Codex gpt-6-astra reviews -> Opus fix pass -> main
 | W3 | **C1** integration (one agent): models/base.py, image.py, otf.py, models/__init__ (T2 C1 + T1 B2 + T3 L-E + T5 QAT slot) | done (4d55315) |
 | W4 | **D1** entry points: train.py, test.py, convert.py, utils/logger.py, utils/misc.py, utils/__init__.py, prefetch reset (T2 D1 + T1 B3 + T3 L-E) | done (0ab383b); merged to master |
 | W5 | verification (T2 E1-E4, T3 I-1 smoke + DDP gloo + errors, T1 D step tests) + T3-Z cleanup; then C5 aether/QAT, C6 perf, C7 stability acceptance, C8 docs | todo |
+| W5 | **C5** aether + QAT (t4); **T3-Z** legacy cleanup (options.py, registry.py, net_opt, soap_sf/fsam, conftest argv hack; hygiene allowlist empty); **C7** acceptance tests (T2 E1-E3) + 2k-iter GPU runs -> analysis/acceptance.md | wip (workflow phase-C-wave5, run wf_edf9c8eb-727) |
+| W6 | **C6** perf pass (T4 draft: profile first, DINOv2 precision, syncs, compile, layouts) + **C8** docs/readme/templates, factory.build helper, wavelet_guided shrink, final Codex review | todo |
