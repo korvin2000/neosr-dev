@@ -5,8 +5,6 @@ from torch.nn import functional as F
 
 from neosr.utils.rng import rng
 
-rng = rng()
-
 # All augmentations work at native resolutions: boxes are drawn in LQ pixels and
 # multiplied by `scale` for GT, so LQ is never resampled to GT size and back.
 
@@ -22,8 +20,8 @@ def _rand_box(h: int, w: int, cut_h: int, cut_w: int) -> tuple[int, int, int, in
     image. Cut sizes are at least 1, so the box is never empty.
     """
     cut_h, cut_w = max(cut_h, 1), max(cut_w, 1)
-    top = int(rng.integers(h)) - cut_h // 2  # type: ignore[attr-defined]
-    left = int(rng.integers(w)) - cut_w // 2  # type: ignore[attr-defined]
+    top = int(rng.integers(h)) - cut_h // 2
+    left = int(rng.integers(w)) - cut_w // 2
     return (max(top, 0), min(top + cut_h, h), max(left, 0), min(left + cut_w, w))
 
 
@@ -54,7 +52,7 @@ def mixup(
 
     """
     _check_sizes(img_gt, img_lq, scale)
-    lam = rng.uniform(alpha_min, alpha_max)  # type: ignore[attr-defined]
+    lam = rng.uniform(alpha_min, alpha_max)
 
     # each image is mixed with the same partner in GT and LQ
     idx = _perm(img_gt)
@@ -84,7 +82,7 @@ def cutmix(
     """
     _check_sizes(img_gt, img_lq, scale)
     h, w = img_lq.shape[-2:]
-    cut_rat = np.sqrt(1.0 - rng.uniform(0, alpha))  # type: ignore[attr-defined]
+    cut_rat = np.sqrt(1.0 - rng.uniform(0, alpha))
     y1, y2, x1, x2 = _rand_box(h, w, int(h * cut_rat), int(w * cut_rat))
     s = scale
 
@@ -119,7 +117,7 @@ def resizemix(
     """
     _check_sizes(img_gt, img_lq, scale)
     h, w = img_lq.shape[-2:]
-    tao = rng.uniform(scope[0], scope[1])  # type: ignore[attr-defined]
+    tao = rng.uniform(scope[0], scope[1])
     y1, y2, x1, x2 = _rand_box(h, w, int(h * tao), int(w * tao))
     s = scale
 
@@ -156,7 +154,7 @@ def cutblur(
     """
     _check_sizes(img_gt, img_lq, scale)
     h, w = img_lq.shape[-2:]
-    lam = rng.uniform(0.2, alpha)  # type: ignore[attr-defined]
+    lam = rng.uniform(0.2, alpha)
     y1, y2, x1, x2 = _rand_box(h, w, int(h * lam), int(w * lam))
     s = scale
 
@@ -224,11 +222,11 @@ def apply_augment(
     weights = np.array([p for _, p in active], dtype=np.float64)
     weights /= weights.sum()
 
-    if len(active) > 1 and rng.random() < multi_prob:  # type: ignore[attr-defined]
-        num_augs = rng.integers(2, len(active)) if len(active) > 2 else len(active)  # type: ignore[attr-defined]
-        chosen = set(rng.choice(names, size=num_augs, replace=False, p=weights))  # type: ignore[attr-defined]
+    if len(active) > 1 and rng.random() < multi_prob:
+        num_augs = rng.integers(2, len(active)) if len(active) > 2 else len(active)
+        chosen = set(rng.choice(names, size=num_augs, replace=False, p=weights))
     else:
-        chosen = {rng.choice(names, p=weights)}  # type: ignore[attr-defined]
+        chosen = {rng.choice(names, p=weights)}
 
     chosen = [a for a in _ORDER if a in chosen]
     if not chosen:  # only "none"

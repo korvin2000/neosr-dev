@@ -468,7 +468,7 @@ def train_pipeline(project_root: str) -> None:
 
     # Initialize dataloader prefetcher for efficient data transfer to GPU
     if train_loader is not None:
-        prefetcher = CUDAPrefetcher(train_loader, opt)
+        prefetcher = CUDAPrefetcher(train_loader, torch.device("cuda"))
     else:
         logger.error(f"{tc.red}Training dataloader could not be created. Exiting.{tc.end}")
         sys.exit(1)

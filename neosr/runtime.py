@@ -30,7 +30,9 @@ def seed_all(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed % 2**32)  # noqa: NPY002
     torch.manual_seed(seed)  # also seeds every CUDA device
-    # seam (lane L-C): seed the process-wide numpy Generator here with neosr.utils.rng.seed_rng(seed)
+    from neosr.utils.rng import seed_rng  # noqa: PLC0415 - keeps `import neosr.runtime` light
+
+    seed_rng(seed)
 
 
 def _check_gpu(cfg: dict[str, Any]) -> None:

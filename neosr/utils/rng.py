@@ -1,14 +1,23 @@
-from collections.abc import Callable
-from pathlib import Path
+"""Process-wide numpy stream for data and degradation code. Imports nothing from neosr.
 
-from numpy.random import default_rng
+Consumers bind it once (`from neosr.utils.rng import rng`); it is reseeded IN PLACE and never
+rebound, so every binding sees the new state.
+"""
 
-from neosr.utils.options import parse_options
+from typing import Any
+
+import numpy as np
+
+rng: np.random.Generator = np.random.default_rng()
 
 
-def rng() -> Callable:
-    root_path = Path(__file__).parents[2]
-    opt, __ = parse_options(str(root_path), is_train=True)
-    if opt is not None:
-        seed: int | None = opt.get("manual_seed", None)
-    return default_rng(seed=seed) if seed is not None else default_rng()  # type: ignore[return-value]
+def seed_rng(seed: int) -> None:
+    rng.bit_generator.state = np.random.PCG64(seed).state
+
+
+def get_state() -> dict[str, Any]:
+    return rng.bit_generator.state
+
+
+def set_state(state: dict[str, Any]) -> None:
+    rng.bit_generator.state = state

@@ -1,4 +1,5 @@
 import os
+import random
 from pathlib import Path
 
 import cv2
@@ -7,13 +8,8 @@ import pytest
 import torch
 from torch.utils.data import DataLoader, Dataset, RandomSampler
 
-from neosr.data import (
-    build_dataloader,
-    build_dataset,
-    degradations,
-    seed_data_rngs,
-    worker_init_fn,
-)
+from neosr.config import ConfigError
+from neosr.data import build_dataloader, build_dataset, degradations, worker_init_fn
 from neosr.data.augmentations import apply_augment, cutblur, cutmix, mixup, resizemix
 from neosr.data.data_sampler import EnlargedSampler
 from neosr.data.data_util import read_img
@@ -22,6 +18,8 @@ from neosr.data.file_client import FileClient
 from neosr.data.otf_dataset import otf_crop_size
 from neosr.data.prefetch_dataloader import CUDAPrefetcher
 from neosr.data.transforms import paired_random_crop
+from neosr.runtime import Runtime
+from neosr.utils.rng import get_state, rng, seed_rng, set_state
 
 
 def write_pairs(
@@ -131,11 +129,11 @@ def test_read_img_errors(tmp_path):
     client = FileClient("disk")
     bad = tmp_path / "bad.png"
     bad.write_bytes(b"not an image")
-    with pytest.raises(ValueError, match="bad.png"):
+    with pytest.raises(OSError, match="bad.png"):
         read_img(client, str(bad), "gt")
     empty = tmp_path / "empty.png"
     empty.write_bytes(b"")
-    with pytest.raises(ValueError, match="empty.png"):
+    with pytest.raises(OSError, match="empty.png"):
         read_img(client, str(empty), "gt")
     with pytest.raises(FileNotFoundError):
         read_img(client, str(tmp_path / "missing.png"), "gt")
@@ -164,7 +162,7 @@ def test_augment_none_is_identity():
 
 
 def test_augment_weighted_choice():
-    seed_data_rngs(0)
+    seed_rng(0)
     gt, lq = (
         torch.rand(2, 3, 16, 16, dtype=torch.float16),
         torch.rand(2, 3, 8, 8, dtype=torch.float16),
@@ -221,15 +219,30 @@ def test_augment_validation():
 def test_sampler_deterministic_per_epoch():
     ds = list(range(10))
 
-    def draw(epoch, rank=0):
-        sampler = EnlargedSampler(ds, num_replicas=2, rank=rank, ratio=2)
+    def draw(epoch, rank=0, replicas=2, seed=7):
+        sampler = EnlargedSampler(ds, replicas, rank, 2, seed)
         sampler.set_epoch(epoch)
         return list(sampler)
 
     assert draw(3) == draw(3)
     assert draw(3) != draw(4)
-    both = sorted(draw(5, 0) + draw(5, 1))
-    assert both == sorted(ds * 2)
+    assert draw(3) != draw(3, seed=8)
+    # both ranks shard one permutation
+    full = draw(5, replicas=1)
+    assert (draw(5, 0), draw(5, 1)) == (full[0::2], full[1::2])
+    assert sorted(full) == sorted(ds * 2)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_sampler_no_cuda_allocation():
+    sampler = EnlargedSampler(list(range(10)), seed=3)
+    expected = list(sampler)
+    torch.cuda.init()
+    torch.cuda.reset_peak_memory_stats()
+    before = torch.cuda.memory_allocated()
+    with torch.device("cuda"):  # the legacy trainer still sets a CUDA default device
+        assert list(sampler) == expected
+    assert torch.cuda.max_memory_allocated() == before
 
 
 def test_otf_crop_size():
@@ -257,7 +270,7 @@ class _RngDraws(Dataset):
         return 4
 
     def __getitem__(self, index):
-        return degradations.rng.random()
+        return rng.random()
 
 
 def test_worker_rngs_distinct():
@@ -323,7 +336,8 @@ def test_build_dataloader_overrides():
     assert not loader.pin_memory
     assert not loader.persistent_workers
     val = build_dataloader(ds, {"phase": "val"})
-    assert (val.batch_size, val.num_workers, val.pin_memory) == (1, 0, False)
+    assert (val.batch_size, val.num_workers, val.drop_last) == (1, 0, False)
+    assert val.pin_memory == torch.cuda.is_available()
     with pytest.raises(ValueError, match="phase"):
         build_dataloader(ds, {"phase": "eval"})
 
@@ -366,7 +380,7 @@ def test_cuda_prefetcher():
 
     n, numel = 6, 1 << 18
     loader = _FreshBatches(n, numel)
-    prefetcher = CUDAPrefetcher(loader, {})  # type: ignore[arg-type]
+    prefetcher = CUDAPrefetcher(loader, torch.device("cuda"))  # type: ignore[arg-type]
     assert loader.produced == 0  # construction must not consume a batch
     for epoch in range(2):  # reset starts each epoch
         prefetcher.reset()
@@ -383,3 +397,170 @@ def test_cuda_prefetcher():
         torch.cuda.synchronize()
         assert [s.item() for s in sums] == [float(i * numel) for i in range(n)]
         assert loader.produced == n * (epoch + 1)
+
+
+def test_rng_reseeded_in_place():
+    bound = degradations.rng  # a consumer binding made at import time
+    seed_rng(5)
+    first = bound.random(3)
+    seed_rng(5)
+    assert (rng.random(3) == first).all()
+    state = get_state()
+    later = rng.random(2)
+    set_state(state)
+    assert (bound.random(2) == later).all()
+    assert bound is rng
+
+
+class _Draws(Dataset):
+    """Every stream a dataset draws from: shuffling order, rng, random and torch."""
+
+    def __len__(self):
+        return 8
+
+    def __getitem__(self, index):
+        return {
+            "idx": index,
+            "np": rng.random(),
+            "py": random.random(),
+            "t": torch.rand(()),
+        }
+
+
+def _loader(workers: int, seed: int = 11, **cfg) -> DataLoader:
+    runtime = Runtime(torch.device("cpu"), 0, 1, seed, distributed=False)
+    opt = {"phase": "train", "batch_size": 4, "num_worker_per_gpu": workers, **cfg}
+    return build_dataloader(_Draws(), opt, runtime=runtime)
+
+
+def _flat(batch) -> list[float]:
+    return [float(x) for k in ("idx", "np", "py", "t") for x in batch[k]]
+
+
+def test_build_dataloader_runtime():
+    ds = _Synthetic()
+    opt = {"phase": "train", "batch_size": 2, "num_worker_per_gpu": "auto"}
+    rt = Runtime(torch.device("cpu"), 1, 2, 100, distributed=True)
+    loader = build_dataloader(
+        ds, opt, runtime=rt, num_gpu=8, dist=False
+    )  # legacy args ignored
+    assert (loader.batch_size, loader.num_workers) == (
+        2,
+        max((os.cpu_count() or 1) // 2, 1),
+    )
+    assert loader.generator.initial_seed() == 101  # type: ignore[union-attr]
+    val = build_dataloader(ds, {"phase": "val"}, runtime=rt)
+    assert (val.batch_size, val.num_workers, val.drop_last) == (1, 0, False)
+
+
+@pytest.mark.parametrize("workers", [0, 2])
+def test_identical_settings_identical_first_batch(workers):
+    def first(seed=11, torch_seed=0):
+        seed_rng(0)  # the main-process streams, which runtime.seed_all seeds
+        random.seed(0)
+        np.random.seed(0)  # noqa: NPY002
+        loader = _loader(workers, seed)
+        # global torch must not reach the order or the worker seeds
+        torch.manual_seed(torch_seed)
+        batch = next(iter(loader))
+        return {k: [float(x) for x in batch[k]] for k in ("idx", "np", "py", "t")}
+
+    a = first()
+    assert a == first()
+    b = first(torch_seed=1)
+    owned = ("idx", "np", "py") if workers == 0 else ("idx", "np", "py", "t")
+    assert all(a[k] == b[k] for k in owned)
+    c = first(seed=12)  # only runtime.seed changes
+    assert a["idx"] != c["idx"]
+    if workers:  # worker draws derive from the loader generator
+        assert not set(a["np"]) & set(c["np"])
+
+
+def test_legacy_loader_seeds_main_rng():
+    opt = {"phase": "train", "batch_size": 4, "num_worker_per_gpu": 0}
+    build_dataloader(_Draws(), opt, seed=5)
+    expected = np.random.default_rng(5).random()
+    build_dataloader(_Draws(), {"phase": "val"}, seed=6)  # val leaves it alone
+    assert rng.random() == expected
+
+
+@pytest.mark.parametrize(("workers", "persistent"), [(0, False), (2, False), (2, True)])
+def test_epochs_differ(workers, persistent):
+    seed_rng(0)
+    loader = _loader(workers, persistent_workers=persistent)
+    assert loader.persistent_workers == persistent
+    epochs = [[_flat(b) for b in loader] for _ in range(2)]
+    assert len(epochs[0]) == len(epochs[1]) == len(loader) == 2
+    # the draws change, not only the order: compare them as sets
+    np_draws = [{x for b in e for x in b[4:8]} for e in epochs]
+    assert np_draws[0] != np_draws[1]
+    assert not np_draws[0] & np_draws[1]
+
+
+def test_unreadable_image_in_worker(tmp_path, paired_opt):
+    root = tmp_path / "bad"
+    write_pairs(root, n=4)
+    (root / "LQ" / "img_02.png").write_bytes(b"not an image")
+    opt = {
+        **paired_opt,
+        "dataroot_gt": str(root / "GT"),
+        "dataroot_lq": str(root / "LQ"),
+        "num_worker_per_gpu": 1,
+    }
+    del opt["meta_info"]
+    rt = Runtime(torch.device("cpu"), 0, 1, 0, distributed=False)
+    loader = build_dataloader(build_dataset(opt), opt, runtime=rt)
+    with pytest.raises(OSError, match=r"img_02\.png"):
+        list(loader)
+
+
+def test_build_dataset_unknown_type():
+    with pytest.raises(ConfigError, match=r"datasets\.train.*did you mean .paired."):
+        build_dataset({"type": "pairde", "phase": "train"})
+    with pytest.raises(ConfigError, match="dataroot_lq"):
+        build_dataset({
+            "type": "otf",
+            "phase": "train",
+            "dataroot_gt": "x",
+            "dataroot_lq": "y",
+        })
+
+
+@pytest.mark.parametrize("gray", [False, True])
+def test_gaussian_noise_numpy(gray):
+    img = np.full((8, 6, 3), 0.5, dtype=np.float32)
+    seed_rng(1)
+    out = degradations.add_gaussian_noise(img, sigma=10, clip=False, gray_noise=gray)
+    noise = out - img
+    assert out.shape == img.shape
+    assert out.dtype == np.float32
+    assert noise.std() > 0
+    assert np.allclose(noise[..., 0], noise[..., 1]) == gray
+    seed_rng(1)
+    assert np.array_equal(
+        degradations.add_gaussian_noise(img, sigma=10, clip=False, gray_noise=gray), out
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_cuda_prefetcher_counts_and_record_stream(monkeypatch):
+    calls = []
+    record = torch.Tensor.record_stream
+
+    def spy(self, stream):
+        calls.append(self.shape)
+        return record(self, stream)
+
+    monkeypatch.setattr(torch.Tensor, "record_stream", spy)
+    loader = build_dataloader(
+        _Synthetic(), {"phase": "train", "batch_size": 4, "num_worker_per_gpu": 0}
+    )
+    prefetcher = CUDAPrefetcher(loader, torch.device("cuda", 0))
+    for _ in range(2):
+        prefetcher.reset()
+        n = 0
+        while (batch := prefetcher.next()) is not None:
+            assert batch["gt"].device == torch.device("cuda", 0)
+            n += 1
+        assert n == len(loader) == 4
+    assert len(calls) == 2 * 4 * 2  # every tensor ("gt" and "idx") of every batch

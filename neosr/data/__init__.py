@@ -1,141 +1,88 @@
-import importlib
 import os
-import random
+from collections.abc import Mapping
 from copy import deepcopy
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import numpy as np
 import torch
-from torch.utils import data
-from torch.utils.data.sampler import Sampler
+from torch.utils.data import DataLoader, Dataset, Sampler, get_worker_info
 
-from neosr.data import augmentations, degradations, otf_dataset
-from neosr.utils import get_root_logger, scandir
-from neosr.utils.registry import DATASET_REGISTRY
+from neosr.utils.factory import resolve
+from neosr.utils.rng import seed_rng
 
-__all__ = ["build_dataloader", "build_dataset"]
+if TYPE_CHECKING:
+    from neosr.runtime import Runtime
 
-# automatically scan and import dataset modules for registry
-# scan all the files under the data folder with '_dataset' in file names
-data_folder = Path(Path(__file__).resolve()).parent
-dataset_filenames = [
-    Path(Path(v).name).stem
-    for v in scandir(str(data_folder))
-    if v.endswith("_dataset.py")
-]
+__all__ = ["DATASETS", "build_dataloader", "build_dataset"]
 
-# import all the dataset modules
-_dataset_modules = [
-    importlib.import_module(f"neosr.data.{file_name}")
-    for file_name in dataset_filenames
-]
+DATASETS: dict[str, tuple[str, str | None]] = {
+    "otf": ("otf_dataset", None),
+    "paired": ("paired_dataset", None),
+    "single": ("single_dataset", None),
+}
 
 
-def build_dataset(dataset_opt: dict[str, Any]):
-    """Build dataset from options.
-
-    Args:
-    ----
-        dataset_opt (dict): Configuration for dataset. It must contain:
-            type (str): Dataset type.
-
-    """
-    dataset_opt = deepcopy(dataset_opt)
-    dataset = DATASET_REGISTRY.get(dataset_opt["type"])(dataset_opt)  # type: ignore[operator]
-    logger = get_root_logger()
-    logger.info(f"Dataset [{dataset.__class__.__name__}] is built.")
-    return dataset
+def build_dataset(cfg: Mapping[str, Any]) -> Dataset:
+    section = f"datasets.{cfg.get('phase')}"
+    return resolve(DATASETS, "neosr.data", section, cfg.get("type"))(
+        deepcopy(dict(cfg))
+    )
 
 
-def seed_data_rngs(seed: int) -> None:
-    """Replace the module-level numpy Generators of the data pipeline.
-
-    Workers inherit (fork) or re-create (spawn, from the same manual_seed) identical
-    Generators, so every worker would draw the same degradations unless reseeded.
-    """
-    modules = (augmentations, degradations, otf_dataset)
-    for module, child in zip(
-        modules, np.random.SeedSequence(seed).spawn(len(modules)), strict=True
-    ):
-        module.rng = np.random.default_rng(child)  # type: ignore[attr-defined]
-
-
-def worker_init_fn(worker_id: int) -> None:  # noqa: ARG001
-    # torch seeds each worker with base_seed + worker_id, where base_seed is drawn
-    # from the main process RNG (seeded per rank) for every new iterator: distinct
-    # per worker, rank and epoch, and reproducible under manual_seed
-    seed = torch.initial_seed()
-    random.seed(seed)
-    np.random.seed(seed % 2**32)  # noqa: NPY002
-    seed_data_rngs(seed)
+def worker_init_fn(_: int) -> None:
+    # torch already seeds random, torch and legacy numpy from this per-worker seed
+    seed_rng(get_worker_info().seed)  # type: ignore[union-attr]
 
 
 def build_dataloader(
-    dataset: data.Dataset,
-    dataset_opt: dict[str, Any],
+    dataset: Dataset,
+    cfg: Mapping[str, Any],
+    *,
+    runtime: "Runtime | None" = None,
+    sampler: Sampler | None = None,
     num_gpu: int = 1,
     dist: bool = False,
-    sampler: Sampler | None = None,
-    seed: int | None = None,  # noqa: ARG001
-) -> data.DataLoader:
-    """Build dataloader.
+    seed: int | None = None,
+) -> DataLoader:
+    """Train: `batch_size` and `num_worker_per_gpu` (default 4, "auto": CPUs per process) per process,
+    shuffled unless `sampler` is given. Val/test: batch 1 in the main process.
 
-    Args:
-    ----
-        dataset (torch.utils.data.Dataset): Dataset.
-        dataset_opt (dict): Dataset options. It contains the following keys:
-            phase (str): 'train' or 'val'.
-            num_worker_per_gpu (int | 'auto'): Number of workers for each GPU.
-            batch_size (int): Training batch size for each GPU.
-            pin_memory (bool): Default: True for training with CUDA.
-            persistent_workers (bool): Default: True when there are workers.
-        num_gpu (int): Number of GPUs. Used only in the train phase.
-            Default: 1.
-        dist (bool): Whether in distributed training. Used only in the train
-            phase. Default: False.
-        sampler (torch.utils.data.sampler): Data sampler. Default: None.
-        seed (int | None): Unused, kept for compatibility: worker seeds derive
-            from torch's per-worker seed (see worker_init_fn).
-
+    The loader generator, seeded `runtime.seed + runtime.rank`, drives shuffling and the per-epoch
+    worker seeds. `num_gpu`/`dist`/`seed` serve the pre-Runtime call shape of train.py/test.py
+    (DataParallel multiplies batch and workers; torch's global RNG seeds the workers; a train
+    loader seeds the main-process `rng` with `seed`, as the old import-time `rng()` did) and are
+    ignored when `runtime` is given.
     """
-    phase = dataset_opt["phase"]
-
-    if phase == "train":
-        multiplier = max(num_gpu, 1)
-        num_workers = dataset_opt.get("num_worker_per_gpu")
-        if num_workers is None:
-            num_workers = 4
-        elif num_workers == "auto":
-            num_workers = max((os.cpu_count() or 1) // multiplier, 1)
-        batch_size = dataset_opt["batch_size"]
-        if not dist:  # DataParallel splits one batch across all GPUs
-            batch_size *= multiplier
-            num_workers *= multiplier
-        dataloader_args = {
-            "dataset": dataset,
-            "batch_size": batch_size,
-            "shuffle": sampler is None,
-            "sampler": sampler,
-            "num_workers": num_workers,
-            "prefetch_factor": 2 if num_workers > 0 else None,
-            "drop_last": True,
-            "worker_init_fn": worker_init_fn,
-            "pin_memory": dataset_opt.get("pin_memory", torch.cuda.is_available()),
-            # torch rejects persistent workers without workers
-            "persistent_workers": dataset_opt.get("persistent_workers", True)
-            and num_workers > 0,
-        }
-    elif phase in {"val", "test"}:
-        dataloader_args = {
-            "dataset": dataset,
-            "batch_size": 1,
-            "shuffle": False,
-            "num_workers": 0,
-            "pin_memory": dataset_opt.get("pin_memory", False),
-        }
-    else:
+    phase = cfg["phase"]
+    if phase not in {"train", "val", "test"}:
         msg = f"Wrong dataset phase: {phase}. Supported ones are 'train', 'val' and 'test'."
         raise ValueError(msg)
-
-    return data.DataLoader(**dataloader_args)
+    if runtime is not None:
+        num_gpu, dist = runtime.world_size, runtime.distributed
+    train = phase == "train"
+    if runtime is None and train and seed is not None:
+        # legacy bridge until W4; with a runtime, runtime.seed_all seeds it
+        seed_rng(seed)
+    multiplier = max(num_gpu, 1)
+    workers, batch_size = 0, 1
+    if train:
+        workers = cfg.get("num_worker_per_gpu", 4)
+        if workers == "auto":
+            workers = max((os.cpu_count() or 1) // multiplier, 1)
+        batch_size = cfg["batch_size"]
+        if not dist:  # DataParallel splits one batch over all GPUs
+            batch_size, workers = batch_size * multiplier, workers * multiplier
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=train and sampler is None,
+        sampler=sampler,
+        num_workers=workers,
+        drop_last=train,
+        generator=None
+        if runtime is None
+        else torch.Generator().manual_seed(runtime.seed + runtime.rank),
+        worker_init_fn=worker_init_fn,
+        pin_memory=cfg.get("pin_memory", torch.cuda.is_available()),
+        persistent_workers=cfg.get("persistent_workers", workers > 0) and workers > 0,
+        prefetch_factor=2 if workers else None,
+    )

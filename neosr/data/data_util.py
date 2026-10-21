@@ -30,12 +30,12 @@ def read_img(
             time.sleep(1)
     if not img_bytes:
         msg = f"No data returned from path: {path}"
-        raise ValueError(msg)
+        raise OSError(msg)
     try:
         img = imfrombytes(img_bytes, float32=True)
     except (AttributeError, ValueError, cv2.error) as e:  # e.g. imdecode gave None
         msg = f"Failed to decode image: {path}"
-        raise ValueError(msg) from e
+        raise OSError(msg) from e
     return img  # type: ignore[return-value]
 
 

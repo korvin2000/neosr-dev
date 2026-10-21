@@ -17,8 +17,6 @@ from neosr.utils.misc import tc
 from neosr.utils.registry import MODEL_REGISTRY
 from neosr.utils.rng import rng
 
-rng = rng()
-
 
 @MODEL_REGISTRY.register()
 class otf(image):  # type: ignore[reportGeneralTypeIssues]

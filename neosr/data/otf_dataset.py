@@ -9,6 +9,7 @@ import torch
 from torch import Tensor
 from torch.utils import data
 
+from neosr.config import ConfigError
 from neosr.data.data_util import read_img
 from neosr.data.degradations import (  # type: ignore[attr-defined]
     circular_lowpass_kernel,
@@ -17,10 +18,7 @@ from neosr.data.degradations import (  # type: ignore[attr-defined]
 from neosr.data.file_client import FileClient
 from neosr.data.transforms import basic_augment
 from neosr.utils import get_root_logger, img2tensor, scandir, tc
-from neosr.utils.registry import DATASET_REGISTRY
 from neosr.utils.rng import rng
-
-rng = rng()
 
 
 def otf_crop_size(patch_size: int, scale: int) -> int:
@@ -33,7 +31,6 @@ def otf_crop_size(patch_size: int, scale: int) -> int:
     return math.ceil(max(512, patch_size * scale) / scale) * scale
 
 
-@DATASET_REGISTRY.register()
 class otf(data.Dataset):
     """OTF degradation dataset. Originally from Real-ESRGAN.
 
@@ -62,8 +59,8 @@ class otf(data.Dataset):
         self.gt_folder = opt["dataroot_gt"]
 
         if opt.get("dataroot_lq") is not None:
-            msg = "'dataroot_lq' not supported by otf, please switch to paired or remove it."
-            raise ValueError(msg)
+            msg = f"[datasets.{opt.get('phase')}] 'dataroot_lq' is not supported by otf; use paired or remove it"
+            raise ConfigError(msg)
         self.crop_pad_size = otf_crop_size(opt.get("patch_size"), opt.get("scale"))  # type: ignore[arg-type]
 
         # sets flag for file_client.py
@@ -177,12 +174,12 @@ class otf(data.Dataset):
 
         # ------------------------ Generate kernels (used in the first degradation) ------------------------ #
         kernel_size = random.choice(self.kernel_range)
-        if rng.uniform() < self.opt.get("sinc_prob", None):  # type: ignore[attr-defined]
+        if rng.uniform() < self.opt.get("sinc_prob", None):
             # this sinc filter setting is for kernels ranging from [7, 21]
             if kernel_size < 13:
-                omega_c = rng.uniform(np.pi / 3, np.pi)  # type: ignore[attr-defined]
+                omega_c = rng.uniform(np.pi / 3, np.pi)
             else:
-                omega_c = rng.uniform(np.pi / 5, np.pi)  # type: ignore[attr-defined]
+                omega_c = rng.uniform(np.pi / 5, np.pi)
             kernel = circular_lowpass_kernel(omega_c, kernel_size, pad_to=False)
         else:
             kernel = random_mixed_kernels(
@@ -201,11 +198,11 @@ class otf(data.Dataset):
 
         # ------------------------ Generate kernels (used in the second degradation) ------------------------ #
         kernel_size = random.choice(self.kernel_range)
-        if rng.uniform() < self.opt.get("sinc_prob2", None):  # type: ignore[attr-defined]
+        if rng.uniform() < self.opt.get("sinc_prob2", None):
             if kernel_size < 13:
-                omega_c = rng.uniform(np.pi / 3, np.pi)  # type: ignore[attr-defined]
+                omega_c = rng.uniform(np.pi / 3, np.pi)
             else:
-                omega_c = rng.uniform(np.pi / 5, np.pi)  # type: ignore[attr-defined]
+                omega_c = rng.uniform(np.pi / 5, np.pi)
             kernel2 = circular_lowpass_kernel(omega_c, kernel_size, pad_to=False)
         else:
             kernel2 = random_mixed_kernels(
@@ -224,9 +221,9 @@ class otf(data.Dataset):
         kernel2 = np.pad(kernel2, ((pad_size, pad_size), (pad_size, pad_size)))
 
         # ------------------------------------- the final sinc kernel ------------------------------------- #
-        if rng.uniform() < self.opt.get("final_sinc_prob", None):  # type: ignore[attr-defined]
+        if rng.uniform() < self.opt.get("final_sinc_prob", None):
             kernel_size = random.choice(self.kernel_range)
-            omega_c = rng.uniform(np.pi / 3, np.pi)  # type: ignore[attr-defined]
+            omega_c = rng.uniform(np.pi / 3, np.pi)
             sinc_kernel = circular_lowpass_kernel(omega_c, kernel_size, pad_to=21)
             sinc_kernel = torch.from_numpy(sinc_kernel).float()
         else:

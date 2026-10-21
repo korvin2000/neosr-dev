@@ -19,13 +19,20 @@ class EnlargedSampler(Sampler):
             the training. It is usually the world_size.
         rank (int | None): Rank of the current process within num_replicas.
         ratio (int): Enlarging ratio. Default: 1.
+        seed (int): Run seed, identical on all ranks; epoch e shuffles with seed + e.
 
     """
 
     def __init__(
-        self, dataset, num_replicas: int = 1, rank: int = 1, ratio: int = 1
+        self,
+        dataset,
+        num_replicas: int = 1,
+        rank: int = 0,
+        ratio: int = 1,
+        seed: int = 0,
     ) -> None:
         self.dataset = dataset
+        self.seed = seed
         self.num_replicas = num_replicas
         self.rank = rank
         self.epoch = 0
@@ -36,10 +43,9 @@ class EnlargedSampler(Sampler):
         self.epoch = epoch
 
     def __iter__(self) -> Iterator[int]:
-        # deterministically shuffle based on epoch, identical on all ranks;
-        # explicit CPU device: a CUDA permutation only adds a sync for .tolist()
-        g = torch.Generator(device="cpu")
-        g.manual_seed(self.epoch)
+        # identical on all ranks; explicit CPU, also under a CUDA default device:
+        # a CUDA permutation only adds a sync for .tolist()
+        g = torch.Generator(device="cpu").manual_seed(self.seed + self.epoch)
         indices = torch.randperm(self.total_size, generator=g, device="cpu").tolist()
 
         dataset_size = len(self.dataset)
