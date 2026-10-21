@@ -65,3 +65,8 @@
   Suite: 912 passed + imports/hygiene green. Noted for C8: archs/losses build_* share one 5-line shape -> factory.build helper.
 - W2 launched (phase-C-wave2). KNOWN TRANSIENT: after W2's B1 commit the old trainer cannot build losses (kernels lose loss_weight)
   until W3 (C1 integration) lands; train.py is not usable on commits between W2 and W3.
+- W2 committed: live GAN term + AdvView 81a7fca, loss weights out of kernels (B1) + FDL seeded projections 7e5082a, Degrader/PairPool
+  cbe26b0, phase/EMA state b5996be. Main thread: removed obsolete old-API gan test and old-trainer compat test; registry allowlist shrunk.
+  Suite 838 passed. C8 notes: wavelet_guided.py (428 l) can shrink to the level-1 SWT actually used.
+- W3+W4 launched as one chain (phase-C-wave3-4): C1 trainer (t4) -> D1 entry points (t3) -> Codex review -> fix (t4) -> GPU smoke
+  S1-S8 (GAN bf16, NaN rate 8 seeds, fp16, accumulate, SIGINT+resume, OTF, tiled val, test.py, convert.py) -> final fix (t4).
