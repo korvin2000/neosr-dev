@@ -59,3 +59,9 @@
 - W1 launched (workflow phase-C-wave1): L-A (fixture on old code -> ARCHS table/build_network(scale=) -> 6 parallel R1 batches -> Codex
   review -> fix), L-B metrics table, L-C RNG atomic switch + data tables, T1-A1 loss contract/builder (not wired until W3).
   Pending main-thread chore after W1: shrink tests/test_hygiene.py / test_imports.py allowlists.
+- W1 committed: archs table + scale injection + net_opt removal 10876ed (fixture equivalence atol 1e-6; neosr/neosr.archs/data/models
+  import side-effect free; hygiene allowlists shrunk), metrics table 4363b79, RNG switch + data tables 0c7b5b3 (seed_all seeds the shared
+  rng), loss contract/builder c48252d. Main-thread fixes: a2/a3 arch tests ported to the table, patchloss test expects ConfigError.
+  Suite: 912 passed + imports/hygiene green. Noted for C8: archs/losses build_* share one 5-line shape -> factory.build helper.
+- W2 launched (phase-C-wave2). KNOWN TRANSIENT: after W2's B1 commit the old trainer cannot build losses (kernels lose loss_weight)
+  until W3 (C1 integration) lands; train.py is not usable on commits between W2 and W3.
