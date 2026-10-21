@@ -26,7 +26,7 @@ y_table = np.array(
     ],
     dtype=np.float32,
 ).T
-y_table = nn.Parameter(torch.from_numpy(y_table))
+y_table = torch.from_numpy(y_table)
 c_table = np.empty((8, 8), dtype=np.float32)
 c_table.fill(99)
 c_table[:4, :4] = np.array([
@@ -35,9 +35,7 @@ c_table[:4, :4] = np.array([
     [24, 26, 56, 99],
     [47, 66, 99, 99],
 ]).T
-c_table = nn.Parameter(torch.from_numpy(c_table))
-
-device = torch.device("cuda")
+c_table = torch.from_numpy(c_table)
 
 
 def diff_round(x):
@@ -50,15 +48,28 @@ def quality_to_factor(quality):
 
     Args:
     ----
-        quality(float): Quality for jpeg compression.
+        quality(float | Tensor): Quality for jpeg compression, a number or a (b,) tensor.
 
     Returns:
     -------
-        float: Compression factor.
+        float | Tensor: Compression factor.
 
     """
+    if isinstance(quality, torch.Tensor):
+        return torch.where(quality < 50, 5000.0 / quality, 200.0 - quality * 2) / 100.0
     quality = 5000.0 / quality if quality < 50 else 200.0 - quality * 2
     return quality / 100.0
+
+
+def scaled_table(table, factor):
+    """Quantization table scaled by `factor` (a number or a (b,) tensor) and clamped to >= 1,
+    as standard JPEG does, so quality 100 (factor 0) stays finite."""
+    if not isinstance(factor, int | float):
+        b = factor.size(0)
+        table = table.expand(b, 1, 8, 8) * factor.view(b, 1, 1, 1)
+    else:
+        table = table * factor
+    return table.clamp(min=1)
 
 
 # ------------------------ compression ------------------------#
@@ -75,7 +86,7 @@ class RGB2YCbCrJpeg(nn.Module):
             ],
             dtype=np.float32,
         ).T
-        self.shift = nn.Parameter(torch.tensor([0.0, 128.0, 128.0], device=device))
+        self.shift = nn.Parameter(torch.tensor([0.0, 128.0, 128.0]))
         self.matrix = nn.Parameter(torch.from_numpy(matrix))
 
     def forward(self, image):
@@ -197,7 +208,7 @@ class YQuantize(nn.Module):
     def __init__(self, rounding) -> None:
         super().__init__()
         self.rounding = rounding
-        self.y_table = y_table
+        self.y_table = nn.Parameter(y_table.clone())
 
     def forward(self, image, factor=1):
         """Args:
@@ -209,13 +220,7 @@ class YQuantize(nn.Module):
             Tensor: batch x height x width
 
         """
-        if isinstance(factor, int | float):
-            image = image.float() / (self.y_table * factor)
-        else:
-            b = factor.size(0)
-            table = self.y_table.expand(b, 1, 8, 8) * factor.view(b, 1, 1, 1)
-            image = image.float() / table
-        return self.rounding(image)
+        return self.rounding(image.float() / scaled_table(self.y_table, factor))
 
 
 class CQuantize(nn.Module):
@@ -230,7 +235,7 @@ class CQuantize(nn.Module):
     def __init__(self, rounding) -> None:
         super().__init__()
         self.rounding = rounding
-        self.c_table = c_table
+        self.c_table = nn.Parameter(c_table.clone())
 
     def forward(self, image, factor=1):
         """Args:
@@ -242,13 +247,7 @@ class CQuantize(nn.Module):
             Tensor: batch x height x width
 
         """
-        if isinstance(factor, int | float):
-            image = image.float() / (self.c_table * factor)
-        else:
-            b = factor.size(0)
-            table = self.c_table.expand(b, 1, 8, 8) * factor.view(b, 1, 1, 1)
-            image = image.float() / table
-        return self.rounding(image)
+        return self.rounding(image.float() / scaled_table(self.c_table, factor))
 
 
 class CompressJpeg(nn.Module):
@@ -299,7 +298,7 @@ class YDequantize(nn.Module):
 
     def __init__(self) -> None:
         super().__init__()
-        self.y_table = y_table
+        self.y_table = nn.Parameter(y_table.clone())
 
     def forward(self, image, factor=1):
         """Args:
@@ -311,13 +310,7 @@ class YDequantize(nn.Module):
             Tensor: batch x height x width
 
         """
-        if isinstance(factor, int | float):
-            out = image * (self.y_table * factor)
-        else:
-            b = factor.size(0)
-            table = self.y_table.expand(b, 1, 8, 8) * factor.view(b, 1, 1, 1)
-            out = image * table
-        return out
+        return image * scaled_table(self.y_table, factor)
 
 
 class CDequantize(nn.Module):
@@ -325,7 +318,7 @@ class CDequantize(nn.Module):
 
     def __init__(self) -> None:
         super().__init__()
-        self.c_table = c_table
+        self.c_table = nn.Parameter(c_table.clone())
 
     def forward(self, image, factor=1):
         """Args:
@@ -337,13 +330,7 @@ class CDequantize(nn.Module):
             Tensor: batch x height x width
 
         """
-        if isinstance(factor, int | float):
-            out = image * (self.c_table * factor)
-        else:
-            b = factor.size(0)
-            table = self.c_table.expand(b, 1, 8, 8) * factor.view(b, 1, 1, 1)
-            out = image * table
-        return out
+        return image * scaled_table(self.c_table, factor)
 
 
 class iDCT8x8(nn.Module):
@@ -441,7 +428,7 @@ class YCbCr2RGBJpeg(nn.Module):
             [[1.0, 0.0, 1.402], [1, -0.344136, -0.714136], [1, 1.772, 0]],
             dtype=np.float32,
         ).T
-        self.shift = nn.Parameter(torch.tensor([0, -128.0, -128.0], device=device))
+        self.shift = nn.Parameter(torch.tensor([0, -128.0, -128.0]))
         self.matrix = nn.Parameter(torch.from_numpy(matrix))
 
     def forward(self, image):
@@ -535,12 +522,7 @@ class DiffJPEG(nn.Module):
             quality(float): Quality factor for jpeg compression scheme.
 
         """
-        factor = quality
-        if isinstance(factor, int | float):
-            factor = quality_to_factor(factor)
-        else:
-            for i in range(factor.size(0)):
-                factor[i] = quality_to_factor(factor[i])
+        factor = quality_to_factor(quality)
         h, w = x.size()[-2:]
         h_pad, w_pad = 0, 0
         # why should use 16
@@ -576,9 +558,9 @@ def filter2D(img, kernel):
 
     if kernel.size(0) == 1:
         # apply the same kernel to all batch images
-        img = img.view(b * c, 1, ph, pw)
+        img = img.reshape(b * c, 1, ph, pw)
         kernel = kernel.view(1, 1, k, k)
         return F.conv2d(img, kernel, padding=0).view(b, c, h, w)
-    img = img.view(1, b * c, ph, pw)
+    img = img.reshape(1, b * c, ph, pw)
     kernel = kernel.view(b, 1, k, k).repeat(1, c, 1, 1).view(b * c, 1, k, k)
     return F.conv2d(img, kernel, groups=b * c).view(b, c, h, w)

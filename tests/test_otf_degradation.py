@@ -17,7 +17,7 @@ from neosr.data.degradations import (
 )
 from neosr.data.otf_degradation import Degrader, PairPool
 from neosr.data.transforms import paired_random_crop
-from neosr.utils.diffjpeg import DiffJPEG, filter2D
+from neosr.utils.diffjpeg import DiffJPEG, filter2D, quality_to_factor
 from neosr.utils.rng import rng, seed_rng
 
 CFG = {
@@ -28,8 +28,8 @@ CFG = {
     "poisson_scale_range2": [0.05, 0.1], "gray_noise_prob2": 0.3, "jpeg_range2": [35, 95],
 }  # fmt: skip
 S = 4
-DEV = "cuda"  # DiffJPEG builds its parameters on CUDA; without JPEG the chain also runs on CPU
-cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="DiffJPEG needs CUDA")
+DEV = "cuda" if torch.cuda.is_available() else "cpu"
+DEVS = ["cpu", "cuda"] if torch.cuda.is_available() else ["cpu"]
 NO_JPEG = {k: v for k, v in CFG.items() if not k.startswith("jpeg_range")} | {
     "jpeg_compress": False
 }
@@ -117,11 +117,11 @@ def _reference(cfg, jpeger, gt, k1, k2, sinc, r=rng):
     return torch.clamp((out * 255.0).round(), 0, 255) / 255.0
 
 
-@cuda
-def test_shapes_after_crop():
+@pytest.mark.parametrize("dev", DEVS)
+def test_shapes_after_crop(dev):
     _seed(0)
-    d, p = Degrader(CFG, scale=S, device=DEV), 16
-    gt, *ks = _batch(b=3)
+    d, p = Degrader(CFG, scale=S, device=dev), 16
+    gt, *ks = _batch(b=3, dev=dev)
     lq = d(gt, *ks)
     assert lq.shape == (3, 3, 96 // S, 96 // S)
     gt, lq = paired_random_crop([gt], lq, p, S)
@@ -131,15 +131,15 @@ def test_shapes_after_crop():
     assert lq.max() <= 1
 
 
-@cuda
+@pytest.mark.parametrize("dev", DEVS)
 @pytest.mark.parametrize("seed", [0, 1, 2, 3])
-def test_equals_reference_on_three_batches(seed):
-    d = Degrader(CFG, scale=S, device=DEV)
-    batches = [_batch(seed=10 * seed + i) for i in range(3)]
+def test_equals_reference_on_three_batches(seed, dev):
+    d = Degrader(CFG, scale=S, device=dev)
+    batches = [_batch(seed=10 * seed + i, dev=dev) for i in range(3)]
     _seed(seed)
     got = list(starmap(d, batches))
     _seed(seed)  # independent JPEG with the historical settings, not the one under test
-    jpeger = DiffJPEG(differentiable=False).to(DEV)
+    jpeger = DiffJPEG(differentiable=False).to(dev)
     ref = [_reference(CFG, jpeger, *b) for b in batches]
     for g, r in zip(got, ref, strict=True):
         assert torch.equal(g, r)
@@ -153,9 +153,7 @@ class _FixedRng(SimpleNamespace):
 
 
 @pytest.mark.parametrize("v", [0.0, 0.9])  # 0.0: resize+sinc then JPEG; 0.9: JPEG first
-@pytest.mark.parametrize(
-    ("jpeg", "dev"), [pytest.param(True, DEV, marks=cuda), (False, "cpu")]
-)
+@pytest.mark.parametrize(("jpeg", "dev"), [*((True, d) for d in DEVS), (False, "cpu")])
 def test_jpeg_compress_honoured_in_both_orders(monkeypatch, v, jpeg, dev):
     cfg = CFG if jpeg else NO_JPEG  # the JPEG ranges are then not required
     r = _FixedRng(v=v)
@@ -175,6 +173,24 @@ def test_jpeg_compress_honoured_in_both_orders(monkeypatch, v, jpeg, dev):
     _seed(5)
     ref = _reference(cfg, ref_jpeger, *b, r=r)
     assert torch.equal(got, ref)
+
+
+def test_diffjpeg_cpu_and_quality_bounds():
+    """Builds and runs on CPU (R3.5); quality 99 and 100 stay finite (R3.1); the tensor factor
+    is bitwise the scalar formula; instances do not share their quantization tables."""
+    q = torch.tensor([1.0, 10.0, 49.0, 49.9, 50.0, 73.3, 95.0, 99.0, 100.0])
+    loop = torch.stack([torch.as_tensor(5000.0 / v if v < 50 else 200.0 - v * 2) / 100.0
+                        for v in q])  # fmt: skip
+    assert torch.equal(quality_to_factor(q), loop)
+    jpeger = DiffJPEG(differentiable=False)
+    x = torch.rand(3, 3, 20, 28, generator=torch.Generator().manual_seed(0))
+    for quality in (99, 100, 99.5, torch.tensor([99.0, 100.0, 50.0])):
+        out = jpeger(x, quality=quality)
+        assert out.shape == x.shape
+        assert torch.isfinite(out).all()
+    before = jpeger(x, quality=80)
+    DiffJPEG(differentiable=False).compress.y_quantize.y_table.data.mul_(2)
+    assert torch.equal(jpeger(x, quality=80), before)
 
 
 def test_outputs_feed_autograd():

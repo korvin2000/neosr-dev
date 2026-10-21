@@ -10,7 +10,7 @@ from torch import Tensor
 from torch.utils import data
 
 from neosr.config import ConfigError
-from neosr.data.data_util import read_img
+from neosr.data.data_util import lmdb_keys, read_img
 from neosr.data.degradations import (  # type: ignore[attr-defined]
     circular_lowpass_kernel,
     random_mixed_kernels,
@@ -78,10 +78,7 @@ class otf(data.Dataset):
             if not self.gt_folder.endswith(".lmdb"):
                 msg = f"{tc.red}'dataroot_gt' should end with '.lmdb', but received {self.gt_folder}{tc.end}"
                 logger.error(msg)
-            with Path(str(Path(self.gt_folder) / "meta_info.txt")).open(
-                encoding="utf-8"
-            ) as fin:
-                self.paths = [line.split(".")[0] for line in fin]
+            self.paths = lmdb_keys(self.gt_folder)
         elif (meta_info := opt.get("meta_info", opt.get("meta_info_file"))) is not None:
             # disk backend with meta_info ('meta_info_file' is the legacy key)
             # Each line in the meta_info describes the relative path to an image

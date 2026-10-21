@@ -39,6 +39,13 @@ def read_img(
     return img  # type: ignore[return-value]
 
 
+def lmdb_keys(folder: str) -> list[str]:
+    """Keys of an lmdb folder: the first token of each meta_info.txt line (`{key}.png (h,w,c) level`)
+    without its final extension, so dots inside a key are kept."""
+    with (Path(folder) / "meta_info.txt").open(encoding="utf-8") as fin:
+        return [line.split()[0].rsplit(".", 1)[0] for line in fin if line.strip()]
+
+
 def paired_paths_from_lmdb(folders: list[str], keys: list[str]) -> list[str]:
     """Generate paired paths from lmdb files.
 
@@ -97,10 +104,7 @@ def paired_paths_from_lmdb(folders: list[str], keys: list[str]) -> list[str]:
         )
         raise ValueError(msg)
     # ensure that the two meta_info files are the same
-    with Path(Path(input_folder) / "meta_info.txt").open(encoding="utf-8") as fin:
-        input_lmdb_keys = [line.split(".")[0] for line in fin]
-    with Path(Path(gt_folder) / "meta_info.txt").open(encoding="utf-8") as fin:
-        gt_lmdb_keys = [line.split(".")[0] for line in fin]
+    input_lmdb_keys, gt_lmdb_keys = lmdb_keys(input_folder), lmdb_keys(gt_folder)
     if set(input_lmdb_keys) != set(gt_lmdb_keys):
         msg = f"Keys in {input_key}_folder and {gt_key}_folder are different."
         raise ValueError(msg)
@@ -189,11 +193,11 @@ def paired_paths_from_folder(
     input_folder, gt_folder = folders
     input_key, gt_key = keys
 
-    input_paths = [
-        path
+    input_paths = {  # normalised as Path joins them below, e.g. './LQ/x.png' -> 'LQ/x.png'
+        str(Path(path))
         for path in scandir(input_folder, recursive=True, full_path=True)
         if path.lower().endswith(extensions)
-    ]
+    }
     gt_paths = [
         path
         for path in scandir(gt_folder, recursive=True, full_path=True)
@@ -206,7 +210,7 @@ def paired_paths_from_folder(
     )
     paths: list[dict[str, str]] = []
     for gt_path in gt_paths:
-        input_path = gt_path.replace(gt_folder, input_folder)
+        input_path = str(Path(input_folder) / Path(gt_path).relative_to(gt_folder))
         assert input_path in input_paths, f"{input_path} is not in {input_key}_paths."
         paths.append({f"{input_key}_path": input_path, f"{gt_key}_path": gt_path})
     return paths
@@ -227,5 +231,4 @@ def paths_from_lmdb(folder: str) -> list[str]:
     if not folder.endswith(".lmdb"):
         msg = f"Folder {folder}folder should in lmdb format."
         raise ValueError(msg)
-    with Path(Path(folder) / "meta_info.txt").open(encoding="utf-8") as fin:
-        return [line.split(".")[0] for line in fin]
+    return lmdb_keys(folder)

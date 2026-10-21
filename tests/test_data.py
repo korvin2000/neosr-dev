@@ -12,7 +12,11 @@ from neosr.config import ConfigError
 from neosr.data import build_dataloader, build_dataset, degradations, worker_init_fn
 from neosr.data.augmentations import apply_augment, cutblur, cutmix, mixup, resizemix
 from neosr.data.data_sampler import EnlargedSampler
-from neosr.data.data_util import read_img
+from neosr.data.data_util import (
+    paired_paths_from_folder,
+    paired_paths_from_lmdb,
+    read_img,
+)
 from neosr.data.degradations import generate_gaussian_noise_pt
 from neosr.data.file_client import FileClient
 from neosr.data.otf_dataset import otf_crop_size
@@ -91,6 +95,48 @@ def test_single_meta_info(data_root, key):
     item = ds[0]
     assert item["lq"].shape == (3, 64, 64)
     assert Path(item["lq_path"]) == data_root / "LQ" / "img_00.png"
+
+
+def test_lmdb_dotted_keys(tmp_path):
+    """R3.2: keys keep their inner dots; 'scene.001' and 'scene.002' stay two records."""
+    from neosr.utils.lmdb_util import make_lmdb_from_imgs  # noqa: PLC0415
+
+    names, keys = ["a.png", "b.png"], ["scene.001", "scene.002"]
+    for i, name in enumerate(names):
+        cv2.imwrite(str(tmp_path / name), np.full((8, 8, 3), 60 * (i + 1), np.uint8))
+    for sub in ("lq.lmdb", "gt.lmdb"):
+        make_lmdb_from_imgs(str(tmp_path), str(tmp_path / sub), names, keys,
+                            multiprocessing_read=False, map_size=1 << 20)  # fmt: skip
+    pairs = paired_paths_from_lmdb(
+        [str(tmp_path / "lq.lmdb"), str(tmp_path / "gt.lmdb")], ["lq", "gt"]
+    )
+    assert [p["gt_path"] for p in pairs] == keys
+    ds = build_dataset({
+        "type": "single",
+        "phase": "test",
+        "dataroot_lq": str(tmp_path / "lq.lmdb"),
+    })
+    assert ds.paths == keys
+    assert [round(float(ds[i]["lq"].mean()) * 255) for i in range(2)] == [60, 120]
+
+
+@pytest.mark.parametrize("rel", [False, True])
+def test_folder_pairing_repeated_root_name(tmp_path, monkeypatch, rel):
+    """R3.4: only the root is swapped, not every occurrence of its name ('GT/image_GT.png')."""
+    for sub in ("GT", "LQ"):
+        (tmp_path / sub / "x_GT").mkdir(parents=True)
+        for f in ("image_GT.png", "x_GT/c.png"):
+            cv2.imwrite(str(tmp_path / sub / f), np.zeros((4, 4, 3), np.uint8))
+    monkeypatch.chdir(tmp_path)
+    root = Path("./") if rel else tmp_path
+    pairs = paired_paths_from_folder(
+        [str(root / "LQ"), f"{root / 'GT'}/"], ["lq", "gt"]
+    )
+    got = sorted(
+        (Path(p["lq_path"]).relative_to(root / "LQ").as_posix(),
+         Path(p["gt_path"]).relative_to(root / "GT").as_posix()) for p in pairs
+    )  # fmt: skip
+    assert got == [("image_GT.png",) * 2, ("x_GT/c.png",) * 2]
 
 
 @pytest.mark.parametrize(("scale", "patch_size", "crop"), [(3, 64, 513), (3, 200, 600)])
@@ -265,6 +311,21 @@ def test_gray_noise_per_sample():
     assert not torch.allclose(noise[0], noise[1])
 
 
+@pytest.mark.parametrize("c", [1, 3])
+@pytest.mark.parametrize("gray", [1, torch.ones(4), torch.tensor([1.0, 0.0, 1.0, 0.0])])
+@pytest.mark.parametrize(
+    "gen",
+    [degradations.generate_gaussian_noise_pt, degradations.generate_poisson_noise_pt],
+)
+def test_gray_noise_matches_channels(gen, gray, c):
+    """R3.3: gray noise follows the input's channel count (color='y' batches are 1-channel)."""
+    img = torch.rand(4, c, 16, 16, generator=torch.Generator().manual_seed(0))
+    noise = gen(img, torch.full((4,), 0.5), gray)
+    assert noise.shape == img.shape
+    rows = [0, 1, 2, 3] if isinstance(gray, int) else gray.nonzero().flatten().tolist()
+    torch.testing.assert_close(noise[rows, :1].expand(-1, c, -1, -1), noise[rows])
+
+
 class _RngDraws(Dataset):
     def __len__(self):
         return 4
@@ -291,21 +352,27 @@ class _Synthetic(Dataset):
         return {"gt": torch.full((3, 4, 4), float(index)), "idx": index}
 
 
+def _rt(rank: int = 0, world_size: int = 1, seed: int = 0) -> Runtime:
+    return Runtime(
+        torch.device("cpu"), rank, world_size, seed, distributed=world_size > 1
+    )
+
+
 @pytest.mark.parametrize(
-    ("dist", "num_gpu", "workers", "batch", "nworkers"),
+    ("dist", "workers", "batch", "nworkers"),
     [
-        (False, 1, 2, 4, 2),
-        (False, 2, 1, 8, 2),  # DataParallel: one batch over all GPUs
-        (True, 2, 1, 4, 1),  # DDP: per-process sizes
-        (False, 1, 0, 4, 0),
+        (False, 2, 4, 2),
+        (True, 1, 4, 1),  # DDP: per-process sizes
+        (False, 0, 4, 0),
     ],
 )
-def test_build_dataloader(dist, num_gpu, workers, batch, nworkers):
+def test_build_dataloader(dist, workers, batch, nworkers):
     ds = _Synthetic()
     opt = {"phase": "train", "batch_size": 4, "num_worker_per_gpu": workers}
     # DDP rank 1 of 2: the sampler needs no process group
     sampler = EnlargedSampler(ds, num_replicas=2, rank=1) if dist else None
-    loader = build_dataloader(ds, opt, num_gpu=num_gpu, dist=dist, sampler=sampler)
+    rt = _rt(1, 2) if dist else _rt()
+    loader = build_dataloader(ds, opt, runtime=rt, sampler=sampler)
     assert loader.batch_size == batch
     assert loader.num_workers == nworkers
     assert loader.drop_last
@@ -331,21 +398,21 @@ def test_build_dataloader_overrides():
         "pin_memory": False,
         "persistent_workers": False,
     }
-    loader = build_dataloader(ds, opt, num_gpu=2, dist=True)
+    loader = build_dataloader(ds, opt, runtime=_rt(0, 2))
     assert loader.num_workers == max((os.cpu_count() or 1) // 2, 1)
     assert not loader.pin_memory
     assert not loader.persistent_workers
-    val = build_dataloader(ds, {"phase": "val"})
+    val = build_dataloader(ds, {"phase": "val"}, runtime=_rt())
     assert (val.batch_size, val.num_workers, val.drop_last) == (1, 0, False)
     assert val.pin_memory == torch.cuda.is_available()
     with pytest.raises(ValueError, match="phase"):
-        build_dataloader(ds, {"phase": "eval"})
+        build_dataloader(ds, {"phase": "eval"}, runtime=_rt())
 
 
 def test_loader_persistent_workers(paired_opt):
     ds = build_dataset(paired_opt)
     sampler = EnlargedSampler(ds, num_replicas=1, rank=0)
-    loader = build_dataloader(ds, paired_opt, num_gpu=1, dist=False, sampler=sampler)
+    loader = build_dataloader(ds, paired_opt, runtime=_rt(), sampler=sampler)
     assert loader.num_workers == 2
     assert loader.persistent_workers
     iterators = []
@@ -441,9 +508,7 @@ def test_build_dataloader_runtime():
     ds = _Synthetic()
     opt = {"phase": "train", "batch_size": 2, "num_worker_per_gpu": "auto"}
     rt = Runtime(torch.device("cpu"), 1, 2, 100, distributed=True)
-    loader = build_dataloader(
-        ds, opt, runtime=rt, num_gpu=8, dist=False
-    )  # legacy args ignored
+    loader = build_dataloader(ds, opt, runtime=rt)
     assert (loader.batch_size, loader.num_workers) == (
         2,
         max((os.cpu_count() or 1) // 2, 1),
@@ -474,14 +539,6 @@ def test_identical_settings_identical_first_batch(workers):
     assert a["idx"] != c["idx"]
     if workers:  # worker draws derive from the loader generator
         assert not set(a["np"]) & set(c["np"])
-
-
-def test_legacy_loader_seeds_main_rng():
-    opt = {"phase": "train", "batch_size": 4, "num_worker_per_gpu": 0}
-    build_dataloader(_Draws(), opt, seed=5)
-    expected = np.random.default_rng(5).random()
-    build_dataloader(_Draws(), {"phase": "val"}, seed=6)  # val leaves it alone
-    assert rng.random() == expected
 
 
 @pytest.mark.parametrize(("workers", "persistent"), [(0, False), (2, False), (2, True)])
@@ -553,7 +610,9 @@ def test_cuda_prefetcher_counts_and_record_stream(monkeypatch):
 
     monkeypatch.setattr(torch.Tensor, "record_stream", spy)
     loader = build_dataloader(
-        _Synthetic(), {"phase": "train", "batch_size": 4, "num_worker_per_gpu": 0}
+        _Synthetic(),
+        {"phase": "train", "batch_size": 4, "num_worker_per_gpu": 0},
+        runtime=_rt(),
     )
     prefetcher = CUDAPrefetcher(loader, torch.device("cuda", 0))
     for _ in range(2):
