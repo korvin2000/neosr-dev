@@ -15,25 +15,25 @@ def mypad(x: Tensor, pad: tuple[int, int, int, int]) -> Tensor:
     """
     # Vertical only
     if pad[0] == 0 and pad[1] == 0:
-        xe = torch.arange(x.shape[-2])
+        xe = torch.arange(x.shape[-2], device=x.device)
         xe = F.pad(xe.unsqueeze(0), (pad[2], pad[3]), mode="circular").squeeze(0)
         return x[:, :, xe]
     # Horizontal only
     if pad[2] == 0 and pad[3] == 0:
-        xe = torch.arange(x.shape[-1])
+        xe = torch.arange(x.shape[-1], device=x.device)
         xe = F.pad(xe.unsqueeze(0), (pad[0], pad[1]), mode="circular").squeeze(0)
         return x[:, :, :, xe]
     # Both
-    xe_col = torch.arange(x.shape[-2])
+    xe_col = torch.arange(x.shape[-2], device=x.device)
     xe_col = torch.nn.functional.pad(
         xe_col.unsqueeze(0), (pad[2], pad[3]), mode="circular"
     ).squeeze(0)
-    xe_row = torch.arange(x.shape[-1])
+    xe_row = torch.arange(x.shape[-1], device=x.device)
     xe_row = torch.nn.functional.pad(
         xe_row.unsqueeze(0), (pad[0], pad[1]), mode="circular"
     ).squeeze(0)
-    i = torch.outer(xe_col, torch.ones(xe_row.shape[0]))
-    j = torch.outer(torch.ones(xe_col.shape[0]), xe_row)
+    i = torch.outer(xe_col, torch.ones(xe_row.shape[0], device=x.device))
+    j = torch.outer(torch.ones(xe_col.shape[0], device=x.device), xe_row)
     return x[:, :, i, j]
 
 
@@ -344,10 +344,12 @@ class SWTForward(nn.Module):
             h0_row,  # type: ignore[reportArgumentType]
             h1_row,  # type: ignore[reportArgumentType]
         )
-        self.h0_col = nn.Parameter(filts[0])
-        self.h1_col = nn.Parameter(filts[1])
-        self.h0_row = nn.Parameter(filts[2])
-        self.h1_row = nn.Parameter(filts[3])
+        for name, f in zip(
+            ("h0_col", "h1_col", "h0_row", "h1_row"), filts, strict=True
+        ):
+            self.register_buffer(
+                name, f.float(), persistent=False
+            )  # constants, not state
 
         self.J = J
         self.mode = mode
@@ -383,50 +385,44 @@ class SWTForward(nn.Module):
         return coeffs
 
 
+class AdvView(nn.Module):
+    """The adversarial view: identity before start_iter, then the 3 scaled SWT high-frequency bands of Y.
+    fp32 and differentiable, built once; the same op for real and fake, so D gets no precision cue.
+    """
+
+    def __init__(self, start_iter: int = 0) -> None:
+        super().__init__()
+        self.start_iter = start_iter
+        w = pywt.Wavelet("sym19")  # type: ignore[reportAttributeAccessIssue]
+        lo, slo = (
+            np.divide(w.dec_lo, sum(w.dec_lo)),
+            2 * np.divide(w.rec_lo, sum(w.rec_lo)),
+        )
+        filters = pywt.Wavelet("wavelet_normalized", [lo, w.dec_hi, slo, w.rec_hi])  # type: ignore[reportAttributeAccessIssue]
+        self.swt = SWTForward(1, filters, "periodic")
+        self.register_buffer(
+            "y_w",
+            torch.tensor([65.481, 128.553, 24.966]).view(1, 3, 1, 1),
+            persistent=False,
+        )
+        self.register_buffer(
+            "band_w",
+            torch.tensor([0.035, 0.025, 0.02]).view(1, 3, 1, 1),
+            persistent=False,
+        )
+
+    def forward(self, x: Tensor, it: int) -> Tensor:
+        if it < self.start_iter:
+            return x
+        with torch.autocast(x.device.type, enabled=False):
+            y = 16.0 + (x.to(self.y_w.dtype) * self.y_w).sum(
+                1, keepdim=True
+            )  # RGB -> Y, as BT.601 * 255
+            return self.swt(y)[0][:, 1:4] * self.band_w  # LH, HL, HH; LL dropped
+
+
 @torch.no_grad()
 def wavelet_guided(output: Tensor, gt: Tensor) -> tuple[Tensor, Tensor]:
-    # wavelet = pywt.Wavelet("sym7")  # type: ignore[reportAttributeAccessIssue]
-    wavelet = pywt.Wavelet("sym19")  # type: ignore[reportAttributeAccessIssue]
-    dlo = wavelet.dec_lo
-    an_lo = np.divide(dlo, sum(dlo))
-    an_hi = wavelet.dec_hi
-    rlo = wavelet.rec_lo
-    syn_lo = 2 * np.divide(rlo, sum(rlo))
-    syn_hi = wavelet.rec_hi
-
-    filters = pywt.Wavelet("wavelet_normalized", [an_lo, an_hi, syn_lo, syn_hi])  # type: ignore[reportAttributeAccessIssue]
-    sfm = SWTForward(1, filters, "periodic").to(
-        gt.device, dtype=gt.dtype, non_blocking=True
-    )
-
-    # wavelet bands of sr image
-    sr_img_y = 16.0 + (
-        output[:, 0:1, :, :] * 65.481
-        + output[:, 1:2, :, :] * 128.553
-        + output[:, 2:, :, :] * 24.966
-    )
-    wavelet_sr: Tensor = sfm(sr_img_y)[0]
-
-    # LL: Tensor = wavelet_sr[:, 0:1, :, :] * 0.02
-    LH: Tensor = wavelet_sr[:, 1:2, :, :] * 0.035
-    HL: Tensor = wavelet_sr[:, 2:3, :, :] * 0.025
-    HH: Tensor = wavelet_sr[:, 3:, :, :] * 0.02
-
-    combined_HF = torch.cat((LH, HL, HH), dim=1)
-
-    # wavelet bands of hr image
-    hr_img_y = 16.0 + (
-        gt[:, 0:1, :, :] * 65.481
-        + gt[:, 1:2, :, :] * 128.553
-        + gt[:, 2:, :, :] * 24.966
-    )
-    wavelet_hr: Tensor = sfm(hr_img_y)[0]
-
-    # LL_gt: Tensor = wavelet_hr[:, 0:1, :, :] * 0.02
-    LH_gt: Tensor = wavelet_hr[:, 1:2, :, :] * 0.035
-    HL_gt: Tensor = wavelet_hr[:, 2:3, :, :] * 0.025
-    HH_gt: Tensor = wavelet_hr[:, 3:, :, :] * 0.02
-
-    combined_HF_gt = torch.cat((LH_gt, HL_gt, HH_gt), dim=1)
-
-    return combined_HF, combined_HF_gt
+    """TRANSITIONAL: only keeps `import neosr` alive through image.py:17; deleted with the old trainer (W3)."""
+    view = AdvView().to(gt.device)
+    return view(output, 0), view(gt, 0)

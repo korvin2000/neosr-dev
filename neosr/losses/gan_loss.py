@@ -1,84 +1,73 @@
+import torch
 from torch import Tensor, nn
 
-from neosr.utils.registry import LOSS_REGISTRY
+from neosr.losses.base import Context, Loss
+from neosr.losses.wavelet_guided import AdvView
 
 
-@LOSS_REGISTRY.register()
-class gan_loss(nn.Module):
-    """GAN loss.
+class gan_loss(Loss):
+    """[train.gan_opt]: the generator's adversarial term; expand() adds the discriminator's term.
 
     Args:
     ----
-        gan_type (str): Support 'bce', 'mse' (l2), 'huber'.
+        gan_type (str): 'bce', 'mse' (l2) or 'huber'.
         real_label_val (float): The value for real label. Default: 1.0.
         fake_label_val (float): The value for fake label. Default: 0.0.
-        loss_weight (float): Loss weight. Default: 0.1.
-            Note that loss_weight is only for generators; and it is always 1.0
-            for discriminators.
+        wavelet_init (int | None): D sees the SWT high-frequency view from this update on;
+            None: D always sees RGB.
 
     """
+
+    loss_weight = 0.1  # the generator term only; the discriminator term is unweighted
 
     def __init__(
         self,
         gan_type: str = "bce",
         real_label_val: float = 1.0,
         fake_label_val: float = 0.0,
-        loss_weight: float = 0.1,
+        wavelet_init: int | None = None,
     ) -> None:
         super().__init__()
-        self.gan_type = gan_type
-        self.loss_weight = loss_weight
-        self.real_label_val = real_label_val
-        self.fake_label_val = fake_label_val
-        self.loss: nn.BCEWithLogitsLoss | nn.MSELoss | nn.HuberLoss
+        crits = {"bce": nn.BCEWithLogitsLoss, "mse": nn.MSELoss, "huber": nn.HuberLoss}
+        if gan_type not in crits:
+            msg = f"gan_type must be one of {sorted(crits)}, got {gan_type!r}"
+            raise ValueError(msg)
+        self.crit = crits[gan_type]()
+        self.labels = (fake_label_val, real_label_val)
+        self.view = None if wavelet_init is None else AdvView(wavelet_init)
 
-        if self.gan_type == "bce":
-            self.loss = nn.BCEWithLogitsLoss()
-        elif self.gan_type == "mse":
-            self.loss = nn.MSELoss()
-        elif self.gan_type == "huber":
-            self.loss = nn.HuberLoss()
-        else:
-            msg = f"GAN type {self.gan_type} is not implemented."
-            raise NotImplementedError(msg)
+    def adv(self, x: Tensor, it: int) -> Tensor:
+        return x if self.view is None else self.view(x, it)
 
-    def update_loss_weight(self, weight):
-        self.loss_weight = weight
+    def term(self, logits: Tensor, real: bool) -> Tensor:
+        return self.crit(logits, torch.full_like(logits, self.labels[real]))
 
-    def get_target_label(self, net_output: Tensor, target_is_real: bool) -> Tensor:
-        """Get target label.
+    def evaluate(self, ctx: Context) -> Tensor:
+        # train-mode D without a DDP reducer; the trainer's backward(inputs=G params) keeps D's grads out
+        return self.term(ctx.net_d_adv(self.adv(ctx.sr, ctx.it)), real=True)  # type: ignore[reportOptionalCall]
 
-        Args:
-        ----
-            net_output (Tensor): Input tensor.
-            target_is_real (bool): Whether the target is real or fake.
+    def expand(self) -> list[Loss]:
+        return [self, gan_d_loss(self)]
 
-        Returns:
-        -------
-            (bool | Tensor): Target tensor. Returns Tensor.
 
-        """
-        target_val = self.real_label_val if target_is_real else self.fake_label_val
-        return net_output.new_ones(net_output.size()) * target_val
+class gan_d_loss(Loss):
+    """The discriminator objective: fresh forwards on view(gt) and view(sr.detach())."""
 
-    def forward(
-        self, net_output: Tensor, target_is_real: bool, is_disc: bool = False
-    ) -> Tensor:
-        """Args:
-        ----
-            net_output (Tensor): The input for the loss module, i.e., the network
-                prediction.
-            target_is_real (bool): Whether the targe is real or fake.
-            is_disc (bool): Whether the loss for discriminators or not.
-                Default: False.
+    phase = "d"
 
-        Returns
-        -------
-            Tensor: GAN loss value.
+    def __init__(self, g: gan_loss) -> None:
+        super().__init__()
+        self.g = g
 
-        """
-        target_label = self.get_target_label(net_output, target_is_real)
-        loss = self.loss(net_output, target_label)
-
-        # loss_weight is always 1.0 for discriminators
-        return loss if is_disc else loss * self.loss_weight
+    def evaluate(self, ctx: Context) -> Tensor:
+        real = ctx.net_d(self.g.adv(ctx.gt, ctx.it))  # type: ignore[reportOptionalCall]
+        fake = ctx.net_d(self.g.adv(ctx.sr.detach(), ctx.it))  # type: ignore[reportOptionalCall]
+        l_real, l_fake = self.g.term(real, real=True), self.g.term(fake, real=False)
+        for key, value in (
+            ("l_d_real", l_real),
+            ("l_d_fake", l_fake),
+            ("out_d_real", real.mean()),
+            ("out_d_fake", fake.mean()),
+        ):
+            ctx.log(key, value)
+        return l_real + l_fake
