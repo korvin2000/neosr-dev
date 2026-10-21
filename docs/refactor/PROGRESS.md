@@ -99,3 +99,7 @@
   on by default; DINOv2 bf16 backbone opt-in after main-thread review: pixel-gradient error up to 60% at 256 px, no quality A/B),
   builder/wavelet cleanup 9063c70 (421 -> 49 lines), readme + templates c3dc388. Full suite 1170 passed / 0 failed.
 - Next: W7 final whole-branch Codex review, fixes, final merge.
+- W7 final review: 5 Codex area reviews + Fable (high) strategic audit -> Opus triage kept 22 actionable items in 4 lanes, deferred 10
+  (listed in PLAN.md "Follow-ups"), dropped 5 -> fixes -> Codex recheck: all fixed, no P1/P2 left; main thread removed dead cdf2 and a
+  stale perf note. Committed b1a5065, 1193e07, 69bfa8f, 136fe67. Full suite 1192 passed / 0 failed. Merged into master.
+- REFACTOR PLAN COMPLETE (phases 0, L, A, W0-W7). Remaining work = optional follow-ups in PLAN.md.

@@ -73,4 +73,17 @@ Each lane: Opus implements -> Codex gpt-6-astra reviews -> Opus fix pass -> main
 | W5 | verification (T2 E1-E4, T3 I-1 smoke + DDP gloo + errors, T1 D step tests) + T3-Z cleanup; then C5 aether/QAT, C6 perf, C7 stability acceptance, C8 docs | superseded by the W5 and W6 rows below |
 | W5 | **C5** aether + QAT (t4); **T3-Z** legacy cleanup (options.py, registry.py, net_opt, soap_sf/fsam, conftest argv hack; hygiene allowlist empty); **C7** acceptance tests (T2 E1-E3) + 2k-iter GPU runs -> analysis/acceptance.md | done (af5c7db, 8da8ae0, fe4a176); merged to master |
 | W6 | **EMA warmup** (ema_power, competitor recipe; acceptance showed EMA PSNR 6.5 vs live 23.5 at 1000 updates) + `convert.py --strip-qat` (T5 A9) + **C6** perf pass (T4 draft: profile first, DINOv2 precision, syncs, compile, layouts) + **C8** docs/readme/templates, factory.build helper, wavelet_guided shrink, README section "Adding an architecture" (ARCHS table row + scale kw), final Codex review | done (a924bf2, e31cd49, 9063c70, c3dc388); merged to master |
-| W7 | final whole-branch review (5 Codex areas + Fable strategic audit) -> Opus triage -> fix lanes -> Codex recheck; final merge | wip (workflow phase-C-wave7-final-review, run wf_c01c08ad-c53) |
+| W7 | final whole-branch review (5 Codex areas + Fable strategic audit) -> Opus triage -> fix lanes -> Codex recheck; final merge | done (b1a5065, 1193e07, 69bfa8f, 136fe67); merged to master |
+
+## Follow-ups (deferred by the W7 triage; not required for the refactor goals)
+- R4.1 adan_sf G4.M2 recurrence: verified (SF branch multiplies by bc1 and updates z with the raw grad), but consensus marked it 'redesign': gate it behind an SR-metric A/B and keep a legacy mode for existing checkpoints. It changes the dynamics of the default optimizer of ~168 sections, so it needs its own step with the A/B, not a fix lane.
+- R1.4 final save before final validation: the order follows consensus T2 D20 ('at the end: check_finite -> save(final) -> validate'). Only the best-dict of a run later extended past total_iter is stale. Changing the order, or re-saving the best after the final validation, needs owner sign-off.
+- S.1 gan_opt.start_iter, an R1/R2 D regulariser and a >=20k-update acceptance run before changing template GAN/D defaults: this is feature plus long experiment work, and the T6 note was never written. Plan it as the next stability phase.
+- S.2 warmup for plain optimizers (LinearLR+SequentialLR scheduler row): feature work.
+- S.4 CI, pytest markers and a fast CPU subset: worth doing, but it is infrastructure; push to the remote is currently permission-gated.
+- S.5 one defaults table (total_iter 1000000 in 5 places, max_skip_streak, keep_states): no current divergence. A maintainability refactor against T3's 'no defaults filled by load_config' rule; needs a design choice.
+- S.11 per-ARCHS capability metadata (window size, channels_last, compile): optional A4 item, explicitly deferred.
+- S.12 compiling frozen loss backbones (+8%) and net_d_adv compile under DDP: perf follow-ups (the fast_matmul part of S.12 is merged into R1.2).
+- S.13 Phase.autocast hard-codes device_type='cuda': on a CPU run use_amp is silently ineffective (torch only warns). Low; reject or warn in validate_train later.
+- R5.x: README section on compile for training only is covered by R5.3; nothing else deferred from R5.
+- R1.1 add a test with the real torchprofile tracer (skips without torchprofile); current test stubs profile_macs.
