@@ -1,3 +1,5 @@
+import math
+
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
@@ -153,4 +155,5 @@ class mssim_loss(Loss):
                 x = F.avg_pool2d(x, kernel_size=2, stride=2, padding=padding)
                 y = F.avg_pool2d(y, kernel_size=2, stride=2, padding=padding)
 
-        return torch.stack(ms_components).prod(0).mean()  # equ 7 in ref2
+        # equ 7 in ref2; a mul chain, not prod(): prod's backward syncs to look for zeros
+        return math.prod(ms_components).mean()

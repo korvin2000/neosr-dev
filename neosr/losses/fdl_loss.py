@@ -194,6 +194,9 @@ class dinov2(nn.Module):
 
         self.layers = layers
         self.chns = [768] * len(self.layers)
+        if not self.model.chunked_blocks:
+            # get_intermediate_layers runs every block; later ones only cost time (perf.md)
+            del self.model.blocks[max(layers) + 1 :]
 
         if len(weights) != len(self.layers):
             msg = "Number of layer weights must match number of layers"
@@ -255,9 +258,15 @@ class fdl_loss(Loss):
 
     The random projections come from a CPU generator seeded with `seed`, so every
     build (and every resumed run) optimises the same objective.
+
+    By default the whole loss runs in fp32. `fp32_backbone=False` (opt-in, ~2x faster FDL) runs the
+    DINOv2 backbone under the trainer's autocast for patches of at least `amp_min_size` px per side,
+    the FFT / sort head always in fp32; smaller patches and the CNN backbones stay fp32
+    (docs/refactor/analysis/perf.md §3.1: bf16 features drift or blow up the phase gradient there,
+    and even at 256 px the pixel gradient differs by up to 60%, so it is not the default).
     """
 
-    fp32 = True
+    amp_min_size = 256  # smallest validated patch side for the autocast backbone
 
     def __init__(
         self,
@@ -271,9 +280,11 @@ class fdl_loss(Loss):
         dino_norm=False,
         phase_weight=1.0,
         seed=0,
+        fp32_backbone=True,
     ):
         super().__init__()
         model = model.lower()
+        self.fp32 = bool(fp32_backbone) or model != "dinov2"
         self.model_name = model
 
         if model == "resnet":
@@ -317,13 +328,22 @@ class fdl_loss(Loss):
         return torch.abs(projx - projy).mean([1, 2])
 
     def forward(self, x, y):
+        dev = x.device.type
+        if min(x.shape[-2:]) < self.amp_min_size and torch.is_autocast_enabled(dev):
+            with torch.autocast(dev, enabled=False):
+                return self.forward(x.float(), y.float())
         x = self.model(x)
-        y = self.model(y)
+        with torch.no_grad():
+            y = self.model(y)
+        with torch.autocast(dev, enabled=False):
+            return self._score(x, y)
+
+    def _score(self, x, y):
         score = []
         for i in range(len(x)):
             # Transform to Fourier Space
-            fft_x = torch.fft.fftn(x[i], dim=(-2, -1))
-            fft_y = torch.fft.fftn(y[i], dim=(-2, -1))
+            fft_x = torch.fft.fftn(x[i].float(), dim=(-2, -1))
+            fft_y = torch.fft.fftn(y[i].float(), dim=(-2, -1))
 
             # get the magnitude and phase of the extracted features
             x_mag = torch.abs(fft_x)

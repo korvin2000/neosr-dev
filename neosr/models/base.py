@@ -133,10 +133,13 @@ class base:
     def wrap(
         self, net: nn.Module | None, *, broadcast_buffers: bool = True
     ) -> nn.Module | None:
-        """Training-forward wrapper: DDP (multi-process), then torch.compile (T4 P7). Never used to
-        load, save, average or validate: those use the bare module."""
+        """Training-forward wrapper: DDP (multi-process), then torch.compile for the generator only
+        (T4 P7; perf.md: a compiled spectral-norm D run on real and fake before one backward fails
+        the saved-tensor version check). Never used to load, save, average or validate: those use
+        the bare module."""
         if net is None:
             return None
+        compile_it = bool(self.opt.get("compile")) and net is self.net_g
         if self.rt.distributed:
             if not broadcast_buffers:
                 # the constructor then syncs parameters only: start the buffers (SN u/v, seeded
@@ -149,7 +152,7 @@ class base:
                 broadcast_buffers=broadcast_buffers,
                 find_unused_parameters=self.opt.get("find_unused_parameters", False),
             )
-        if self.opt.get("compile"):
+        if compile_it:
             net = torch.compile(
                 net, mode=self.opt.get("compile_mode", "default"), dynamic=False
             )
