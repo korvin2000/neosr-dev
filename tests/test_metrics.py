@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from pathlib import Path
 
 import cv2
@@ -5,7 +7,9 @@ import numpy as np
 import pytest
 import torch
 
-from neosr.metrics import calculate, calculate_metric, release_metric_nets
+from neosr.config import ConfigError
+from neosr.metrics import build_metric, calculate, calculate_metric
+from neosr.metrics.calculate import release_metric_nets
 from neosr.utils.img_util import img2tensor, tensor2img
 
 VAL_GT = Path("/home/korvin/apps/data/val/GT")
@@ -70,8 +74,27 @@ def _synthetic_pair() -> dict[str, np.ndarray]:
 def test_psnr_ssim_match_synthetic_reference():
     data = _synthetic_pair()
     for metric, opt in METRICS.items():
-        value = calculate_metric(data, opt)
-        assert value == pytest.approx(SYNTHETIC_REFERENCE[metric], rel=1e-12, abs=0)
+        built = build_metric(opt | {"better": "higher"}, torch.device("cpu"))
+        for value in (calculate_metric(data, opt), built(data["img"], data["img2"])):
+            assert value == pytest.approx(SYNTHETIC_REFERENCE[metric], rel=1e-12, abs=0)
+
+
+def test_build_metric_config_errors():
+    cpu = torch.device("cpu")
+    with pytest.raises(
+        ConfigError, match=r"\[val.metrics\] calculate_psnr: .*crop_boder"
+    ):
+        build_metric({"type": "calculate_psnr", "crop_boder": 4}, cpu)
+    with pytest.raises(ConfigError, match=r"did you mean 'calculate_ssim'"):
+        build_metric({"type": "calculate_ssmi"}, cpu)
+    # the run device is bound, not configured
+    with pytest.raises(ConfigError, match="device"):
+        build_metric({"type": "calculate_dists", "device": "cpu"}, cpu)
+    with pytest.raises(ConfigError, match="device"):
+        build_metric({"type": "calculate_psnr", "device": "cpu"}, cpu)
+    cfg = {"type": "calculate_psnr", "crop_border": 4}
+    build_metric(cfg, cpu)
+    assert cfg == {"type": "calculate_psnr", "crop_border": 4}  # input not mutated
 
 
 @pytest.mark.skipif(not VAL_GT.is_dir(), reason="validation images not available")
@@ -91,7 +114,9 @@ def test_crop_border_validation():
         calculate.calculate_psnr(img[:8, :8], img[:8, :8], crop_border=4)
     with pytest.raises(ValueError, match="11x11"):
         calculate.calculate_ssim(img[:16, :16], img[:16, :16], crop_border=4)
-    assert calculate.calculate_psnr(img[:9, :9], img[:9, :9], crop_border=4) == float("inf")
+    assert calculate.calculate_psnr(img[:9, :9], img[:9, :9], crop_border=4) == float(
+        "inf"
+    )
     assert calculate.calculate_ssim(img, img, crop_border=4) == pytest.approx(1.0)
 
 
@@ -135,6 +160,92 @@ def test_metric_net_cached_per_device(monkeypatch, name):
     assert type(first) is float
     assert first == second
     assert not calculate._metric_nets
+
+
+DEVICES = ["cpu"] + (["cuda:0"] if torch.cuda.is_available() else [])
+
+
+@pytest.mark.parametrize("device", DEVICES)
+@pytest.mark.parametrize("name", ["dists", "topiq"])
+def test_build_metric_net_built_once_on_device(monkeypatch, name, device):
+    built, seen = [], []
+    monkeypatch.setitem(
+        calculate._metric_builders, name, lambda: built.append(1) or _FakeNet()
+    )
+    real_net = calculate._metric_net
+    monkeypatch.setattr(
+        calculate, "_metric_net", lambda n, d: seen.append(d) or real_net(n, d)
+    )
+    device = torch.device(device)
+    metric = build_metric({"type": f"calculate_{name}", "better": "lower"}, device)
+    rng = np.random.default_rng(0)
+    img = rng.integers(0, 256, (8, 8, 3), dtype=np.uint8)
+    release_metric_nets()
+    try:
+        values = [metric(img, img[::-1].copy()) for _ in range(3)]
+        (net,) = calculate._metric_nets.values()
+        assert len(built) == 1
+        assert seen == [device] * 3
+        assert all(p.device == device for p in net.parameters())
+        assert not net.training
+        assert not any(p.requires_grad for p in net.parameters())
+    finally:
+        release_metric_nets()
+    assert len(set(values)) == 1
+
+
+def test_build_metric_forwards_exact_device(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        calculate, "_calculate_net_metric", lambda *a: seen.append(a[-1]) or 0.0
+    )
+    img = np.zeros((8, 8, 3), dtype=np.uint8)
+    device = torch.device("cuda", 1)  # a non-current index needs no second GPU here
+    build_metric({"type": "calculate_dists"}, device)(img, img)
+    build_metric({"type": "calculate_topiq"}, device)(img, img)
+    assert seen == [device, device]
+
+
+def test_calculate_metric_legacy_device_key(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        calculate, "_calculate_net_metric", lambda *a: seen.append(a[-1]) or 0.0
+    )
+    img = np.zeros((8, 8, 3), dtype=np.uint8)
+    opt = {"type": "calculate_dists", "device": "cpu", "better": "lower"}
+    calculate_metric({"img": img, "img2": img}, opt)
+    assert seen == [torch.device("cpu")]
+    assert opt["device"] == "cpu"  # input not mutated
+    img = np.zeros((16, 16, 3), dtype=np.uint8)
+    psnr = {"type": "calculate_psnr", "device": "cpu"}
+    assert calculate_metric({"img": img, "img2": img}, psnr) == float("inf")
+
+
+LAZY_PROBE = """
+import sys
+import numpy as np
+import torch
+from neosr.metrics import build_metric
+img = np.zeros((32, 32, 3), dtype=np.uint8)
+for t in ("calculate_psnr", "calculate_ssim", "calculate_dists", "calculate_topiq"):
+    m = build_metric({"type": t}, torch.device("cpu"))
+    if t in ("calculate_psnr", "calculate_ssim"):
+        m(img, img)
+heavy = [m for m in ("neosr.metrics.topiq", "neosr.losses.dists_loss") if m in sys.modules]
+assert not heavy, heavy
+"""
+
+
+def test_metric_nets_imported_lazily():
+    root = Path(calculate.__file__).parents[2]
+    r = subprocess.run(
+        [sys.executable, "-c", LAZY_PROBE],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 0, r.stderr
 
 
 @pytest.mark.parametrize("name", ["dists", "topiq"])

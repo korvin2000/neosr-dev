@@ -6,8 +6,6 @@ from torch import nn
 from torch.nn import functional as F
 from torchvision.models import resnet50
 
-from neosr.utils.registry import LOSS_REGISTRY
-
 
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
@@ -142,7 +140,6 @@ class resnet_features(nn.Module):
         return features
 
 
-@LOSS_REGISTRY.register()
 class topiq(nn.Module):
     """Inference for TOP-IQ metric, proposed in:
     https://arxiv.org/abs/2308.03060

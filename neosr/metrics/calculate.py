@@ -6,11 +6,8 @@ import torch
 from cv2.typing import MatLike
 from torch import Tensor, nn
 
-from neosr.losses.dists_loss import dists_loss
 from neosr.metrics.metric_util import reorder_image, to_y_channel
-from neosr.metrics.topiq import topiq
 from neosr.utils.img_util import img2tensor
-from neosr.utils.registry import METRIC_REGISTRY
 
 
 def _crop(img: np.ndarray, crop_border: int) -> np.ndarray:
@@ -22,14 +19,12 @@ def _crop(img: np.ndarray, crop_border: int) -> np.ndarray:
     return img[crop_border:-crop_border, crop_border:-crop_border, ...]
 
 
-@METRIC_REGISTRY.register()
 def calculate_psnr(
     img: np.ndarray,
     img2: np.ndarray,
     crop_border: int = 4,
     input_order: str = "HWC",
     test_y_channel: bool = False,
-    **kwargs,  # noqa: ARG001
 ) -> float:
     """Calculate PSNR (Peak Signal-to-Noise Ratio).
 
@@ -112,14 +107,12 @@ def _ssim(img: np.ndarray | MatLike, img2: np.ndarray | MatLike) -> float:
     return ssim_map.mean()
 
 
-@METRIC_REGISTRY.register()
 def calculate_ssim(
     img: np.ndarray,
     img2: np.ndarray,
     crop_border: int = 4,
     input_order: str = "HWC",
     test_y_channel: bool = False,
-    **kwargs,  # noqa: ARG001
 ) -> float:
     """Calculate SSIM (structural similarity).
 
@@ -176,7 +169,22 @@ def calculate_ssim(
 # built once per (name, device) and reused. Call release_metric_nets() after
 # validation to free the weights during training.
 _metric_nets: dict[tuple[str, torch.device], nn.Module] = {}
-_metric_builders = {"dists": lambda: dists_loss(as_loss=False), "topiq": topiq}
+
+
+# the nets pull in torchvision models and weights: imported on first use
+def _dists() -> nn.Module:
+    from neosr.losses.dists_loss import dists_loss  # noqa: PLC0415
+
+    return dists_loss(as_loss=False)
+
+
+def _topiq() -> nn.Module:
+    from neosr.metrics.topiq import topiq  # noqa: PLC0415
+
+    return topiq()
+
+
+_metric_builders = {"dists": _dists, "topiq": _topiq}
 
 
 def release_metric_nets() -> None:
@@ -192,10 +200,7 @@ def _metric_net(name: str, device: torch.device) -> nn.Module:
 
 
 def _calculate_net_metric(
-    name: str,
-    img: np.ndarray,
-    img2: np.ndarray,
-    device: torch.device | str | None,
+    name: str, img: np.ndarray, img2: np.ndarray, device: torch.device | str | None
 ) -> float:
     assert img.shape == img2.shape, (
         f"Image shapes are different: {img.shape}, {img2.shape}."
@@ -218,12 +223,8 @@ def _calculate_net_metric(
         return net(x, y).item()
 
 
-@METRIC_REGISTRY.register()
 def calculate_dists(
-    img: np.ndarray,
-    img2: np.ndarray,
-    device: torch.device | str | None = None,
-    **kwargs,  # noqa: ARG001
+    img: np.ndarray, img2: np.ndarray, device: torch.device | str | None = None
 ) -> float:
     """Calculate the DISTS metric (lower is better).
 
@@ -241,12 +242,8 @@ def calculate_dists(
     return _calculate_net_metric("dists", img, img2, device)
 
 
-@METRIC_REGISTRY.register()
 def calculate_topiq(
-    img: np.ndarray,
-    img2: np.ndarray,
-    device: torch.device | str | None = None,
-    **kwargs,  # noqa: ARG001
+    img: np.ndarray, img2: np.ndarray, device: torch.device | str | None = None
 ) -> float:
     """Calculate the full-reference TOPIQ metric (higher is better).
 
