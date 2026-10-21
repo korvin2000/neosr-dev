@@ -76,17 +76,32 @@ def rep_rt4ksr(net):
 """
 
 
-def load_net(args: argparse.Namespace) -> nn.Module:
-    """Build `args.network` at `args.scale` on the CPU and load `args.input` (any read_weights layout)."""
-    print(f"\n-------- Attempting to build network [{args.network}].")
-    net_opt = {"type": args.network}
+def build_net(args: argparse.Namespace, **kw) -> nn.Module:
+    net_opt = {"type": args.network, **kw}
     if args.window:
         net_opt["window_size"] = args.window
-    net = build_network(net_opt, scale=args.scale)
+    return build_network(net_opt, scale=args.scale)
+
+
+def load_net(args: argparse.Namespace, *, qat_only: bool = False) -> nn.Module:
+    """Build `args.network` at `args.scale` on the CPU and load `args.input` (any read_weights
+    layout) into the topology it was saved in: QAT, deploy (fused_init) or trained."""
+    print(f"\n-------- Attempting to build network [{args.network}].")
+    net = build_net(args)
     sd = read_weights(args.input)
     qat_state = getattr(net, "qat_state", None)
-    if qat_state is not None and (kw := qat_state(sd)) is not None:
+    kw = qat_state(sd) if qat_state is not None else None
+    if qat_only and kw is None:
+        msg = f"--strip-qat needs a QAT checkpoint; {args.input} has no fake-quant modules"
+        raise ConfigError(msg)
+    if kw is not None:
         net.prepare_qat(**kw)  # the QAT topology exists before its tensors load (T5 §2)
+    elif hasattr(net, "fuse_model") and sd.keys() != net.state_dict().keys():
+        fused = build_net(
+            args, fused_init=True
+        )  # a deploy checkpoint, e.g. from --strip-qat
+        if sd.keys() == fused.state_dict().keys():
+            net = fused
     load_weights(net, sd, True, get_root_logger())
     net.eval()
     if is_qat(net):  # QDQ export: frozen ranges, fake quant on, folded norms
@@ -100,6 +115,41 @@ def load_net(args: argparse.Namespace) -> nn.Module:
 
 def is_qat(net: nn.Module) -> bool:
     return any(isinstance(m, FakeQuantizeBase) for m in net.modules())
+
+
+def strip_qat(args: argparse.Namespace) -> nn.Module:
+    """--strip-qat (T5 D20, A9): the float deploy net of a QAT checkpoint (reparam convs fused, norms
+    folded, every fake-quant module dropped), saved as {"params": ...} to `args.output`. It loads
+    strictly into the network built with [network_g] fused_init = true."""
+    qat = load_net(args, qat_only=True)
+    fq = tuple(
+        f"{n}." for n, m in qat.named_modules() if isinstance(m, FakeQuantizeBase)
+    )
+    net = build_net(args, fused_init=True).eval()
+    net.load_state_dict({
+        k: v for k, v in qat.state_dict().items() if not k.startswith(fq)
+    })
+    # fake quant off, the QAT net is the float net (same output); A9: vs fake quant max <= 1e-2
+    if not args.nocheck:
+        x = torch.rand(1, 3, 40, 32, generator=torch.Generator().manual_seed(0))
+        with torch.inference_mode():
+            quant = qat(x)
+            qat.set_qat_phase(fake_quant=False, observe=False, freeze_norm=True)
+            ref, out = qat(x), net(x)
+        err = (out - ref).abs().max().item()
+        gap = (out - quant).abs()
+        print(
+            f"-------- float vs fake-quant: max {gap.max():.2e}, mean {gap.mean():.2e}"
+        )
+        if not err <= 1e-4:  # NaN fails too
+            msg = f"stripped net deviates from the QAT net without fake quant: max {err:.2e}"
+            raise RuntimeError(msg)
+        if not gap.max().item() <= 1e-2:
+            msg = f"float net deviates from the fake-quant net: max {gap.max():.2e} > 1e-2"
+            raise RuntimeError(msg)
+    torch.save({"params": net.state_dict()}, args.output)
+    print(f"-------- Float checkpoint saved at: {args.output}")
+    return net
 
 
 def scalarize_qdq(path: str) -> None:
@@ -171,14 +221,14 @@ def assert_verify(args: argparse.Namespace, onnx_model, torch_model) -> None:
     with torch.inference_mode():
         torch_outputs = torch_model(dummy_input)
 
-    # final assert - default tolerance values - rtol=1e-03, atol=1e-05
+    # float export: rtol 1e-2, atol 1e-3 (looser than numpy's 1e-7/0: ORT reorders reductions)
     np.testing.assert_allclose(
         torch_outputs.detach().cpu().numpy(), ort_outs[0], rtol=0.01, atol=0.001
     )
     print("-------- Model successfully verified.")
 
 
-def to_onnx(args: argparse.Namespace) -> None:
+def to_onnx(args: argparse.Namespace, model: nn.Module | None = None) -> None:
     import onnx  # noqa: PLC0415
     import onnxruntime  # noqa: PLC0415
 
@@ -188,8 +238,8 @@ def to_onnx(args: argparse.Namespace) -> None:
         msg = f"Network [{args.network}] cannot be converted to ONNX."
         raise RuntimeError(msg)
 
-    # load network and send to device
-    model = load_net(args)
+    if model is None:
+        model = load_net(args)
     # set model to eval mode
     model.eval()
     qat = is_qat(model)
@@ -326,11 +376,23 @@ def to_onnx(args: argparse.Namespace) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = convert_args(argv)  # argparse may SystemExit(2)
     if args.output is None:
-        args.output = str(Path(args.input).with_suffix(".onnx"))
+        inp = Path(args.input)
+        out = (
+            inp.with_name(f"{inp.stem}_float.pth")
+            if args.strip_qat
+            else inp.with_suffix(".onnx")
+        )
+        args.output = str(out)
     get_root_logger()
     warnings.filterwarnings("ignore", category=UserWarning)
     try:
-        to_onnx(args)
+        if not args.strip_qat:
+            to_onnx(args)
+        else:
+            net = strip_qat(args)
+            if args.onnx:  # the float ONNX of the stripped net, next to its checkpoint
+                args.output = str(Path(args.output).with_suffix(".onnx"))
+                to_onnx(args, net)
     except ConfigError as e:
         print(f"config error: {e}", file=sys.stderr)
         return 2

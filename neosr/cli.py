@@ -60,13 +60,20 @@ def convert_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     add(
         "--output",
         default=None,
-        help="Output ONNX model path. (default: the input path with an .onnx suffix)",
+        help="Output ONNX model path (default: the input path with an .onnx suffix); with "
+        "--strip-qat the float checkpoint path (default: <input>_float.pth).",
     )
     add(
         "-onnx",
         "--onnx",
         action="store_true",
-        help="Accepted for compatibility: ONNX is always exported.",
+        help="With --strip-qat: also export the float ONNX. Otherwise ONNX is always exported.",
+    )
+    add(
+        "--strip-qat",
+        action="store_true",
+        help="From a QAT checkpoint, save a float checkpoint without the QAT modules (load it "
+        "with [network_g] fused_init = true).",
     )
     add(
         "-prune",

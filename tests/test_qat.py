@@ -534,3 +534,88 @@ def test_convert_float_aether_exports_unquantized(tmp_path, convert_py):
     torch.save({"params": net_small().state_dict()}, tmp_path / "f.pth")
     argv = ["--input", str(tmp_path / "f.pth"), "-net", "aether_small", "-s", str(S)]
     assert convert_py.main(argv) == 0
+
+
+def qat_file(tmp_path) -> tuple[aether, Path]:
+    net = net_small()
+    net.prepare_qat()
+    net.train()
+    observed(net)
+    torch.save({"params": net.state_dict()}, tmp_path / "q.pth")
+    return net, tmp_path / "q.pth"
+
+
+def strip_argv(path: Path) -> list[str]:
+    return ["--input", str(path), "-net", "aether_small", "-s", str(S), "--strip-qat"]
+
+
+def onnx_ops(path: Path) -> Counter:
+    import onnx  # noqa: PLC0415
+
+    return Counter(n.op_type for n in onnx.load(path).graph.node)
+
+
+def test_strip_qat_saves_a_float_checkpoint_for_fused_init(tmp_path, convert_py):
+    qat, path = qat_file(tmp_path)
+    assert convert_py.main([*strip_argv(path), "--onnx"]) == 0  # parity checked inside
+    sd = read_weights(str(tmp_path / "q_float.pth"))
+    assert not [k for k in sd if "fake_quant" in k or "activation_post_process" in k]
+    ops = onnx_ops(tmp_path / "q_float_fp32.onnx")
+    assert ops["Conv"]
+    assert not ops["QuantizeLinear"]
+    assert not ops["DequantizeLinear"]
+
+    qat.eval()
+    qat.set_qat_phase(fake_quant=True, observe=False, freeze_norm=True)
+    qat.fold_norms()
+    x = torch.rand(1, 3, 10, 9)
+    with torch.no_grad():
+        quant = qat(x)
+    qat.set_qat_phase(fake_quant=False, observe=False, freeze_norm=True)
+    inf = qat_opt(
+        tmp_path / "i", is_train=False
+    )  # test.py: strict load into the deploy topology
+    inf["network_g"]["fused_init"] = True
+    inf["path"]["pretrain_network_g"] = str(tmp_path / "q_float.pth")
+    m = build(inf)
+    assert not any(isinstance(x, tq.FakeQuantizeBase) for x in m.net_g.modules())
+    with torch.no_grad():
+        out = m.net_g.eval()(x)
+        torch.testing.assert_close(out, qat(x), rtol=1e-4, atol=1e-5)
+    assert (out - quant).abs().max() <= 1e-2  # A9
+
+
+def test_stripped_checkpoint_reopens_in_a_separate_convert_call(tmp_path, convert_py):
+    _, path = qat_file(tmp_path)
+    assert convert_py.main(strip_argv(path)) == 0
+    flt = tmp_path / "q_float.pth"
+    assert convert_py.main(strip_argv(flt)) == 2  # not QAT: rejected before any load
+    assert not (tmp_path / "q_float_float.pth").exists()
+    assert (
+        convert_py.main(strip_argv(flt)[:-1]) == 0
+    )  # plain export, fused topology detected
+    ops = onnx_ops(tmp_path / "q_float_fp32.onnx")
+    assert ops["Conv"]
+    assert not ops["QuantizeLinear"]
+
+
+def test_strip_qat_rejects_a_float_checkpoint(tmp_path, convert_py):
+    torch.save({"params": net_small().state_dict()}, tmp_path / "f.pth")
+    argv = ["--input", str(tmp_path / "f.pth"), "-net", "aether_small", "-s", str(S)]
+    assert convert_py.main([*argv, "--strip-qat"]) == 2
+    assert not (tmp_path / "f_float.pth").exists()
+
+
+def test_strip_qat_rejects_a_float_net_far_from_fake_quant(tmp_path, convert_py):
+    net = net_small()
+    net.prepare_qat()
+    net.train()
+    observed(net)
+    with (
+        torch.no_grad()
+    ):  # weights beyond the observed int8 range: fake quant clips them
+        net.conv_last.weight.mul_(10)
+    torch.save({"params": net.state_dict()}, tmp_path / "q.pth")
+    assert convert_py.main(strip_argv(tmp_path / "q.pth")) == 1
+    assert not (tmp_path / "q_float.pth").exists()
+    assert convert_py.main([*strip_argv(tmp_path / "q.pth"), "--nocheck"]) == 0

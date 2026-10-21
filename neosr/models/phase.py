@@ -168,10 +168,17 @@ def no_sync(net: nn.Module, boundary: bool):
 
 
 class Ema:
-    """EMA of the bare eager G. First successful update copies (AveragedModel semantics); later ones lerp."""
+    """EMA of the bare eager G. First successful update copies (AveragedModel semantics); later ones lerp.
+    With `power` (ema_pytorch warmup) the k-th lerp after the copy uses min(1 - (1 + k)**-power, decay);
+    the lerp count is then saved so that resume stays exact. A state without it counts as warmed up."""
 
-    def __init__(self, net: nn.Module, decay: float) -> None:
-        self.net, self.w, self.lists = net, 1.0 - decay, None
+    KEY = "@ema_lerps"  # not a module path: never collides with a parameter or buffer name
+
+    def __init__(
+        self, net: nn.Module, decay: float, power: float | None = None
+    ) -> None:
+        self.net, self.decay, self.power, self.lists = net, decay, power, None
+        self.lerps: int | None = 0  # None: warmed up (state saved without the count)
         self.module = copy.deepcopy(net).eval().requires_grad_(False)
 
     def _bind(self) -> None:
@@ -182,23 +189,41 @@ class Ema:
             [*self.net.buffers()],
         )
 
+    def current_decay(self) -> float:
+        if self.power is None or self.lerps is None:
+            return self.decay
+        return min(max(1.0 - (1.0 + self.lerps) ** -self.power, 0.0), self.decay)
+
     @torch.no_grad()
     def update(self) -> None:  # called only after a successful G update
         if self.lists is None:
             # load_state_dict also resizes per-channel QAT observers
             self.module.load_state_dict(self.net.state_dict())
             self._bind()
+            self.lerps = 0
             return
+        if self.lerps is not None:
+            self.lerps += 1
         dp, sp, db, sb = self.lists
-        torch._foreach_lerp_(dp, sp, self.w)
+        torch._foreach_lerp_(dp, sp, 1.0 - self.current_decay())
         if db:
             torch._foreach_copy_(db, sb)
 
     def state_dict(self) -> dict | None:  # None until the first update
-        return None if self.lists is None else self.module.state_dict()
+        if self.lists is None:
+            return None
+        sd = self.module.state_dict()
+        if self.power is not None and self.lerps is not None:
+            sd[self.KEY] = torch.tensor(self.lerps)
+        return sd
 
     def load_state_dict(self, sd: Mapping) -> None:
+        lerps = sd.get(self.KEY)
+        if lerps is not None:
+            sd = copy.copy(sd)  # shallow; keeps the OrderedDict _metadata
+            del sd[self.KEY]
         self.module.load_state_dict(sd)  # strict
+        self.lerps = None if lerps is None else int(lerps)
         self._bind()  # initialised: the next update lerps, never re-copies
 
 

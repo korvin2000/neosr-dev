@@ -119,6 +119,7 @@ SCHEMA: dict[str, dict[str, Any]] = {
         "optim_d": dict,
         "scheduler": dict,
         "ema": float,
+        "ema_power": float,
         "clamp": bool,
         "grad_clip": bool,
         "match_lq_colors": bool,
@@ -382,6 +383,9 @@ def validate_train(cfg: dict[str, Any]) -> None:
         raise ConfigError(msg)
     if train.get("max_skip_streak", 1) < 1:
         msg = "train.max_skip_streak must be >= 1"
+        raise ConfigError(msg)
+    if (power := train.get("ema_power")) is not None and not power > 0:
+        msg = f"train.ema_power must be > 0, got {power}"
         raise ConfigError(msg)
     tile = cfg.get("val", {}).get("tile", 0)
     overlap = cfg.get("val", {}).get("tile_overlap", 16)

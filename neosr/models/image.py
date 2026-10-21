@@ -59,7 +59,7 @@ class image(base):
             self.nets["net_d"] = self.net_d
         self.net_g.train()
         ema = tr.get("ema", 0)  # deep copy, initialised at the first update
-        self.ema = Ema(self.net_g, ema) if ema > 0 else None
+        self.ema = Ema(self.net_g, ema, tr.get("ema_power")) if ema > 0 else None
         g_terms, d_terms = build_losses(
             tr, scale=self.scale, device=self.device, has_d=self.net_d is not None
         )
