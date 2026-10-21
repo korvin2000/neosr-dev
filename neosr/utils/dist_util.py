@@ -9,16 +9,15 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 
 
-def _init_dist_pytorch(backend: str, **kwargs) -> None:
-    rank = int(os.environ["RANK"])
-    num_gpus = torch.cuda.device_count()
-    torch.cuda.set_device(rank % num_gpus)
-    
+def _init_dist_pytorch(backend: str) -> None:
+    # the device index is the rank within the node, not the global rank (multi-node)
+    if torch.cuda.is_available():
+        torch.cuda.set_device(int(os.environ["LOCAL_RANK"]) % torch.cuda.device_count())
     if not dist.is_initialized():
-        dist.init_process_group(backend=backend, **kwargs)
+        dist.init_process_group(backend=backend)
 
 
-def _init_dist_slurm(backend: str, port: int) -> None:
+def _init_dist_slurm(backend: str, port: int | None = None) -> None:
     """Initialize slurm distributed training environment.
 
     If argument ``port`` is not specified, then the master port will be system
@@ -52,13 +51,14 @@ def _init_dist_slurm(backend: str, port: int) -> None:
     dist.init_process_group(backend=backend)
 
 
-def init_dist(launcher, backend: str = "nccl", **kwargs) -> None:
+def init_dist(launcher: str, backend: str = "nccl", port: int | None = None) -> None:
+    """Initialize the process group; port applies to slurm only (torchrun sets MASTER_PORT)."""
     if mp.get_start_method(allow_none=True) is None:
         mp.set_start_method("spawn")
     if launcher == "pytorch":
-        _init_dist_pytorch(backend, **kwargs)
+        _init_dist_pytorch(backend)
     elif launcher == "slurm":
-        _init_dist_slurm(backend, **kwargs)
+        _init_dist_slurm(backend, port)
     else:
         msg = f"Invalid launcher type: {launcher}"
         raise ValueError(msg)
