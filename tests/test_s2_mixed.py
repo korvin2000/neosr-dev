@@ -262,3 +262,55 @@ def test_asid_hygiene() -> None:
     with torch.no_grad():
         for h, w in ((1, 1), (7, 5), (8, 8), (9, 12)):
             assert net(torch.rand(1, 3, h, w)).shape == (1, 3, 4 * h, 4 * w)
+
+
+# ---------------------------------------------------------------- MX-05/14 DITN
+
+
+def _old_ditn_isa(self, x):
+    # ISA.forward before MX-05: softmax(t q k^T) computed and discarded, 3-D SDPA default scale
+    b, c, h, w = x.shape
+    q, k, v = (t.transpose(-1, -2) for t in self.qkv(x.view(b, c, -1).transpose(-1, -2)).chunk(3, dim=-1))
+    q, k = F.normalize(q, dim=-1), F.normalize(k, dim=-1)
+    return self.project_out(F.scaled_dot_product_attention(q, k, v).view(b, c, h, w))
+
+
+def _spandrel_ditn_isa(self, x):
+    # canonical DITN_Real ISA (spandrel / upstream "original" line)
+    b, c, h, w = x.shape
+    q, k, v = (t.transpose(-1, -2) for t in self.qkv(x.view(b, c, -1).transpose(-1, -2)).chunk(3, dim=-1))
+    q, k = F.normalize(q, dim=-1), F.normalize(k, dim=-1)
+    attn = ((q @ k.transpose(-2, -1)) * self.temperature).softmax(dim=-1)
+    return self.project_out((attn @ v).view(b, c, h, w))
+
+
+def test_ditn_matches_spandrel_and_keeps_legacy_forward(monkeypatch) -> None:
+    from neosr.archs.ditn_arch import ISA
+
+    old = _build("ditn").eval()
+    sd = old.state_dict()
+    x = torch.rand(2, 3, 24, 40)
+    with torch.no_grad(), monkeypatch.context() as m:
+        m.setattr(ISA, "forward", _old_ditn_isa)
+        ref_old = old(x)
+    new = _build("ditn", seed=1).eval()
+    new.load_state_dict(sd)  # t == 1 exactly -> 1/patch_size: the old forward
+    with torch.no_grad():
+        torch.testing.assert_close(new(x), ref_old, rtol=1e-5, atol=1e-5)
+    # a trained temperature: the new forward is the canonical equation, gradients included
+    torch.manual_seed(2)
+    for mm in new.modules():
+        if isinstance(mm, ISA):
+            mm.temperature.data.uniform_(0.5, 3)
+    canon = _build("ditn", seed=1).train()
+    canon.load_state_dict(new.state_dict())
+    new.train()
+    y = new(x)
+    with monkeypatch.context() as m:
+        m.setattr(ISA, "forward", _spandrel_ditn_isa)
+        y_ref = canon(x)
+    torch.testing.assert_close(y, y_ref, rtol=1e-5, atol=1e-5)
+    g = torch.randn_like(y)
+    (y * g).sum().backward()
+    (y_ref * g).sum().backward()
+    _assert_grads_close(new, canon)

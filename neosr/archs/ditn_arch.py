@@ -98,35 +98,30 @@ class LayerNorm(nn.Module):
 
 
 class ISA(nn.Module):
-    def __init__(self, dim, bias):
+    def __init__(self, dim, bias, patch_size=8):
         super(ISA, self).__init__()
         self.temperature = nn.Parameter(torch.ones(1, 1, 1))
         self.qkv = nn.Linear(dim, dim * 3)
         self.project_out = nn.Conv2d(dim, dim, kernel_size=1, bias=bias)
+        self.patch_size = patch_size
+
+    def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
+        # the old forward discarded softmax(t * q k^T) and returned SDPA's default 1/sqrt(ps^2)
+        # scale, so its temperature never trained (exactly 1): load such weights as t = 1/ps
+        t = state_dict.get(prefix + "temperature")
+        if t is not None and bool((t == 1).all()):
+            state_dict[prefix + "temperature"] = t / self.patch_size
+        super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
     def forward(self, x):
-        b, c, h, w = x.data.shape
+        b, c, h, w = x.shape
         x = x.view(b, c, -1).transpose(-1, -2)
-        qkv = self.qkv(x)
-        q, k, v = qkv.chunk(3, dim=-1)
-        q = q.transpose(-1, -2)
-        k = k.transpose(-1, -2)
-        v = v.transpose(-1, -2)
-
-        q = F.normalize(q, dim=-1)
+        # channel attention softmax(t * cos(q, k)) v (spandrel/upstream DITN); 4-D for fused SDPA
+        q, k, v = (t.transpose(-1, -2).unsqueeze(1) for t in self.qkv(x).chunk(3, dim=-1))
+        q = F.normalize(q, dim=-1) * self.temperature
         k = F.normalize(k, dim=-1)
-
-        attn = (q @ k.transpose(-2, -1)) * self.temperature
-        attn = attn.softmax(dim=-1)
-
-        # flash attention
-        out = F.scaled_dot_product_attention(q, k, v)
-        # original:
-        # out = (attn @ v)
-        out = out.view(b, c, h, w)
-
-        out = self.project_out(out)
-        return out
+        out = F.scaled_dot_product_attention(q, k, v, scale=1.0)
+        return self.project_out(out.view(b, c, h, w))
 
 
 class SDA(nn.Module):
@@ -164,9 +159,9 @@ class SDA(nn.Module):
 
 
 class ITL(nn.Module):
-    def __init__(self, n_feats, ffn_expansion_factor, bias, LayerNorm_type):
+    def __init__(self, n_feats, ffn_expansion_factor, bias, LayerNorm_type, patch_size=8):
         super(ITL, self).__init__()
-        self.attn = ISA(n_feats, bias)
+        self.attn = ISA(n_feats, bias, patch_size)
         self.act = nn.Tanh()
         self.conv1 = nn.Conv2d(n_feats, n_feats, 1)
         self.conv2 = nn.Conv2d(n_feats, n_feats, 1)
@@ -217,7 +212,7 @@ class UFONE(nn.Module):
     ):
         super(UFONE, self).__init__()
         ITL_body = [
-            ITL(dim, ffn_expansion_factor, bias, LayerNorm_type)
+            ITL(dim, ffn_expansion_factor, bias, LayerNorm_type, patch_size)
             for _ in range(ITL_blocks)
         ]
         self.ITLs = nn.Sequential(*ITL_body)
@@ -309,8 +304,8 @@ class ditn(nn.Module):
             wsize = wsize * self.patch_sizes[i] // math.gcd(wsize, self.patch_sizes[i])
         mod_pad_h = (wsize - h % wsize) % wsize
         mod_pad_w = (wsize - w % wsize) % wsize
-        x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), "reflect")
-        return x
+        mode = "reflect" if mod_pad_h < h and mod_pad_w < w else "replicate"
+        return F.pad(x, (0, mod_pad_w, 0, mod_pad_h), mode)
 
     def forward(self, inp_img):
         _, _, old_h, old_w = inp_img.shape
