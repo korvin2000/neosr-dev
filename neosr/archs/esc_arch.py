@@ -234,47 +234,39 @@ class WindowAttention(nn.Module):
         if self.attn_type == "flex":
             self.get_rpe = apply_rpe(self.relative_position_bias, window_size[0])
         else:
-            self.rpe_idxs = self.create_table_idxs(window_size[0], num_heads)
+            # (N, N) table index, device-resident; not saved (checkpoints never held it)
+            self.register_buffer(
+                "rpe_idx", self.create_table_idxs(window_size[0]), persistent=False
+            )
         self.is_mobile = False
 
     @staticmethod
-    def create_table_idxs(window_size: int, heads: int):
+    def create_table_idxs(window_size: int) -> Tensor:
         """
         Transposed idxs of original Swin Transformer
         But much easier to implement and the same relative position distance anyway
         """
-        idxs_window = []
-        for head in range(heads):
-            for h in range(window_size**2):
-                for w in range(window_size**2):
-                    q_h = h // window_size
-                    q_w = h % window_size
-                    k_h = w // window_size
-                    k_w = w % window_size
-                    rel_h = k_h - q_h + window_size - 1
-                    rel_w = k_w - q_w + window_size - 1
-                    rel_idx = rel_h * (2 * window_size - 1) + rel_w
-                    idxs_window.append((head, rel_idx))
-        return torch.tensor(idxs_window, dtype=torch.long, requires_grad=False)
+        ws = window_size
+        c = torch.stack(
+            torch.meshgrid(torch.arange(ws), torch.arange(ws), indexing="ij")
+        ).flatten(1)
+        rel = c[:, None, :] - c[:, :, None] + ws - 1  # [axis, q, k] = k - q + ws - 1
+        return rel[0] * (2 * ws - 1) + rel[1]
+
+    def rpe_bias_of(self) -> Tensor:
+        return self.relative_position_bias[:, self.rpe_idx].unsqueeze(0)
 
     def pad_to_win(self, x: Tensor, h: int, w: int) -> Tensor:
         pad_h = (self.window_size[0] - h % self.window_size[0]) % self.window_size[0]
         pad_w = (self.window_size[1] - w % self.window_size[1]) % self.window_size[1]
-        return F.pad(x, (0, pad_w, 0, pad_h), mode="reflect")
+        mode = "reflect" if pad_h < h and pad_w < w else "replicate"
+        return F.pad(x, (0, pad_w, 0, pad_h), mode=mode)
 
     def to_mobile(self):
-        bias = self.relative_position_bias[self.rpe_idxs[:, 0], self.rpe_idxs[:, 1]]
-        self.rpe_bias = nn.Parameter(
-            bias.reshape(
-                1,
-                self.num_heads,
-                self.window_size[0] * self.window_size[1],
-                self.window_size[0] * self.window_size[1],
-            )
-        )
+        self.rpe_bias = nn.Parameter(self.rpe_bias_of())
 
         del self.relative_position_bias
-        del self.rpe_idxs
+        del self.rpe_idx
 
         self.is_mobile = True
 
@@ -298,23 +290,9 @@ class WindowAttention(nn.Module):
         if self.attn_type == "flex":
             out = self.attn_func(q, k, v, score_mod=self.get_rpe)
         elif self.attn_type == "sdpa":
-            bias = self.relative_position_bias[self.rpe_idxs[:, 0], self.rpe_idxs[:, 1]]
-            bias = bias.reshape(
-                1,
-                self.num_heads,
-                self.window_size[0] * self.window_size[1],
-                self.window_size[0] * self.window_size[1],
-            )
-            out = self.attn_func(q, k, v, attn_mask=bias, is_causal=False)
+            out = self.attn_func(q, k, v, attn_mask=self.rpe_bias_of(), is_causal=False)
         elif self.attn_type == "naive":
-            bias = self.relative_position_bias[self.rpe_idxs[:, 0], self.rpe_idxs[:, 1]]
-            bias = bias.reshape(
-                1,
-                self.num_heads,
-                self.window_size[0] * self.window_size[1],
-                self.window_size[0] * self.window_size[1],
-            )
-            out = self.attn_func(q, k, v, bias)
+            out = self.attn_func(q, k, v, self.rpe_bias_of())
         else:
             msg = f"Attention type {self.attn_type} is not supported."
             raise NotImplementedError(msg)
