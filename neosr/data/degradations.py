@@ -523,9 +523,6 @@ def random_mixed_kernels(
     return kernel
 
 
-np.seterr(divide="ignore", invalid="ignore")
-
-
 def circular_lowpass_kernel(cutoff, kernel_size, pad_to=0):
     """2D sinc filter.
 
@@ -539,23 +536,24 @@ def circular_lowpass_kernel(cutoff, kernel_size, pad_to=0):
 
     """
     assert kernel_size % 2 == 1, "Kernel size must be an odd number."
-    kernel = np.fromfunction(
-        lambda x, y: cutoff
-        * special.j1(
-            cutoff
-            * np.sqrt(
-                (x - (kernel_size - 1) / 2) ** 2 + (y - (kernel_size - 1) / 2) ** 2
+    with np.errstate(divide="ignore", invalid="ignore"):  # 0/0 at the center, replaced below
+        kernel = np.fromfunction(
+            lambda x, y: cutoff
+            * special.j1(
+                cutoff
+                * np.sqrt(
+                    (x - (kernel_size - 1) / 2) ** 2 + (y - (kernel_size - 1) / 2) ** 2
+                )
             )
+            / (
+                2
+                * np.pi
+                * np.sqrt(
+                    (x - (kernel_size - 1) / 2) ** 2 + (y - (kernel_size - 1) / 2) ** 2
+                )
+            ),
+            [kernel_size, kernel_size],
         )
-        / (
-            2
-            * np.pi
-            * np.sqrt(
-                (x - (kernel_size - 1) / 2) ** 2 + (y - (kernel_size - 1) / 2) ** 2
-            )
-        ),
-        [kernel_size, kernel_size],
-    )
     kernel[(kernel_size - 1) // 2, (kernel_size - 1) // 2] = cutoff**2 / (4 * np.pi)
     kernel /= np.sum(kernel)
     if pad_to > kernel_size:
@@ -618,6 +616,23 @@ def add_gaussian_noise(img, sigma=10, clip=True, rounds=False, gray_noise=False)
     return out
 
 
+def _gray_mask(gray_noise, img):
+    """Per-sample gray mask as (b, 1, 1, 1) on img's device, and whether any sample is gray. A CPU
+    mask (what the random_* functions draw) is read on the host and sent through pinned memory:
+    no host sync, unlike `bool(mask.any())` on a CUDA mask, which waits for all queued GPU work."""
+    if isinstance(gray_noise, float | int):
+        return gray_noise, gray_noise > 0
+    cal = bool(gray_noise.any())  # free on a CPU mask; a device mask syncs here
+    mask = gray_noise.to(img.dtype).view(-1, 1, 1, 1)
+    if mask.device != img.device:
+        mask = (mask.pin_memory() if img.is_cuda else mask).to(img.device, non_blocking=True)
+    return mask, cal
+
+
+def _cpu_gray_mask(img, gray_prob):
+    return torch.rand(img.size(0), device="cpu") < gray_prob
+
+
 def generate_gaussian_noise_pt(img, sigma=10, gray_noise=0):
     """Add Gaussian noise (PyTorch version).
 
@@ -635,11 +650,7 @@ def generate_gaussian_noise_pt(img, sigma=10, gray_noise=0):
     b, _, h, w = img.size()
     if not isinstance(sigma, float | int):
         sigma = sigma.view(img.size(0), 1, 1, 1)
-    if isinstance(gray_noise, float | int):
-        cal_gray_noise = gray_noise > 0
-    else:
-        gray_noise = gray_noise.view(b, 1, 1, 1)
-        cal_gray_noise = bool(gray_noise.any())  # one host sync, read twice below
+    gray_noise, cal_gray_noise = _gray_mask(gray_noise, img)
 
     if cal_gray_noise:
         # one gray field per sample, broadcast over channels
@@ -664,9 +675,7 @@ def random_generate_gaussian_noise_pt(img, sigma_range=(0, 10), gray_prob=0):
         * (sigma_range[1] - sigma_range[0])
         + sigma_range[0]
     )
-    gray_noise = torch.rand(img.size(0), dtype=img.dtype, device=img.device)
-    gray_noise = (gray_noise < gray_prob).float()
-    return generate_gaussian_noise_pt(img, sigma, gray_noise)
+    return generate_gaussian_noise_pt(img, sigma, _cpu_gray_mask(img, gray_prob))
 
 
 def random_add_gaussian_noise_pt(
@@ -713,11 +722,7 @@ def generate_poisson_noise_pt(img, scale=1.0, gray_noise=0):
 
     """
     b = img.size(0)
-    if isinstance(gray_noise, float | int):
-        cal_gray_noise = gray_noise > 0
-    else:
-        gray_noise = gray_noise.view(b, 1, 1, 1)
-        cal_gray_noise = bool(gray_noise.any())  # one host sync, read twice below
+    gray_noise, cal_gray_noise = _gray_mask(gray_noise, img)
     if cal_gray_noise:
         img_gray = rgb_to_grayscale(img, num_output_channels=1)
         # round and clip image for counting vals correctly
@@ -748,9 +753,7 @@ def random_generate_poisson_noise_pt(img, scale_range=(0, 1.0), gray_prob=0):
         * (scale_range[1] - scale_range[0])
         + scale_range[0]
     )
-    gray_noise = torch.rand(img.size(0), dtype=img.dtype, device=img.device)
-    gray_noise = (gray_noise < gray_prob).float()
-    return generate_poisson_noise_pt(img, scale, gray_noise)
+    return generate_poisson_noise_pt(img, scale, _cpu_gray_mask(img, gray_prob))
 
 
 def random_add_poisson_noise_pt(

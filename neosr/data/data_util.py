@@ -1,4 +1,9 @@
+import logging
+import os
+import random
+import re
 import time
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -8,11 +13,53 @@ import numpy as np
 from neosr.data.file_client import FileClient
 from neosr.utils import imfrombytes, scandir
 
+# files the datasets and the lmdb tool pick up from folders, matched case-insensitively
+IMG_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp")
+# the optional ' (h,w,c)' and ' level' a meta_info line appends to the file name (lmdb_util writes both)
+_META_TAIL = re.compile(r" \(\d+,\d+,\d+\)( \d+)?$")
+
+
+def image_paths(folder: str, *, recursive: bool = False) -> list[str]:
+    """Sorted full paths of the images in `folder` (hidden entries skipped)."""
+    return sorted(scandir(folder, suffix=IMG_EXTENSIONS, recursive=recursive, full_path=True))
+
+
+def meta_info_names(meta_info: str) -> list[str]:
+    """File names listed in a meta_info file, one per line; names may contain spaces."""
+    with Path(meta_info).open(encoding="utf-8") as fin:
+        return [_META_TAIL.sub("", line.strip()) for line in fin if line.strip()]
+
+
+class PathList(Sequence[str]):
+    """Read-only list of paths kept in one bytes buffer plus offsets. Indexing touches no per-item
+    object, so the pages forked DataLoader workers share stay shared (a list of str costs each worker
+    about 360 B per entry once read: copy-on-access through the refcounts)."""
+
+    def __init__(self, paths: Iterable[str]) -> None:
+        enc = [os.fsencode(p) for p in paths]
+        self._buf = np.frombuffer(b"".join(enc), np.uint8)
+        self._off = np.cumsum([0, *map(len, enc)], dtype=np.int64)
+
+    def __len__(self) -> int:
+        return len(self._off) - 1
+
+    def __getitem__(self, i: int) -> str:  # type: ignore[override]
+        if not -len(self) <= i < len(self):
+            raise IndexError(i)
+        i %= len(self)
+        return os.fsdecode(self._buf[self._off[i] : self._off[i + 1]].tobytes())
+
 
 def read_img(
-    file_client: FileClient, path: str, client_key: str, retries: int = 3
+    file_client: FileClient,
+    path: str,
+    client_key: str,
+    retries: int = 3,
+    *,
+    float32: bool = True,
 ) -> np.ndarray:
-    """Read and decode an image as float32 HWC BGR in [0, 1].
+    """Read and decode an image as HWC BGR: float32 in [0, 1], or the decoded uint8 with
+    `float32=False` (crop first, then `to_float32`: identical values, less work).
 
     Transient read errors (OSError, e.g. a congested network share) are retried
     ``retries`` times; missing files, empty data and decode failures raise at once
@@ -32,18 +79,42 @@ def read_img(
         msg = f"No data returned from path: {path}"
         raise OSError(msg)
     try:
-        img = imfrombytes(img_bytes, float32=True)
+        img = imfrombytes(img_bytes, float32=float32)
     except (AttributeError, ValueError, cv2.error) as e:  # e.g. imdecode gave None
         msg = f"Failed to decode image: {path}"
         raise OSError(msg) from e
+    if img is None:  # imdecode gives None on undecodable bytes
+        msg = f"Failed to decode image: {path}"
+        raise OSError(msg)
     return img  # type: ignore[return-value]
 
 
+def train_retry[T](load: Callable[[int], T], index: int, size: int, phase: str) -> T:
+    """`load(index)`. In the train phase a data defect (OSError: unreadable file; ValueError:
+    mis-sized pair) is logged with its path and a random other index is loaded instead, at most
+    10 in a row, so one bad file cannot end a run but a wrong dataroot still does. Val/test raise."""
+    if phase != "train":
+        return load(index)
+    for _ in range(10):
+        try:
+            return load(index)
+        except (OSError, ValueError) as e:
+            err = e
+            logging.getLogger("neosr").warning(f"Skipping a training sample: {e}")
+            index = random.randrange(size)  # python random: seeded per worker
+    msg = "10 consecutive unusable training samples; check the dataset"
+    raise RuntimeError(msg) from err
+
+
+def to_float32(img: np.ndarray) -> np.ndarray:
+    """uint8 image -> float32 in [0, 1], as `read_img(float32=True)` computes it."""
+    return img.astype(np.float32) / 255.0
+
+
 def lmdb_keys(folder: str) -> list[str]:
-    """Keys of an lmdb folder: the first token of each meta_info.txt line (`{key}.png (h,w,c) level`)
-    without its final extension, so dots inside a key are kept."""
-    with (Path(folder) / "meta_info.txt").open(encoding="utf-8") as fin:
-        return [line.split()[0].rsplit(".", 1)[0] for line in fin if line.strip()]
+    """Keys of an lmdb folder: the names of its meta_info.txt (`{key}.png (h,w,c) level`) without
+    their final extension, so dots and spaces inside a key are kept."""
+    return [n.rsplit(".", 1)[0] for n in meta_info_names(str(Path(folder) / "meta_info.txt"))]
 
 
 def paired_paths_from_lmdb(folders: list[str], keys: list[str]) -> list[str]:
@@ -153,9 +224,7 @@ def paired_paths_from_meta_info_file(
     input_folder, gt_folder = folders
     input_key, gt_key = keys
 
-    with Path(meta_info_file).open(encoding="utf-8") as fin:
-        gt_names = [line.strip().split(" ")[0] for line in fin]
-
+    gt_names = meta_info_names(meta_info_file)
     paths: list[dict[str, str]] = []
     for gt_name in gt_names:
         input_path = str(Path(input_folder) / gt_name)
@@ -189,20 +258,12 @@ def paired_paths_from_folder(
         f"The len of keys should be 2 with [input_key, gt_key]. But got {len(keys)}"
     )
 
-    extensions = (".jpg", ".jpeg", ".png", ".webp", ".tiff", ".tif")
     input_folder, gt_folder = folders
     input_key, gt_key = keys
 
-    input_paths = {  # normalised as Path joins them below, e.g. './LQ/x.png' -> 'LQ/x.png'
-        str(Path(path))
-        for path in scandir(input_folder, recursive=True, full_path=True)
-        if path.lower().endswith(extensions)
-    }
-    gt_paths = [
-        path
-        for path in scandir(gt_folder, recursive=True, full_path=True)
-        if path.lower().endswith(extensions)
-    ]
+    # normalised as Path joins them below, e.g. './LQ/x.png' -> 'LQ/x.png'
+    input_paths = {str(Path(p)) for p in image_paths(input_folder, recursive=True)}
+    gt_paths = image_paths(gt_folder, recursive=True)  # sorted: the same order on every rank
 
     assert len(input_paths) == len(gt_paths), (
         f"{input_key} and {gt_key} datasets have different number of images: "

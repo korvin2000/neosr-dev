@@ -94,20 +94,21 @@ def scandir(
     if (suffix is not None) and not isinstance(suffix, str | tuple):
         msg = '"suffix" must be a string or tuple of strings'
         raise TypeError(msg)
+    if suffix is not None:  # matched case-insensitively: 'png' also finds 'X.PNG'
+        suffix = tuple(s.lower() for s in ((suffix,) if isinstance(suffix, str) else suffix))
 
     root = dir_path
 
     def _scandir(dir_path, suffix, recursive):
         for entry in os.scandir(dir_path):
-            if not entry.name.startswith(".") and entry.is_file():
-                return_path = entry.path if full_path else osp.relpath(entry.path, root)
-
-                if suffix is None or return_path.endswith(suffix):
-                    yield return_path
-            elif recursive:
-                yield from _scandir(entry.path, suffix=suffix, recursive=recursive)
-            else:
+            if entry.name.startswith("."):  # hidden files and folders (.DS_Store, .thumbs)
                 continue
+            if entry.is_file():
+                return_path = entry.path if full_path else osp.relpath(entry.path, root)
+                if suffix is None or return_path.lower().endswith(suffix):
+                    yield return_path
+            elif recursive and entry.is_dir(follow_symlinks=False):
+                yield from _scandir(entry.path, suffix=suffix, recursive=recursive)
 
     return _scandir(dir_path, suffix=suffix, recursive=recursive)
 

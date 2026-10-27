@@ -122,12 +122,13 @@ def resizemix(
     s = scale
 
     idx = _perm(img_gt)
+    # always a downscale (the box is at most the image): antialias, or the targets alias
     gt_resized = F.interpolate(
-        img_gt[idx], ((y2 - y1) * s, (x2 - x1) * s), mode="bicubic"
+        img_gt[idx], ((y2 - y1) * s, (x2 - x1) * s), mode="bicubic", antialias=True
     ).clamp(0, 1)
-    lq_resized = F.interpolate(img_lq[idx], (y2 - y1, x2 - x1), mode="bicubic").clamp(
-        0, 1
-    )
+    lq_resized = F.interpolate(
+        img_lq[idx], (y2 - y1, x2 - x1), mode="bicubic", antialias=True
+    ).clamp(0, 1)
     img_gt[..., y1 * s : y2 * s, x1 * s : x2 * s] = gt_resized
     img_lq[..., y1:y2, x1:x2] = lq_resized
 

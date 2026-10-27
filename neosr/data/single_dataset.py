@@ -4,9 +4,15 @@ from typing import Any
 from torch.utils import data
 from torchvision.transforms.functional import normalize
 
-from neosr.data.data_util import paths_from_lmdb, read_img
+from neosr.data.data_util import (
+    PathList,
+    image_paths,
+    meta_info_names,
+    paths_from_lmdb,
+    read_img,
+)
 from neosr.data.file_client import FileClient
-from neosr.utils import img2tensor, scandir
+from neosr.utils import img2tensor
 
 
 class single(data.Dataset):
@@ -48,16 +54,13 @@ class single(data.Dataset):
         if lmdb:
             self.io_backend_opt["db_paths"] = [self.lq_folder]  # type: ignore[assignment]
             self.io_backend_opt["client_keys"] = ["lq"]  # type: ignore[assignment]
-            self.paths = paths_from_lmdb(self.lq_folder)
+            paths = paths_from_lmdb(self.lq_folder)
         elif (meta_info := opt.get("meta_info", opt.get("meta_info_file"))) is not None:
             # 'meta_info_file' is the legacy key
-            with Path(meta_info).open(encoding="utf-8") as fin:
-                self.paths = [
-                    str(Path(self.lq_folder) / line.rstrip().split(" ")[0])
-                    for line in fin
-                ]
+            paths = [str(Path(self.lq_folder) / n) for n in meta_info_names(meta_info)]
         else:
-            self.paths = sorted(scandir(self.lq_folder, full_path=True))
+            paths = image_paths(self.lq_folder)
+        self.paths = PathList(paths)
 
     def __getitem__(self, index):
         if self.file_client is None:
