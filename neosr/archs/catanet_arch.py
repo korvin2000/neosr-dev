@@ -8,22 +8,11 @@ def exists(val):
     return val is not None
 
 
-def is_empty(t):
-    return t.nelement() == 0
-
-
 def expand_dim(t, dim, k):
     t = t.unsqueeze(dim)
     expand_shape = [-1] * len(t.shape)
     expand_shape[dim] = k
     return t.expand(*expand_shape)
-
-
-def ema_inplace(moving_avg, new, decay):
-    if is_empty(moving_avg):
-        moving_avg.data.copy_(new)
-        return
-    moving_avg.data.mul_(decay).add_(new, alpha=(1 - decay))
 
 
 def similarity(x, means):
@@ -218,17 +207,13 @@ class TAB(nn.Module):
         x = self.norm(x)
         B, N, _ = x.shape
         idx_last = torch.arange(N, device=x.device).reshape(1, N).expand(B, -1)
-        if not self.initted:
-            pad_n = self.num_tokens - N % self.num_tokens
-            paded_x = torch.cat(
-                (x, torch.flip(x[:, N - pad_n : N, :], dims=[-2])), dim=-2
-            )
-            x_means = torch.mean(
-                rearrange(paded_x, "b (cnt n) c->cnt (b n) c", cnt=self.num_tokens),
-                dim=-2,
-            ).detach()
-        else:
-            x_means = self.means.detach()
+        # branch-free on the `initted` buffer: no device->host sync, no graph break
+        pad_n = self.num_tokens - N % self.num_tokens
+        paded_x = torch.cat((x, torch.flip(x[:, N - pad_n : N, :], dims=[-2])), dim=-2)
+        init_means = torch.mean(
+            rearrange(paded_x, "b (cnt n) c->cnt (b n) c", cnt=self.num_tokens), dim=-2
+        )
+        x_means = torch.where(self.initted, self.means, init_means).detach()
         if self.training:
             with torch.no_grad():
                 for _ in range(self.n_iter - 1):
@@ -251,12 +236,10 @@ class TAB(nn.Module):
         x = self.mlp(x, x_size=(h, w)) + x
         if self.training:
             with torch.no_grad():
-                new_means = x_means
-                if not self.initted:
-                    self.means.data.copy_(new_means)
-                    self.initted.data.copy_(torch.tensor(True))  # noqa: FBT003
-                else:
-                    ema_inplace(self.means, new_means, self.ema_decay)
+                d = self.ema_decay
+                ema = self.means.mul(d).add_(x_means, alpha=1 - d)
+                self.means.copy_(torch.where(self.initted, ema, x_means))
+                self.initted.fill_(True)  # noqa: FBT003
         return rearrange(x, "b (h w) c->b c h w", h=h)
 
 
