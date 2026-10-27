@@ -1,5 +1,7 @@
 import argparse
+from pathlib import Path
 
+from neosr.data.data_util import IMG_EXTENSIONS
 from neosr.utils import scandir
 from neosr.utils.lmdb_util import make_lmdb_from_imgs
 
@@ -13,26 +15,31 @@ def prepare_keys(folder_path):
 
     Returns:
     -------
-        list[str]: Image path list.
-        list[str]: Key list.
+        list[str]: Image path list (every IMG_EXTENSIONS image, any case).
+        list[str]: Key list: each path without its final extension, so `a.b.png`
+            and `a.png` stay distinct keys.
 
     """
     print("Reading image path list ...")
-    img_path_list = sorted(scandir(folder_path, suffix="png", recursive=False))
-    keys = [img_path.split(".png")[0] for img_path in sorted(img_path_list)]
-
+    img_path_list = sorted(scandir(folder_path, suffix=IMG_EXTENSIONS, recursive=False))
+    keys = [Path(p).with_suffix("").as_posix() for p in img_path_list]
     return img_path_list, keys
 
 
 def create_lmdb():
     """Create lmdb files.
-    Before run this script, please run `extract_subimages.py`.
+    Large images are best tiled first: `python -m scripts.extract_subimages`.
     """
     folder_path = args.input
     lmdb_path = args.output
     img_path_list, keys = prepare_keys(folder_path)
     make_lmdb_from_imgs(
-        folder_path, lmdb_path, img_path_list, keys, multiprocessing_read=True
+        folder_path,
+        lmdb_path,
+        img_path_list,
+        keys,
+        multiprocessing_read=True,
+        n_thread=args.workers,
     )
 
 
@@ -41,5 +48,8 @@ if __name__ == "__main__":
 
     parser.add_argument("--input", type=str, help=("Input Path"))
     parser.add_argument("--output", type=str, help=("Output Path"))
+    parser.add_argument(
+        "--workers", type=int, default=None, help="encoder processes (default: usable CPUs)"
+    )
     args = parser.parse_args()
     create_lmdb()

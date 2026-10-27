@@ -1,3 +1,6 @@
+import os
+import shutil
+from itertools import batched
 from multiprocessing import Pool
 from pathlib import Path
 
@@ -22,7 +25,10 @@ def read_img_worker(path, key, compress_level):
         tuple[int]: Image shape.
 
     """
-    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if img is None:
+        msg = f"Cannot read image: {path}"
+        raise OSError(msg)
     if img.ndim == 2:
         h, w = img.shape
         c = 1
@@ -34,15 +40,19 @@ def read_img_worker(path, key, compress_level):
     return (key, img_byte, (h, w, c))
 
 
+def _encode(item):
+    return read_img_worker(*item)
+
+
 def make_lmdb_from_imgs(
     data_path,
     lmdb_path,
     img_path_list,
     keys,
-    batch=10000,
+    batch=256,
     compress_level=1,
     multiprocessing_read=True,
-    n_thread=80,
+    n_thread=None,
     map_size=None,
 ) -> None:
     """Make lmdb from images.
@@ -59,120 +69,99 @@ def make_lmdb_from_imgs(
     The data.mdb and lock.mdb are standard lmdb files and you can refer to
     https://lmdb.readthedocs.io/en/release/ for more details.
 
-    The meta_info.txt is a specified txt file to record the meta information
-    of our datasets. It will be automatically created when preparing
-    datasets by our provided dataset tools.
-    Each line in the txt file records 1)image name (with extension),
-    2)image shape, and 3)compression level, separated by a white space.
+    The meta_info.txt (UTF-8) records per image 1) the image name (the key plus
+    '.png': values are stored PNG-encoded), 2) the image shape and 3) the compression
+    level, separated by a space, e.g. `000_00000000.png (720,1280,3) 1`. Keys are
+    UTF-8 and may contain dots and spaces.
 
-    For example, the meta information could be:
-    `000_00000000.png (720,1280,3) 1`, which means:
-    1) image name (with extension): 000_00000000.png;
-    2) image shape: (720,1280,3);
-    3) compression level: 1
-
-    We use the image name without extension as the lmdb key.
-
-    If `multiprocessing_read` is True, it will read all the images to memory
-    using multiprocessing. Thus, your server needs to have enough memory.
+    Images are encoded in a pool (`n_thread` processes, default: the usable CPUs)
+    and written `batch` at a time, one commit each: memory stays bounded. The database is built as `<lmdb_path>.tmp` and renamed when complete;
+    any error (with the failing path) removes it, so no partial output is left.
 
     Args:
     ----
         data_path (str): Data path for reading images.
         lmdb_path (str): Lmdb save path.
         img_path_list (str): Image path list.
-        keys (str): Used for lmdb keys.
-        batch (int): After processing batch images, lmdb commits.
-            Default: 5000.
+        keys (str): Used for lmdb keys; must be unique.
+        batch (int): Images per commit, also the most held in memory. Default: 256.
         compress_level (int): Compress level when encoding images. Default: 1.
-        multiprocessing_read (bool): Whether use multiprocessing to read all
-            the images to memory. Default: False.
-        n_thread (int): For multiprocessing.
-        map_size (int | None): Map size for lmdb env. If None, use the
-            estimated size from images. Default: None
+        multiprocessing_read (bool): Encode in a process pool. Default: True.
+        n_thread (int | None): Pool size.
+        map_size (int | None): Initial map size; it grows when full. Default: twice
+            the size of the source files.
 
     """
     assert len(img_path_list) == len(keys), (
         "img_path_list and keys should have the same length, "
         f"but got {len(img_path_list)} and {len(keys)}"
     )
-    print(f"Create lmdb for {data_path}, save to {lmdb_path}...")
-    print(f"Total images: {len(img_path_list)}")
     if not lmdb_path.endswith(".lmdb"):
         msg = "lmdb_path must end with '.lmdb'."
         raise ValueError(msg)
     if Path(lmdb_path).exists():
         msg = f"Folder {lmdb_path} already exists."
         raise FileExistsError(msg)
-
-    if multiprocessing_read:
-        # read all the images to memory (multiprocessing)
-        dataset = {}  # use dict to keep the order for multiprocessing
-        shapes = {}
-        print(f"Read images with multiprocessing, #thread: {n_thread} ...")
-        pbar = tqdm(total=len(img_path_list), unit="image")
-
-        def callback(arg) -> None:
-            """Get the image data and update pbar."""
-            key, dataset[key], shapes[key] = arg
-            pbar.update(1)
-            pbar.set_description(f"Read {key}")
-
-        pool = Pool(n_thread)
-        for path, key in zip(img_path_list, keys, strict=False):
-            pool.apply_async(
-                read_img_worker,
-                args=(Path(data_path) / path, key, compress_level),
-                callback=callback,
-            )
-        pool.close()
-        pool.join()
-        pbar.close()
-        print(f"Finish reading {len(img_path_list)} images.")
-
-    # create lmdb environment
+    if len(set(keys)) != len(keys):
+        dup = sorted({k for k in keys if keys.count(k) > 1})[:5]
+        msg = f"Duplicate lmdb keys (two images map to one record): {dup}"
+        raise ValueError(msg)
+    print(f"Create lmdb for {data_path}, save to {lmdb_path}...")
+    print(f"Total images: {len(img_path_list)}")
+    paths = [Path(data_path) / p for p in img_path_list]
     if map_size is None:
-        # obtain data size for one image
-        img = cv2.imread(Path(str(data_path)) / img_path_list[0], cv2.IMREAD_UNCHANGED)
-        _, img_byte = cv2.imencode(
-            ".png", img, [cv2.IMWRITE_PNG_COMPRESSION, compress_level]
-        )
-        data_size_per_img = img_byte.nbytes
-        print("Data size per image is: ", data_size_per_img)
-        data_size = data_size_per_img * len(img_path_list)
-        # TODO: why multiply by 10?
-        map_size = data_size * 10
-
-    env = lmdb.open(lmdb_path, map_size=map_size)
-
-    # write data to lmdb
-    pbar = tqdm(total=len(img_path_list), unit="chunk")
-    txn = env.begin(write=True)
-    txt_file = Path.open(Path(lmdb_path) / "meta_info.txt", "w", encoding="locale")
-    for idx, (path, key) in enumerate(zip(img_path_list, keys, strict=False)):
-        pbar.update(1)
-        pbar.set_description(f"Write {key}")
-        key_byte = key.encode("ascii")
-        if multiprocessing_read:
-            img_byte = dataset[key]  # type: ignore[reportPossiblyUnboundVariable]
-            h, w, c = shapes[key]  # type: ignore[reportPossiblyUnboundVariable]
-        else:
-            _, img_byte, img_shape = read_img_worker(
-                Path(data_path) / path, key, compress_level
-            )
-            h, w, c = img_shape
-
-        txn.put(key_byte, img_byte)
-        # write meta information
-        txt_file.write(f"{key}.png ({h},{w},{c}) {compress_level}\n")
-        if idx % batch == 0:
-            txn.commit()
-            txn = env.begin(write=True)
-    pbar.close()
-    txn.commit()
-    env.close()
-    txt_file.close()
+        map_size = max(2 * sum(p.stat().st_size for p in paths), 1 << 24)
+    tmp = Path(f"{lmdb_path}.tmp")
+    if tmp.exists():  # left by a killed build
+        shutil.rmtree(tmp)
+    items = ((p, k, compress_level) for p, k in zip(paths, keys, strict=True))
+    n_thread = n_thread or os.process_cpu_count() or 1
+    env = lmdb.open(str(tmp), map_size=map_size)
+    try:
+        with (
+            Pool(n_thread) if multiprocessing_read else _NoPool() as pool,
+            (tmp / "meta_info.txt").open("w", encoding="utf-8") as meta,
+            tqdm(total=len(paths), unit="image") as pbar,
+        ):
+            for window in batched(items, batch, strict=False):
+                # ordered; a worker's error (with its path) is re-raised here
+                chunk = list(pool.imap(_encode, window, chunksize=max(len(window) // (4 * n_thread), 1)))
+                _put_all(env, chunk)
+                meta.writelines(f"{k}.png ({h},{w},{c}) {compress_level}\n" for k, _, (h, w, c) in chunk)
+                pbar.update(len(chunk))
+        env.close()
+        tmp.rename(lmdb_path)
+    except BaseException:
+        env.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
     print("\nFinish writing lmdb.")
+
+
+class _NoPool:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_) -> None:
+        pass
+
+    @staticmethod
+    def imap(fn, items, **_):
+        return map(fn, items)
+
+
+def _put_all(env, chunk) -> None:
+    """Write one chunk in one transaction; a full map is doubled and the chunk retried."""
+    while True:
+        try:
+            with env.begin(write=True) as txn:
+                for key, buf, _ in chunk:
+                    if not txn.put(key.encode("utf-8"), buf, overwrite=False):
+                        msg = f"Duplicate lmdb key: {key}"
+                        raise ValueError(msg)
+            return
+        except lmdb.MapFullError:
+            env.set_mapsize(env.info()["map_size"] * 2)
 
 
 class LmdbMaker:
@@ -204,13 +193,13 @@ class LmdbMaker:
         self.env = lmdb.open(lmdb_path, map_size=map_size)
         self.txn = self.env.begin(write=True)
         self.txt_file = Path.open(
-            Path(lmdb_path) / "meta_info.txt", "w", encoding="locale"
+            Path(lmdb_path) / "meta_info.txt", "w", encoding="utf-8"
         )
         self.counter = 0
 
     def put(self, img_byte, key, img_shape) -> None:
         self.counter += 1
-        key_byte = key.encode("ascii")
+        key_byte = key.encode("utf-8")
         self.txn.put(key_byte, img_byte)
         # write meta information
         h, w, c = img_shape

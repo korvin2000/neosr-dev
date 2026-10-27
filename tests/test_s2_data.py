@@ -391,3 +391,73 @@ def test_worker_threads():
                                                       worker_init_fn=worker_init_fn)))  # fmt: skip
     assert cv2_threads.tolist() == [1, 1]  # setNumThreads(0): sequential, reported as 1
     assert torch_threads.tolist() == [1, 1]
+
+
+# D-07 / D-08: lmdb keys, encoding, streaming atomic build
+def _lmdb_src(root: Path, names: list[str]) -> None:
+    root.mkdir()
+    for i, n in enumerate(names):
+        cv2.imwrite(str(root / n), np.full((6, 5, 3), 10 * i, np.uint8))
+
+
+@pytest.mark.parametrize("pool", [False, True])
+def test_lmdb_round_trip(tmp_path, pool):
+    import create_lmdb  # noqa: PLC0415
+    from neosr.utils.lmdb_util import make_lmdb_from_imgs  # noqa: PLC0415
+
+    names = ["a.b.png", "a.png", "my photo.png", "ü.png", "X.PNG", "z.jpg"]
+    _lmdb_src(tmp_path / "src", [*names, ".hidden.png"])
+    (tmp_path / "src" / "notes.txt").write_text("x")
+    paths, keys = create_lmdb.prepare_keys(str(tmp_path / "src"))
+    assert keys == ["X", "a.b", "a", "my photo", "z", "ü"]
+    out = str(tmp_path / "db.lmdb")
+    # map_size far too small: the build grows it
+    make_lmdb_from_imgs(str(tmp_path / "src"), out, paths, keys, batch=2,
+                        multiprocessing_read=pool, n_thread=2, map_size=1 << 12)  # fmt: skip
+    assert du.lmdb_keys(out) == keys
+    ds = build_dataset({"type": "single", "phase": "test", "dataroot_lq": out})
+    vals = [round(float(ds[i]["lq"].mean()) * 255) for i in range(len(ds))]
+    assert vals == [10 * names.index(p) for p in paths]
+    assert not Path(f"{out}.tmp").exists()
+
+
+@pytest.mark.parametrize("pool", [False, True])
+def test_lmdb_corrupt_leaves_nothing(tmp_path, pool):
+    from neosr.utils.lmdb_util import make_lmdb_from_imgs  # noqa: PLC0415
+
+    names = [f"{i}.png" for i in range(6)]
+    _lmdb_src(tmp_path / "src", names)
+    (tmp_path / "src" / "3.png").write_bytes(b"broken")
+    out = str(tmp_path / "db.lmdb")
+    with pytest.raises(OSError, match=r"3\.png"):
+        make_lmdb_from_imgs(str(tmp_path / "src"), out, names, [n[0] for n in names],
+                            batch=2, multiprocessing_read=pool, n_thread=2)  # fmt: skip
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["src"]
+
+
+def test_lmdb_duplicate_keys_rejected(tmp_path):
+    import create_lmdb  # noqa: PLC0415
+    from neosr.utils.lmdb_util import make_lmdb_from_imgs  # noqa: PLC0415
+
+    _lmdb_src(tmp_path / "src", ["a.png", "a.jpg"])
+    paths, keys = create_lmdb.prepare_keys(str(tmp_path / "src"))
+    with pytest.raises(ValueError, match="Duplicate"):
+        make_lmdb_from_imgs(str(tmp_path / "src"), str(tmp_path / "db.lmdb"), paths, keys)
+    assert not (tmp_path / "db.lmdb").exists()
+
+
+# D-06 (b): tile tool
+def test_extract_subimages(tmp_path):
+    from scripts import extract_subimages as ex  # noqa: PLC0415
+
+    assert ex.starts(10, 4, 3) == [0, 3, 6]
+    assert ex.starts(11, 4, 3) == [0, 3, 6, 7]
+    assert ex.starts(3, 4, 3) == [0]
+    img = _img(11, 10, 0)
+    cv2.imwrite(str(tmp_path / "im.png"), img)
+    (tmp_path / "out").mkdir()
+    assert ex.tile(str(tmp_path / "im.png"), tmp_path / "out", 4, 3, 1) == 12
+    t = cv2.imread(str(tmp_path / "out" / "im_s012.png"))
+    assert np.array_equal(t, img[7:11, 6:10])
+    with pytest.raises(OSError, match="x.png"):
+        ex.tile(str(tmp_path / "x.png"), tmp_path / "out", 4, 3, 1)
