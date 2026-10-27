@@ -114,28 +114,33 @@ def make_lmdb_from_imgs(
     tmp = Path(f"{lmdb_path}.tmp")
     if tmp.exists():  # left by a killed build
         shutil.rmtree(tmp)
-    items = ((p, k, compress_level) for p, k in zip(paths, keys, strict=True))
-    n_thread = n_thread or os.process_cpu_count() or 1
+    items = [(p, k, compress_level) for p, k in zip(paths, keys, strict=True)]
     env = lmdb.open(str(tmp), map_size=map_size)
     try:
-        with (
-            Pool(n_thread) if multiprocessing_read else _NoPool() as pool,
-            (tmp / "meta_info.txt").open("w", encoding="utf-8") as meta,
-            tqdm(total=len(paths), unit="image") as pbar,
-        ):
-            for window in batched(items, batch, strict=False):
-                # ordered; a worker's error (with its path) is re-raised here
-                chunk = list(pool.imap(_encode, window, chunksize=max(len(window) // (4 * n_thread), 1)))
-                _put_all(env, chunk)
-                meta.writelines(f"{k}.png ({h},{w},{c}) {compress_level}\n" for k, _, (h, w, c) in chunk)
-                pbar.update(len(chunk))
-        env.close()
-        tmp.rename(lmdb_path)
+        _write(env, tmp, items, batch, n_thread or os.process_cpu_count() or 1, multiprocessing_read)
     except BaseException:
         env.close()
         shutil.rmtree(tmp, ignore_errors=True)
         raise
+    env.close()
+    tmp.rename(lmdb_path)
     print("\nFinish writing lmdb.")
+
+
+def _write(env, tmp: Path, items: list, batch: int, n_thread: int, pool: bool) -> None:
+    with (
+        Pool(n_thread) if pool else _NoPool() as workers,
+        (tmp / "meta_info.txt").open("w", encoding="utf-8") as meta,
+        tqdm(total=len(items), unit="image") as pbar,
+    ):
+        for window in batched(items, batch, strict=False):
+            # ordered; a worker's error (with its path) is re-raised here
+            chunksize = max(len(window) // (4 * n_thread), 1)
+            chunk = list(workers.imap(_encode, window, chunksize=chunksize))
+            _put_all(env, chunk)
+            level = window[0][2]
+            meta.writelines(f"{k}.png ({h},{w},{c}) {level}\n" for k, _, (h, w, c) in chunk)
+            pbar.update(len(chunk))
 
 
 class _NoPool:
@@ -159,9 +164,10 @@ def _put_all(env, chunk) -> None:
                     if not txn.put(key.encode("utf-8"), buf, overwrite=False):
                         msg = f"Duplicate lmdb key: {key}"
                         raise ValueError(msg)
-            return
         except lmdb.MapFullError:
             env.set_mapsize(env.info()["map_size"] * 2)
+        else:
+            return
 
 
 class LmdbMaker:
