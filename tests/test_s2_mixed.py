@@ -314,3 +314,41 @@ def test_ditn_matches_spandrel_and_keeps_legacy_forward(monkeypatch) -> None:
     (y * g).sum().backward()
     (y_ref * g).sum().backward()
     _assert_grads_close(new, canon)
+
+
+# ---------------------------------------------------------------- MX-04/06 MicroSR
+
+
+def _old_microsr_block(self, x, x_size):
+    # SwinTransformerBlock.forward before MX-06: a CPU-built mask per call, zero masks included
+    from neosr.archs.microsr_arch import window_partition, window_reverse
+
+    H, W = x_size
+    B, _L, C = x.shape
+    shortcut = x
+    x = self.norm1(x).view(B, H, W, C)
+    s = self.shift_size
+    shifted_x = torch.roll(x, shifts=(-s, -s), dims=(1, 2)) if s > 0 else x
+    x_windows = window_partition(shifted_x, self.window_size).view(-1, self.window_size**2, C)
+    if self.input_resolution == x_size:
+        attn_windows = self.attn(x_windows, mask=self.attn_mask)
+    else:
+        attn_windows = self.attn(x_windows, mask=self.calculate_mask(x_size).to(x.device))
+    attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
+    shifted_x = window_reverse(attn_windows, self.window_size, H, W)
+    x = torch.roll(shifted_x, shifts=(s, s), dims=(1, 2)) if s > 0 else shifted_x
+    x = shortcut + self.drop_path(x.view(B, H * W, C))
+    return x + self.drop_path(self.mlp(self.norm2(x)))
+
+
+@pytest.mark.parametrize("patch_size", [32, 1])  # default 2x2 windows / the real 8x8 shifted ones
+def test_microsr_masks_bitwise(monkeypatch, patch_size: int) -> None:
+    from neosr.archs.microsr_arch import SwinTransformerBlock
+
+    net = _build("microsr_light", patch_size=patch_size).eval()
+    x = torch.rand(1, 3, 16, 24)  # aligned, != img_size: masks are rebuilt per forward
+    with torch.no_grad():
+        with _NoHostSync():
+            y = net(x)
+        monkeypatch.setattr(SwinTransformerBlock, "forward", _old_microsr_block)
+        assert torch.equal(y, net(x))

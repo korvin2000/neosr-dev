@@ -288,10 +288,10 @@ class SwinTransformerBlock(nn.Module):
 
         self.register_buffer("attn_mask", attn_mask)
 
-    def calculate_mask(self, x_size):
+    def calculate_mask(self, x_size, device=None):
         # calculate attention mask for SW-MSA
         H, W = x_size
-        img_mask = torch.zeros((1, H, W, 1))  # 1 H W 1
+        img_mask = torch.zeros((1, H, W, 1), device=device)  # 1 H W 1
         h_slices = (
             slice(0, -self.window_size),
             slice(-self.window_size, -self.shift_size),
@@ -342,15 +342,14 @@ class SwinTransformerBlock(nn.Module):
             -1, self.window_size * self.window_size, C
         )  # nW*B, window_size*window_size, C
 
-        # W-MSA/SW-MSA (to be compatible for testing on images whose shapes are the multiple of window size
-        if self.input_resolution == x_size:
-            attn_windows = self.attn(
-                x_windows, mask=self.attn_mask
-            )  # nW*B, window_size*window_size, C
+        # W-MSA/SW-MSA; an unshifted block's mask is all zeros, so it gets none
+        if self.shift_size == 0:
+            mask = None
+        elif self.input_resolution == x_size:
+            mask = self.attn_mask
         else:
-            attn_windows = self.attn(
-                x_windows, mask=self.calculate_mask(x_size).to(x.device)
-            )
+            mask = self.calculate_mask(x_size, x.device)
+        attn_windows = self.attn(x_windows, mask=mask)  # nW*B, window_size*window_size, C
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
@@ -719,6 +718,8 @@ class microsr(nn.Module):
 
             self.layers.append(layer)
         self.norm = norm_layer(self.num_features)
+        # the blocks' effective window (they shrink it to a small input_resolution)
+        self.pad_size = self.layers[0].swin1.window_size
 
         # build the last conv layer in deep feature extraction
         if resi_connection == "1conv":
@@ -737,6 +738,15 @@ class microsr(nn.Module):
 
         self.apply(self._init_weights)
 
+    def check_image_size(self, x):
+        # pad to a multiple of the window (reflect needs pad < size)
+        _, _, h, w = x.size()
+        ph, pw = (-h) % self.pad_size, (-w) % self.pad_size
+        if ph or pw:
+            mode = "reflect" if ph < h and pw < w else "replicate"
+            x = nn.functional.pad(x, (0, pw, 0, ph), mode)
+        return x
+
     def forward_features(self, x):
         x_size = (x.shape[2], x.shape[3])
         x = self.patch_embed(x)
@@ -749,6 +759,8 @@ class microsr(nn.Module):
         return self.patch_unembed(x, x_size)
 
     def forward(self, x):
+        h, w = x.shape[2:]
+        x = self.check_image_size(x)
         if self.rgb_norm:
             self.mean = self.mean.type_as(x)
             x = (x - self.mean) * self.img_range
@@ -759,7 +771,7 @@ class microsr(nn.Module):
             x = self.conv_last(self.upsample(x))
         if self.rgb_norm:
             x = x / self.img_range + self.mean
-        return x
+        return x[:, :, : h * self.upscale, : w * self.upscale]
 
 
 def microsr_light(**kwargs):
