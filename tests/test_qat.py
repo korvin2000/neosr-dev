@@ -185,7 +185,7 @@ def train_cfg(**train):
         "network_g": {"type": "aether_small"},
         "datasets": {"train": {"patch_size": P, "batch_size": B}},
         "train": {"optim_g": {"type": "adamw"}, "enable_qat": True, **train},
-        "logger": {"total_iter": 100},
+        "logger": {"total_iter": 100, "save_checkpoint_freq": 100},
         "path": {},
     }
 
@@ -241,7 +241,7 @@ def qat_opt(tmp: Path, *, is_train=True, ema=0.9, **train):
             "pbar": False,
             "metrics": {"psnr": {"type": "calculate_psnr", "crop_border": 0}},
         },
-        "logger": {"total_iter": 8},
+        "logger": {"total_iter": 8, "save_checkpoint_freq": 8},
         "path": {
             "models": tmp / "models",
             "training_states": tmp / "training_states",
@@ -362,7 +362,10 @@ def test_a_skipped_first_update_leaves_a_valid_ema(tmp_path):
     m.g.step = nan_step
     run(m, batches(1))
     assert m.g.skipped == 1
-    m.check_finite()  # the EMA mirrors the observed ranges, not their +-inf reset
+    # the skipped update's observations are rolled back with it (stage 2 T-04): the nets and the
+    # EMA mirror hold the +-inf reset again, which check_finite accepts for observer ranges
+    assert all(f.activation_post_process.min_val.isinf().all() for f in fqs(m.net_g) if not f.is_per_channel)
+    m.check_finite()
     assert same([*m.ema.module.buffers()], [*m.net_g.buffers()])
     assert same(init, [*m.ema.module.parameters()])
     m.validation(DataLoader(ValSet(), batch_size=1), 1, None, save_img=False)

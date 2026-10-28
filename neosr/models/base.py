@@ -11,12 +11,13 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import CosineAnnealingLR, LRScheduler, MultiStepLR
 
-from neosr.config import ConfigError
+from neosr.config import METRIC_LOWER, ConfigError
 from neosr.metrics import build_metric
 from neosr.models.checkpoint import (
     STATE_FORMAT,
     atomic_save,
     preserved_rng,
+    prune_exports,
     prune_states,
     rng_state,
     set_rng_state,
@@ -113,7 +114,12 @@ class base:
         self.data_generator: torch.Generator | None = None
         val = opt.get("val") or {}
         self.tile, self.tile_overlap = val.get("tile", -1), val.get("tile_overlap", 16)
-        self.keep_states = (opt.get("logger") or {}).get("keep_states", 3)
+        lg = opt.get("logger") or {}
+        self.keep_states, self.keep_exports = (
+            lg.get("keep_states", 3),
+            lg.get("keep_exports", 0),
+        )
+        self.saved_update: int | None = None  # the update of this process's last save
         self.metrics = {
             k: build_metric(v, self.device, section=f"val.metrics.{k}")
             for k, v in (val.get("metrics") or {}).items()
@@ -151,6 +157,7 @@ class base:
                 device_ids=[self.device.index] if self.device.type == "cuda" else None,
                 broadcast_buffers=broadcast_buffers,
                 find_unused_parameters=self.opt.get("find_unused_parameters", False),
+                gradient_as_bucket_view=True,  # grads are bucket views: no extra gradient copy
             )
         if compile_it:
             net = torch.compile(
@@ -173,23 +180,36 @@ class base:
     def validation(
         self, dataloader, current_iter, tb_logger, save_img: bool = True
     ) -> None:
-        """Rank 0 validates between two barriers; every training RNG stream is left untouched."""
+        """Rank 0 validates after a barrier; every training RNG stream is left untouched. A rank-0
+        failure is all-reduced, so every rank raises instead of waiting at a barrier (F23)."""
         dist = torch.distributed.is_initialized()
         if dist:
             torch.distributed.barrier()
+        err: Exception | None = None
         if self.rt.rank == 0:
             from neosr.metrics.calculate import release_metric_nets  # noqa: PLC0415
 
             try:
                 with preserved_rng(self.device):
                     self.validate(dataloader, current_iter, tb_logger, save_img)
+            except Exception as e:  # noqa: BLE001 - re-raised below, after the collective
+                err = e
             finally:  # DISTS/TOPIQ weights live for one validation pass only
                 release_metric_nets()
-        if dist:
-            torch.distributed.barrier()
+        if dist:  # also the closing barrier
+            failed = torch.tensor(float(err is not None), device=self.device)
+            torch.distributed.all_reduce(failed, op=torch.distributed.ReduceOp.MAX)
+            if err is None and bool(failed):
+                msg = "validation failed on rank 0"
+                raise RuntimeError(msg)
+        if err is not None:
+            raise err
 
     def update_best(self, dataset: str, metric: str, val: float, current_iter) -> None:
-        better = self.opt["val"]["metrics"][metric].get("better", "higher")
+        cfg = self.opt["val"]["metrics"][metric]
+        better = cfg.get("better") or (
+            "lower" if cfg.get("type") in METRIC_LOWER else "higher"
+        )
         init = float("-inf") if better == "higher" else float("inf")
         rec = self.best_metric_results.setdefault(dataset, {}).setdefault(
             metric, {"better": better, "val": init, "iter": -1}
@@ -218,6 +238,7 @@ class base:
         if self._evaluating or self.micro % self.accumulate:
             msg = "save() only at an update boundary, outside eval_weights()"
             raise RuntimeError(msg)
+        first, self.saved_update = self.saved_update is None, self.update
         if self.rt.rank != 0:
             return
         u, p = self.update, self.opt["path"]
@@ -225,12 +246,20 @@ class base:
         states.mkdir(parents=True, exist_ok=True)
         models.mkdir(parents=True, exist_ok=True)
         atomic_save(self.training_state(), states / f"{u}.state")
-        for name, sd in self.export_state_dicts().items():
+        exports = self.export_state_dicts()
+        for name, sd in exports.items():
             payload = {"params": sd}
             atomic_save(payload, models / f"{name}_{u}.pth")
             if final:
                 atomic_save(payload, models / f"{name}_latest.pth")
         prune_states(states, self.keep_states)
+        prune_exports(models, self.keep_exports, exports)
+        if first:
+            mib = sum((models / f"{n}_{u}.pth").stat().st_size for n in exports) / 2**20
+            get_root_logger().info(
+                f"one export set is {mib:.1f} MiB; logger.keep_exports = {self.keep_exports} "
+                "(0 keeps every set)"
+            )
 
     def training_state(self) -> dict[str, Any]:
         """Format 2 (T2 §7.2): self-contained, loads with torch.load(weights_only=True)."""
@@ -288,7 +317,9 @@ class base:
         elif state["ema"] is not None:
             log.warning("saved EMA ignored: ema is disabled")
         for key, (old, new) in dict_diff(state["run"], self.run_record()).items():
-            log.warning(f"changed since {path.name}: {key}: {old!r} -> {new!r}")
+            # a key absent from the saved record was recorded only since that state
+            if key.split(".")[0] in state["run"]:
+                log.warning(f"changed since {path.name}: {key}: {old!r} -> {new!r}")
         self.update, self.epoch = state["update"], state["epoch"]
         self.best_metric_results = state["best"]
         self._pending_rng = state["rng"]

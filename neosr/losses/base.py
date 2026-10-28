@@ -51,6 +51,11 @@ class Loss(nn.Module):
     def expand(self) -> list["Loss"]:
         return [self]
 
+    def active(self, it: int) -> bool:  # noqa: ARG002
+        """Whether this term joins the objective at update `it` (1-based); a phase without an
+        active term idles for that update (no forward through its nets, no step, no skip)."""
+        return True
+
     def evaluate(self, ctx: Context) -> Tensor:
         sr, ref = ctx.sr, getattr(ctx, self.target)
         return self(sr.float(), ref.float()) if self.fp32 else self(sr, ref)

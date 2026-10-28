@@ -71,7 +71,7 @@ def fake_gpus(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.usefixtures("restore_torch_state", "fake_gpus")
 def test_single_process() -> None:
-    cfg = {"manual_seed": 7, "fast_matmul": True, "num_gpu": "auto"}
+    cfg = {"manual_seed": 7, "deterministic": True, "fast_matmul": True, "num_gpu": "auto"}
     rt = runtime.setup_runtime(cfg)
     assert rt == runtime.Runtime(torch.device("cuda", 0), 0, 1, 7, distributed=False)
     recorded = {"dist": False, "rank": 0, "world_size": 1, "manual_seed": 7}

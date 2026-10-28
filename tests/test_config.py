@@ -32,6 +32,7 @@ lr = 1e-3
 
 [logger]
 total_iter = 10
+save_checkpoint_freq = 5
 """
 HEAD = 'name = "t"\nmodel_type = "image"\nscale = 4\n'
 

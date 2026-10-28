@@ -1,6 +1,7 @@
 """Configuration loading and validation. Pure: no torch, argv, CUDA, RNG or filesystem writes."""
 
 import difflib
+import math
 import tomllib
 import warnings
 from collections.abc import Iterable
@@ -31,6 +32,8 @@ def _did_you_mean(key: str | None, known: Iterable[str]) -> str:
 REQUIRED = ("name", "model_type", "scale", "network_g", "datasets")
 SCALES = frozenset({1, 2, 3, 4, 8})
 PHASES = frozenset({"train", "val", "test"})
+# val.metrics types where a lower value is better: the default of their `better` (M-14)
+METRIC_LOWER = frozenset({"calculate_dists"})
 
 # OTF degradation keys: valid in [degradations] and, after the merge, in [datasets.train]
 _DEGRADATIONS: dict[str, Any] = {
@@ -69,9 +72,11 @@ SCHEMA: dict[str, dict[str, Any]] = {
         "scale": int,
         "num_gpu": (int, str),
         "manual_seed": int,
+        "deterministic": bool,
         "use_amp": bool,
         "bfloat16": bool,
         "fast_matmul": bool,
+        "fp16_accumulation": bool,
         "compile": bool,
         "compile_mode": str,
         "find_unused_parameters": bool,
@@ -104,6 +109,7 @@ SCHEMA: dict[str, dict[str, Any]] = {
         "dataset_enlarge_ratio": int,
         "augmentation": list,
         "aug_prob": list,
+        "aug_multi_prob": float,
         "use_hflip": bool,
         "use_rot": bool,
         "color": str,
@@ -119,8 +125,8 @@ SCHEMA: dict[str, dict[str, Any]] = {
         "scheduler": dict,
         "ema": float,
         "ema_power": float,
-        "clamp": bool,
-        "grad_clip": bool,
+        "clamp": (bool, str),
+        "grad_clip": (bool, float, str),
         "match_lq_colors": bool,
         "wavelet_guided": bool,
         "wavelet_init": int,
@@ -150,6 +156,7 @@ SCHEMA: dict[str, dict[str, Any]] = {
         "use_tb_logger": bool,
         "save_tb_img": bool,
         "keep_states": int,
+        "keep_exports": int,
         "wandb": dict,
     },
     "path": {
@@ -316,6 +323,8 @@ def _derive(
     for phase, ds in cfg["datasets"].items():
         ds["phase"] = phase.split("_")[0]
         ds["scale"] = cfg["scale"]
+        if ds["phase"] != "train":  # results, best metrics and TB tags are keyed by it
+            ds.setdefault("name", phase)
         for key in ("dataroot_gt", "dataroot_lq"):
             if key in ds:
                 ds[key] = _expand(ds[key])
@@ -384,11 +393,32 @@ def validate_train(cfg: dict[str, Any]) -> None:
     if train.get("max_skip_streak", 1) < 1:
         msg = "train.max_skip_streak must be >= 1"
         raise ConfigError(msg)
+    if not 0 <= (ema := train.get("ema", 0)) < 1:  # also rejects nan and inf
+        msg = f"train.ema must be in [0, 1) (0 = off), got {ema}"
+        raise ConfigError(msg)
     if (power := train.get("ema_power")) is not None and not power > 0:
         msg = f"train.ema_power must be > 0, got {power}"
         raise ConfigError(msg)
-    tile = cfg.get("val", {}).get("tile", 0)
-    overlap = cfg.get("val", {}).get("tile_overlap", 16)
+    if isinstance(clamp := train.get("clamp", True), str) and clamp != "restore":
+        msg = f"train.clamp must be true, false or 'restore', got {clamp!r}"
+        raise ConfigError(msg)
+    clip = train.get("grad_clip", True)
+    if (
+        clip != "spike"
+        if isinstance(clip, str)
+        else not isinstance(clip, bool) and not (clip > 0 and math.isfinite(clip))
+    ):
+        msg = f"train.grad_clip must be true, false, a max-norm > 0 or 'spike', got {clip!r}"
+        raise ConfigError(msg)
+    val = cfg.get("val") or {}
+    if (val_freq := val.get("val_freq")) is not None and val_freq < 1:
+        msg = f"val.val_freq must be >= 1 (remove it to disable validation), got {val_freq}"
+        raise ConfigError(msg)
+    for name, metric in (val.get("metrics") or {}).items():
+        if metric.get("better", "higher") not in {"higher", "lower"}:
+            msg = f"val.metrics.{name}.better must be 'higher' or 'lower', got {metric['better']!r}"
+            raise ConfigError(msg)
+    tile, overlap = val.get("tile", 0), val.get("tile_overlap", 16)
     if tile > 0 and not tile > 2 * overlap >= 0:
         msg = f"val.tile={tile} with val.tile_overlap={overlap}: need tile > 2 * tile_overlap >= 0"
         raise ConfigError(msg)
@@ -411,6 +441,40 @@ def validate_train(cfg: dict[str, Any]) -> None:
     if ds.get("persistent_workers") and ds.get("num_worker_per_gpu") == 0:
         msg = "datasets.train.persistent_workers needs num_worker_per_gpu > 0"
         raise ConfigError(msg)
+    if not 0 <= (multi := ds.get("aug_multi_prob", 0.3)) <= 1:
+        msg = f"datasets.train.aug_multi_prob must be in [0, 1], got {multi}"
+        raise ConfigError(msg)
+    names: dict[str, str] = {}
+    for phase, d in cfg["datasets"].items():
+        workers = d.get("num_worker_per_gpu", 4)
+        if workers != "auto" and (isinstance(workers, str) or workers < 0):
+            msg = f"datasets.{phase}.num_worker_per_gpu must be an integer >= 0 or 'auto', got {workers!r}"
+            raise ConfigError(msg)
+        if d.get("dataset_enlarge_ratio", 1) < 1:
+            msg = f"datasets.{phase}.dataset_enlarge_ratio must be >= 1, got {d['dataset_enlarge_ratio']}"
+            raise ConfigError(msg)
+        mean, std = d.get("mean"), d.get("std")
+        if (mean, std) != (None, None) and (
+            mean is None or std is None or any(mean) or any(v != 1 for v in std)
+        ):
+            msg = (
+                f"datasets.{phase}: mean/std normalisation is not inverted for the losses, the "
+                f"outputs or the metrics; remove mean and std (got {mean}, {std})"
+            )
+            raise ConfigError(msg)
+        if phase != "train":
+            if (name := d.get("name", phase)) in names:
+                msg = (
+                    f"datasets.{phase}: name {name!r} is also datasets.{names[name]}'s"
+                )
+                raise ConfigError(msg)
+            names[name] = phase
+    lg = cfg.get("logger") or {}
+    for key in ("total_iter", "print_freq", "save_checkpoint_freq"):
+        n = lg.get(key)
+        if (n is None and key == "save_checkpoint_freq") or (n is not None and n < 1):
+            msg = f"logger.{key} must be set to a positive number of updates"
+            raise ConfigError(msg)
     if train.get("enable_qat"):
         _validate_qat(cfg, train)
 

@@ -6,7 +6,7 @@ import random
 import tempfile
 import time
 from collections import OrderedDict
-from collections.abc import Generator, Mapping
+from collections.abc import Generator, Iterable, Mapping
 from contextlib import contextmanager
 from logging import Logger
 from pathlib import Path
@@ -145,6 +145,21 @@ def prune_states(d: str | Path, keep: int) -> None:
     """Keep the newest `keep` numbered states; keep <= 0 keeps all."""
     for p in _numbered(Path(d))[:-keep] if keep > 0 else []:
         p.unlink(missing_ok=True)
+
+
+def prune_exports(d: str | Path, keep: int, names: Iterable[str]) -> None:
+    """Keep the newest `keep` numbered exports (<name>_<update>.pth) per net; keep <= 0 keeps all.
+    `*_latest` and any other file are never touched."""
+    if keep <= 0:
+        return
+    for name in names:
+        numbered = sorted(
+            (int(u), f)
+            for f in Path(d).glob(f"{name}_*.pth")
+            if (u := f.stem.removeprefix(f"{name}_")).isdigit() and f.is_file()
+        )
+        for _, f in numbered[:-keep]:
+            f.unlink(missing_ok=True)
 
 
 def rng_state(

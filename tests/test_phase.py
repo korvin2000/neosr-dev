@@ -25,6 +25,8 @@ BAD = {"nan": math.nan, "inf": math.inf, "overflow": 1e30}
 class Ctx:
     """Duck-typed losses.base.Context: inputs plus .logs/.log()."""
 
+    it = 1
+
     def __init__(self, lq, gt, factor=None) -> None:
         self.lq, self.gt, self.factor, self.logs = lq, gt, factor, {}
 
@@ -37,6 +39,9 @@ class Term:
 
     def __init__(self, net) -> None:
         self.net = net
+
+    def active(self, _it) -> bool:
+        return True
 
     def compute(self, ctx):
         value = (self.net(ctx.lq).float() - ctx.gt).abs().mean()
