@@ -76,3 +76,8 @@
   bit-identical; ESC (dynamic per-sample conv kernels) and lmlt (adaptive pooling) remain refused.
 - Running: review-fix workflow (s2/review, 12 commits so far), full CUDA suite (capped), GPU benchmark agent
   (BASE f360edd vs NEW 63e03f9, identical old-template objectives, workloads a,b,c,d,e,g,h).
+- Full suite with CUDA (4ada015, host RAM capped 16G, GPU shared with A/B): 2078 passed / 193 skipped / 5 xfailed,
+  2 failed: term_grads tests whose references assumed the old hard-clamp default -> fixed (clamp pinned to true).
+- Review fixes merged (09a9e71): all 11 cross-lane findings fixed, Codex re-verified, its 3 partial points completed
+  (split metric net on CPU retry, reused DySample scopes in fp16 ONNX, older-state resume warnings). Full CPU suite on
+  09a9e71: 1883 passed / 370 skipped / 0 failed (5:45). Acceptance snapshot ab/s2_acc at 09a9e71.
