@@ -176,7 +176,7 @@ class adan_sf(Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
-        clip_grad_norm_(self.param_groups, self.defaults["max_grad_norm"])
+        clip_grad_norm_(self.param_groups)
         for group in self.param_groups:
             step = group["step"] = group.get("step", 0) + 1
             warmup_steps = group["warmup_steps"]
