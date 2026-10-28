@@ -602,11 +602,13 @@ class image(base):
         return vis / "lq" / dataset / f"{rel}.png"
 
     # ---------------------------------------------------------------- checkpoint payloads
-    def export_state_dicts(self) -> dict[str, dict[str, Tensor]]:
+    def export_state_dicts(
+        self, *, with_d: bool = True
+    ) -> dict[str, dict[str, Tensor]]:
         """net_g: the EMA if enabled, else eval_weights() (SF: x); net_d: the live D."""
         with self.eval_weights() as net:
             out = {"net_g": cpu_copy(net.state_dict())}  # copied before the restore
-        if self.net_d is not None:
+        if with_d and self.net_d is not None:
             out["net_d"] = cpu_copy(self.net_d.state_dict())
         return out
 

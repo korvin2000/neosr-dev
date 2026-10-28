@@ -19,7 +19,12 @@ from neosr.archs import build_network
 from neosr.archs.arch_util import DySample
 from neosr.cli import convert_args
 from neosr.config import ConfigError
-from neosr.models.checkpoint import load_weights, read_weights
+from neosr.models.checkpoint import (
+    export_meta,
+    load_weights,
+    merge_network,
+    read_weights,
+)
 from neosr.utils import get_root_logger
 
 log = logging.getLogger("neosr")
@@ -78,11 +83,31 @@ def rep_rt4ksr(net):
 """
 
 
-def build_net(args: argparse.Namespace, **kw) -> nn.Module:
-    net_opt = {"type": args.network, **kw}
+def resolve_args(args: argparse.Namespace) -> None:
+    """-net, -s and the network options: explicit flags win, then the export's `neosr` entry; a file
+    without it needs -net, and its scale defaults to 4."""
+    meta = export_meta(args.input)
+    given = {"type": args.network} if args.network else {}
+    net = merge_network(meta.get("network_g"), given, log)
+    if net.get("type") is None:
+        msg = f"{args.input} carries no network table (neosr metadata): pass -net"
+        raise ConfigError(msg)
+    args.network, args.net_kw = net.pop("type"), net
+    if args.scale is None:
+        args.scale = meta.get("scale", 4)
+    elif meta.get("scale", args.scale) != args.scale:
+        log.warning(f"-s {args.scale} overrides the file's scale {meta['scale']}")
+
+
+def net_table(args: argparse.Namespace, **kw) -> dict:
+    out = {"type": args.network, **getattr(args, "net_kw", {}), **kw}
     if args.window:
-        net_opt["window_size"] = args.window
-    return build_network(net_opt, scale=args.scale)
+        out["window_size"] = args.window
+    return out
+
+
+def build_net(args: argparse.Namespace, **kw) -> nn.Module:
+    return build_network(net_table(args, **kw), scale=args.scale)
 
 
 def load_net(args: argparse.Namespace, *, qat_only: bool = False) -> nn.Module:
@@ -149,7 +174,8 @@ def strip_qat(args: argparse.Namespace) -> nn.Module:
         if not gap.max().item() <= 1e-2:
             msg = f"float net deviates from the fake-quant net: max {gap.max():.2e} > 1e-2"
             raise RuntimeError(msg)
-    torch.save({"params": net.state_dict()}, args.output)
+    meta = {"network_g": net_table(args, fused_init=True), "scale": args.scale}
+    torch.save({"params": net.state_dict(), "neosr": meta}, args.output)
     print(f"-------- Float checkpoint saved at: {args.output}")
     return net
 
@@ -502,6 +528,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     get_root_logger()
     warnings.filterwarnings("ignore", category=UserWarning)
     try:
+        if (
+            args.onnx or not args.strip_qat
+        ):  # what the flags alone refuse, unread (MT-17)
+            check_export(args)
+        resolve_args(args)  # then check_export also knows a network named by the file
         if not args.strip_qat:
             to_onnx(args)
         else:

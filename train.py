@@ -2,6 +2,7 @@
 to exit codes: 0 done or stopped by Ctrl-C, 1 unexpected (traceback logged), 2 ConfigError, 130 a
 second Ctrl-C (the last committed checkpoint stands)."""
 
+import copy
 import datetime
 import logging
 import signal
@@ -245,8 +246,13 @@ def train(cfg: dict[str, Any], rt: Runtime) -> None:
                     model.check_finite()  # raises before NaN reaches disk
                     model.save(final=True)  # state first, then exports + *_latest
                     if not stopping:
+                        best = copy.deepcopy(model.best_metric_results)
                         for vl in val_loaders:
                             model.validation(vl, u, tb_logger, save_img)
+                        if val.get("save_best") and model.best_metric_results != best:
+                            model.save(
+                                final=True
+                            )  # the state records what save_best wrote
                     elapsed = datetime.timedelta(seconds=int(time.time() - start))
                     end = "Stopped" if stopping else "End of training"
                     log.info(f"{end} at update {u}. Time consumed: {elapsed}")

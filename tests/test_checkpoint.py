@@ -119,9 +119,9 @@ def test_load_weights_relaxed(caplog):
     assert torch.equal(net[0].weight, torch.zeros(4, 3, 3, 3))
     assert "1.weight" in sd  # caller's dict untouched
     text = caplog.text
-    assert "shape mismatch, skipped 1.weight" in text
-    assert "missing: 1.weight" in text
-    assert "unexpected: extra" in text
+    assert "shape mismatch, skipped (1): 1.weight (5, 4, 3, 3) -> (3, 4, 3, 3)" in text
+    assert "missing (2): 0.bias, 1.bias" in text  # a skipped key is not listed twice
+    assert "unexpected (1): extra" in text
 
 
 def test_load_weights_relaxed_zero_matches_raises():

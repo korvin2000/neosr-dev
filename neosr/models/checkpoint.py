@@ -5,6 +5,7 @@ import os
 import random
 import tempfile
 import time
+import zipfile
 from collections import OrderedDict
 from collections.abc import Generator, Iterable, Mapping
 from contextlib import contextmanager
@@ -16,6 +17,7 @@ import numpy as np
 import torch
 from torch import nn
 
+from neosr.archs import ARCHS
 from neosr.config import ConfigError
 from neosr.utils.rng import get_state as neosr_get_state
 from neosr.utils.rng import set_state as neosr_set_state
@@ -63,9 +65,20 @@ def cpu_copy(sd: Mapping[str, torch.Tensor]) -> OrderedDict:
     return _keep_metadata(sd, out)
 
 
-def read_weights(path: str | Path, param_key: str | None = None) -> OrderedDict:
+def _load(path: str | Path) -> Any:
+    if Path(path).suffix == ".safetensors":  # OpenModelDB models; an optional package
+        try:
+            from safetensors.torch import load_file  # noqa: PLC0415
+        except ImportError as e:
+            msg = f"{path}: reading .safetensors needs the safetensors package (pip install safetensors)"
+            raise ConfigError(msg) from e
+        return load_file(str(path), device="cpu")
     # no mmap: legacy non-zip files reject it
-    obj = torch.load(path, map_location="cpu", weights_only=True)
+    return torch.load(path, map_location="cpu", weights_only=True)
+
+
+def read_weights(path: str | Path, param_key: str | None = None) -> OrderedDict:
+    obj = _load(path)
     if not isinstance(obj, dict):
         msg = f"{path}: expected a dict of weights, got {type(obj).__name__}"
         raise ConfigError(msg)
@@ -86,26 +99,86 @@ def read_weights(path: str | Path, param_key: str | None = None) -> OrderedDict:
     raise ConfigError(msg)
 
 
+def export_meta(path: str | Path) -> dict[str, Any]:
+    """The `neosr` entry of an export (network table, scale, update; the best export also its
+    metric); {} for any other file. Zip files are memory-mapped: the tensors are not read."""
+    if Path(path).suffix == ".safetensors":
+        return {}
+    obj = torch.load(
+        path, map_location="cpu", weights_only=True, mmap=zipfile.is_zipfile(path)
+    )
+    meta = obj.get("neosr") if isinstance(obj, dict) else None
+    return meta if isinstance(meta, dict) else {}
+
+
+def merge_network(
+    saved: Mapping[str, Any] | None, given: Mapping[str, Any], log: Logger
+) -> dict[str, Any]:
+    """The network table to build: the export's own (`saved`) under the explicit one (`given`, which
+    wins key by key) when both name the same type or `given` names none; else `given` alone. The
+    file's native scale kwarg is dropped: the run scale is injected (and may be overridden)."""
+    out = dict(given)
+    if not saved:
+        return out
+    native = ARCHS.get(saved.get("type"), (None, None))[1]
+    saved = {k: v for k, v in saved.items() if k != native}
+    if out.setdefault("type", saved.get("type")) != saved.get("type"):
+        log.warning(
+            f"network {out['type']!r} differs from the file's {saved.get('type')!r}: "
+            "the file's network options are not used"
+        )
+        return out
+    if extra := {k: v for k, v in saved.items() if k not in given}:
+        log.info(f"network options from the file: {extra}")
+    return {**saved, **given}
+
+
+def _capped(keys: list[str], cap: int = 10) -> str:
+    more = f", ... (+{len(keys) - cap})" if len(keys) > cap else ""
+    return ", ".join(keys[:cap]) + more
+
+
 def load_weights(
     net: nn.Module, sd: Mapping[str, torch.Tensor], strict: bool, log: Logger
 ) -> None:
-    """strict: exact names and shapes. Relaxed: drop shape mismatches, list missing/unexpected keys."""
-    if not strict:
-        own = net.state_dict()
-        sd = _keep_metadata(sd, OrderedDict(sd))
-        for k in [k for k in sd if k in own and own[k].shape != sd[k].shape]:
-            log.warning(
-                f"shape mismatch, skipped {k}: {tuple(sd[k].shape)} -> {tuple(own[k].shape)}"
+    """strict: exact names and shapes. Relaxed: drop shape mismatches, then one summary (the loaded
+    share, capped key lists). Both see the keys after an arch's own remap (_load_from_state_dict)."""
+    if strict:
+        net.load_state_dict(sd)
+        return
+    own = net.state_dict()
+    skipped: dict[str, str] = {}
+
+    def relax(
+        _module, state_dict, *_
+    ) -> None:  # root pre-hook: runs after the root's remap
+        for k in [
+            k for k in state_dict if k in own and own[k].shape != state_dict[k].shape
+        ]:
+            skipped[k] = (
+                f"{k} {tuple(state_dict.pop(k).shape)} -> {tuple(own[k].shape)}"
             )
-            del sd[k]
-        if not sd.keys() & own.keys():
+        if not state_dict.keys() & own.keys():
             msg = "pretrained file matches no tensor of the network"
             raise ConfigError(msg)
-    res = net.load_state_dict(sd, strict=strict)
-    for k in res.missing_keys:
-        log.warning(f"missing: {k}")
-    for k in res.unexpected_keys:
-        log.warning(f"unexpected: {k}")
+
+    hook = net.register_load_state_dict_pre_hook(relax)
+    try:
+        res = net.load_state_dict(sd, strict=False)
+    finally:
+        hook.remove()
+    n, loaded = len(own), len(own) - len(res.missing_keys)
+    parts = [
+        f"pretrained: {loaded}/{n} network tensors loaded ({100 * loaded / max(n, 1):.1f}%)"
+    ]
+    for label, keys in (
+        ("shape mismatch, skipped", list(skipped.values())),
+        ("missing", [k for k in res.missing_keys if k not in skipped]),
+        ("unexpected", res.unexpected_keys),
+    ):
+        if keys:
+            parts.append(f"{label} ({len(keys)}): {_capped(keys)}")
+    (log.warning if len(parts) > 1 else log.info)("; ".join(parts))
 
 
 def _umask() -> int:

@@ -10,3 +10,31 @@
 - Fable 5.1 re-check of CONSENSUS.md against the full C option/module inventory and neosr code: `REVIEW.md` (inventory
   complete; placement corrections: generic loss schedule, LPIPS, load/export items, ONNX hygiene and NAFNet into Phase A;
   i-LN and R3GAN D into Phase B). Implementation brief for the Opus 5.5 xhigh session: `TASK_OPUS.md` (Phase A, A1-A9).
+
+## 2026-10-28 session 4: Phase A (Opus 5.5 implements, Codex gpt-6-astra reviews each diff)
+Tests run CPU-only with the main checkout's venv (`/home/korvin/apps/neosr-dev/.venv/bin/python -m pytest`; the
+worktree `.venv` has no torch), each file in its own capped scope (`systemd-run --user --scope -p MemoryMax=4G`).
+
+### A1 exports and loading
+- Done: exports are `{"params", "neosr": {network_<g|d>, scale, update}}`; `val.save_best = "<metric>"` writes
+  `models/net_g_best_<dataset>_<metric>.pth` (exactly the evaluated EMA/SF weights, `neosr.metric` = dataset/key/type/
+  better/value) via `atomic_save` after `validate()` returns; `read_weights` reads `.safetensors` (optional package,
+  ConfigError hint); relaxed load logs one summary (loaded share, capped 10-key lists; shape filter in a root
+  load_state_dict pre-hook, so it sees an arch's own remap); `esrgan` remaps the original `model.N` community layout
+  (two upconvs; an x8 file fails strict as unexpected); `convert.py` defaults `-net`/`-s`/kwargs from the file (flags
+  win; flag-only refusals still come before the read, MT-17); `test.py` merges the file's `network_g` under the
+  config's; `--strip-qat` output carries `network_g` with `fused_init = true`.
+- Codex review: 4 findings, all fixed: (1) the final state was saved before the final validation, so its best record
+  lagged a best export -> with `save_best` the state is saved again when the final validation changed the record;
+  (2) an explicit `-s` clashed with the file's native scale kwarg -> `merge_network` drops it (the run scale is
+  injected); (3) a TOML date in `network_g` would make exports fail `weights_only` -> `validate_train` rejects
+  non-builtin network values; (4) a failed best export could leave an advanced record in the next state -> a failed
+  validation event restores the prior record.
+- Decisions: ties overwrite the best export (the record is inclusive too, file and record stay equal); `nets`-style
+  per-net metadata key is `network_<g|d>`; numbered exports carry no `metric` (only the best export has an evaluated
+  value). Test changes: `test_checkpoint` relaxed-load strings and `test_model` export keys updated (obsolete by design).
+- Verified: test_s3_exports (22), test_checkpoint, test_entry, test_model, test_resume, test_config, test_qat,
+  test_s2_metrics, test_s2_review, test_s2_trainer, test_s2_exportfix, test_imports, test_hygiene: green.
+- Open: a best export written after the last state, then a crash (abandoned timeline) is overwritten by the resumed
+  run's next improvement over the restored record; DDP rank-0 write/failure of save_best is covered by reasoning only
+  (validation() already all-reduces a rank-0 failure).

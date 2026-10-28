@@ -16,7 +16,7 @@ from neosr.archs import build_network
 from neosr.archs.aether_arch import DeploymentNorm, aether, aether_small
 from neosr.config import ConfigError, validate_train
 from neosr.models import build_model
-from neosr.models.checkpoint import read_weights
+from neosr.models.checkpoint import export_meta, read_weights
 from neosr.models.image import observers_frozen
 from neosr.runtime import Runtime
 
@@ -364,7 +364,11 @@ def test_a_skipped_first_update_leaves_a_valid_ema(tmp_path):
     assert m.g.skipped == 1
     # the skipped update's observations are rolled back with it (stage 2 T-04): the nets and the
     # EMA mirror hold the +-inf reset again, which check_finite accepts for observer ranges
-    assert all(f.activation_post_process.min_val.isinf().all() for f in fqs(m.net_g) if not f.is_per_channel)
+    assert all(
+        f.activation_post_process.min_val.isinf().all()
+        for f in fqs(m.net_g)
+        if not f.is_per_channel
+    )
     m.check_finite()
     assert same([*m.ema.module.buffers()], [*m.net_g.buffers()])
     assert same(init, [*m.ema.module.parameters()])
@@ -587,6 +591,11 @@ def test_strip_qat_saves_a_float_checkpoint_for_fused_init(tmp_path, convert_py)
     assert convert_py.main([*strip_argv(path), "--onnx"]) == 0  # parity checked inside
     sd = read_weights(str(tmp_path / "q_float.pth"))
     assert not [k for k in sd if "fake_quant" in k or "activation_post_process" in k]
+    meta = export_meta(tmp_path / "q_float.pth")  # stage 3 A1: rebuilds without flags
+    assert meta == {
+        "network_g": {"type": "aether_small", "fused_init": True},
+        "scale": S,
+    }
     ops = onnx_ops(tmp_path / "q_float_fp32.onnx")
     assert ops["Conv"]
     assert not ops["QuantizeLinear"]

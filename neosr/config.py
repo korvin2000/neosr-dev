@@ -149,6 +149,7 @@ SCHEMA: dict[str, dict[str, Any]] = {
         "pbar": bool,
         "suffix": str,
         "save_lq": bool,
+        "save_best": str,
         "metrics": dict,
     },
     "logger": {
@@ -369,6 +370,16 @@ def _derive(
         p.update(results_root=res, log=res, visualization=res)
 
 
+def _plain(val: Any) -> bool:
+    """TOML strings, numbers, booleans, arrays and tables: what an export's metadata may hold
+    (torch.load(weights_only=True) rejects dates and times)."""
+    if isinstance(val, dict):
+        return all(_plain(v) for v in val.values())
+    if isinstance(val, list):
+        return all(_plain(v) for v in val)
+    return isinstance(val, str | int | float | bool)
+
+
 def validate_train(cfg: dict[str, Any]) -> None:
     """Structural cross-key rules of a training config; raises ConfigError naming the dotted key."""
     if cfg["scale"] not in SCALES:
@@ -382,6 +393,10 @@ def validate_train(cfg: dict[str, Any]) -> None:
             f"[datasets.{bad[0]}] test datasets belong in an inference config; use val"
         )
         raise ConfigError(msg)
+    for key in ("network_g", "network_d"):  # copied into every export (stage 3 A1)
+        if not _plain(cfg.get(key) or {}):
+            msg = f"[{key}] may hold only strings, numbers, booleans, arrays and tables"
+            raise ConfigError(msg)
     train = cfg.get("train")
     if not train or "optim_g" not in train:
         msg = "training needs a [train.optim_g] section"
@@ -420,6 +435,11 @@ def validate_train(cfg: dict[str, Any]) -> None:
         if metric.get("better", "higher") not in {"higher", "lower"}:
             msg = f"val.metrics.{name}.better must be 'higher' or 'lower', got {metric['better']!r}"
             raise ConfigError(msg)
+    if (best := val.get("save_best")) is not None and best not in (
+        metrics := val.get("metrics") or {}
+    ):
+        msg = f"val.save_best = {best!r} is not a key of val.metrics"
+        raise ConfigError(msg, key=best, known=metrics)
     tile, overlap = val.get("tile", 0), val.get("tile_overlap", 16)
     if tile > 0 and not tile > 2 * overlap >= 0:
         msg = f"val.tile={tile} with val.tile_overlap={overlap}: need tile > 2 * tile_overlap >= 0"

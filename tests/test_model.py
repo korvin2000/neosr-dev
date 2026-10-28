@@ -461,7 +461,8 @@ def test_state_format_and_exports(tmp_path):
     assert st["best"] == m.best_metric_results
     assert set(st["best"]["valset"]) == {"psnr"}
     exp = torch.load(tmp_path / "models" / "net_g_latest.pth", weights_only=True)
-    assert set(exp) == {"params"}
+    assert set(exp) == {"params", "neosr"}  # stage 3 A1: the reconstruction metadata
+    assert exp["neosr"] == {"network_g": opt["network_g"], "scale": S, "update": 3}
     assert sd_equal(exp["params"], m.ema.module.state_dict())
 
 

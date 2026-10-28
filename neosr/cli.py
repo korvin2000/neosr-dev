@@ -48,14 +48,25 @@ def convert_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = _parser("model conversion")
     add = parser.add_argument
     add("--input", required=True, help="Input PyTorch model path.")
-    add("-net", "--network", required=True, help="Generator network.")
-    add("-s", "--scale", type=int, default=4, help="Model scale ratio. (default: 4)")
+    add(
+        "-net",
+        "--network",
+        default=None,
+        help="Generator network. (default: from the file's neosr metadata)",
+    )
+    add(
+        "-s",
+        "--scale",
+        type=int,
+        default=None,
+        help="Model scale ratio. (default: from the file's neosr metadata, else 4)",
+    )
     add(
         "-window",
         "--window",
         type=int,
         default=None,
-        help="Window size, for archs that take one.",
+        help="Window size, for archs that take one. (default: from the file's neosr metadata)",
     )
     add(
         "--output",

@@ -1,6 +1,7 @@
 """Generic trainer plumbing (design T2 §2, §6.2, §8.3): runtime and device, execution wrappers, the
 validation driver, save / training state / resume / RNG restore, best metrics and state pruning."""
 
+import copy
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -130,7 +131,9 @@ class base:
     def validate(self, loader, current_iter, tb_logger, save_img: bool) -> None:
         raise NotImplementedError
 
-    def export_state_dicts(self) -> dict[str, dict[str, torch.Tensor]]:
+    def export_state_dicts(
+        self, *, with_d: bool = True
+    ) -> dict[str, dict[str, torch.Tensor]]:
         raise NotImplementedError
 
     def run_record(self) -> dict[str, Any]:
@@ -193,11 +196,15 @@ class base:
         if self.rt.rank == 0:
             from neosr.metrics.calculate import release_metric_nets  # noqa: PLC0415
 
+            best = copy.deepcopy(self.best_metric_results)
             try:
                 with preserved_rng(self.device):
                     self.validate(dataloader, current_iter, tb_logger, save_img)
+                self.save_best(dataloader.dataset.opt["name"], current_iter)
             except Exception as e:  # noqa: BLE001 - re-raised below, after the collective
-                err = e
+                # a failed event records nothing: a state saved next must not claim a best
+                # whose export was never written
+                self.best_metric_results, err = best, e
             finally:  # DISTS/TOPIQ weights live for one validation pass only
                 release_metric_nets()
         if dist:  # also the closing barrier
@@ -228,6 +235,33 @@ class base:
             rec = recs[metric] = {"better": better, "val": init, "iter": -1}
         if (val >= rec["val"]) if rec["better"] == "higher" else (val <= rec["val"]):
             rec["val"], rec["iter"] = float(val), current_iter
+
+    def save_best(self, dataset: str, current_iter) -> None:
+        """val.save_best: when this validation set the best value of that metric, write the evaluated
+        generator (EMA, or SF x) to models/net_g_best_<dataset>_<metric>.pth. Rank 0, after
+        validate() returned (outside eval_weights()); the record itself is part of the state."""
+        key = (self.opt.get("val") or {}).get("save_best")
+        rec = self.best_metric_results.get(dataset, {}).get(key) if key else None
+        if not self.is_train or rec is None or rec["iter"] != current_iter:
+            return
+        models = Path(self.opt["path"]["models"])
+        models.mkdir(parents=True, exist_ok=True)
+        metric = {
+            "dataset": dataset,
+            "key": key,
+            "type": self.opt["val"]["metrics"][key].get("type"),
+            "better": rec["better"],
+            "value": rec["val"],
+        }
+        path = models / f"net_g_best_{dataset}_{key}.pth"
+        sd = self.export_state_dicts(with_d=False)["net_g"]
+        atomic_save(
+            {"params": sd, "neosr": self.export_meta("net_g") | {"metric": metric}},
+            path,
+        )
+        get_root_logger().info(
+            f"best {key} on {dataset}: {rec['val']:.4f} @ {current_iter}, saved {path.name}"
+        )
 
     def log_metrics(
         self, dataset: str, results: Mapping[str, float], current_iter, tb_logger
@@ -260,7 +294,7 @@ class base:
         atomic_save(self.training_state(), states / f"{u}.state")
         exports = self.export_state_dicts()
         for name, sd in exports.items():
-            payload = {"params": sd}
+            payload = {"params": sd, "neosr": self.export_meta(name)}
             atomic_save(payload, models / f"{name}_{u}.pth")
             if final:
                 atomic_save(payload, models / f"{name}_latest.pth")
@@ -272,6 +306,12 @@ class base:
                 f"one export set is {mib:.1f} MiB; logger.keep_exports = {self.keep_exports} "
                 "(0 keeps every set)"
             )
+
+    def export_meta(self, name: str) -> dict[str, Any]:
+        """The `neosr` entry of an export: builtins only (weights_only-safe); convert.py and test.py
+        rebuild the network from it. read_weights and spandrel read `params` alone."""
+        net = "network_" + name.removeprefix("net_")
+        return {net: self.opt[net], "scale": self.scale, "update": self.update}
 
     def training_state(self) -> dict[str, Any]:
         """Format 2 (T2 §7.2): self-contained, loads with torch.load(weights_only=True)."""

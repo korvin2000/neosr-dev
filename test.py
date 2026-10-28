@@ -14,6 +14,7 @@ from neosr.cli import infer_args
 from neosr.config import ConfigError, load_config
 from neosr.data import build_dataloader, build_dataset
 from neosr.models import build_model
+from neosr.models.checkpoint import export_meta, merge_network
 from neosr.runtime import Runtime, setup_runtime
 from neosr.utils import get_root_logger, get_time_str, make_exp_dirs, tc
 
@@ -36,6 +37,14 @@ def test(cfg: dict[str, Any], rt: Runtime) -> Any:
             raise ConfigError(msg)
         log.info(f"Number of test images in {ds_cfg['name']}: {len(loader.dataset)}")  # type: ignore[arg-type]
         loaders.append(loader)
+    if (pre := p.get("pretrain_network_g")) is not None:
+        # the export's own network table under the config's (which wins key by key)
+        meta = export_meta(pre)
+        cfg["network_g"] = merge_network(meta.get("network_g"), cfg["network_g"], log)
+        if meta.get("scale", cfg["scale"]) != cfg["scale"]:
+            log.warning(
+                f"scale {cfg['scale']} overrides the file's scale {meta['scale']}"
+            )
     model = build_model(cfg, rt)
     save_img = (cfg.get("val") or {}).get("save_img", True)
     for loader in loaders:

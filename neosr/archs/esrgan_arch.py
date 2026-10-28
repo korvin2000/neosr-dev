@@ -1,4 +1,6 @@
 # type: ignore
+import re
+
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -139,6 +141,30 @@ class RRDB(nn.Module):
         return out * 0.2 + x
 
 
+# the original ESRGAN layout of community models (model.N..., as spandrel reads it) -> these names
+_OLD_RDB = re.compile(r"model\.1\.sub\.(\d+)\.RDB(\d)\.conv(\d)\.0\.(weight|bias)")
+_OLD_TOP = {
+    "0": "conv_first",
+    "3": "conv_up1",
+    "6": "conv_up2",
+    "8": "conv_hr",
+    "10": "conv_last",
+}
+
+
+def _old_layout_key(key: str, num_block: int) -> str:
+    """One key of the old layout renamed; a key it does not know (e.g. an x8 third upconv) is
+    returned unchanged and fails the load as unexpected."""
+    if m := _OLD_RDB.fullmatch(key):
+        return "body.{}.rdb{}.conv{}.{}".format(*m.groups())
+    head, _, kind = key.rpartition(".")
+    if head == f"model.1.sub.{num_block}":
+        return f"conv_body.{kind}"
+    if head.startswith("model.") and (name := _OLD_TOP.get(head[6:])):
+        return f"{name}.{kind}"
+    return key
+
+
 class esrgan(nn.Module):
     """Networks consisting of Residual in Residual Dense Block, which is used
     in ESRGAN.
@@ -188,6 +214,21 @@ class esrgan(nn.Module):
         self.conv_last = nn.Conv2d(num_feat, num_out_ch, 3, 1, 1)
 
         self.lrelu = nn.LeakyReLU(negative_slope=0.2, inplace=True)
+
+    def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
+        if (
+            prefix + "model.0.weight" in state_dict
+        ):  # the old layout; its own block count
+            old = [
+                k[len(prefix) :] for k in state_dict if k.startswith(prefix + "model.")
+            ]
+            rdb = [int(m[1]) for k in old if (m := _OLD_RDB.fullmatch(k))]
+            num_block = 1 + max(rdb, default=-1)
+            for k in old:
+                state_dict[prefix + _old_layout_key(k, num_block)] = state_dict.pop(
+                    prefix + k
+                )
+        super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
     def forward(self, x):
         if self.scale == 2:
