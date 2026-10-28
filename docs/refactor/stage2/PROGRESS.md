@@ -32,3 +32,19 @@
   ~/.claude/projects/-home-korvin-apps-neosr-dev--worktrees-refactor/c1b40b02-f454-4498-9d89-be0afa4e2973/workflows/scripts/neosr-stage2-implement-wf_df07b9bc-879.js):
   wf_5328fd80-7fc (trainer, losses, metrics), wf_eef6ea89-eac (data, window, mixed), wf_4bffd2bf-3da (cnn, optim).
   P-set running P0-P3 (P4 noaug deferred: 5 runs exhausted 24 GB VRAM).
+- P-set @8k (realplksr+metagan template, PSNR/SSIM/DISTS): shipped 27.23/0.627/0.2024 (8.39 dB @1000); adamw no clamp
+  FDL 0.75 26.27/0.561/0.2087; FDL 0.1 28.17/0.673/0.1905; FDL 0.1 + L1 28.34/0.683/0.1879. FDL(dinov2) has no
+  0.01 scale (cb9b92f) unlike VGG/ResNet FDL, so 0.75 is ~75x the VGG-era weight. Follow-ups P4b (no aug), P5
+  (FDL 0.05), P6 (GAN 0.1) running on top of P3.
+- Lanes trainer, losses, metrics, cnn, optim done (each Codex-reviewed and fixed; optim: no findings). Merged into
+  refactor/stabilize (readme/base.py conflicts resolved); integration: Phase version only for SF optimizers,
+  sf_version skipped in the resume diff, idle-G test forces a D-only window, tests/test_s2_integration.py.
+  CPU suite on the trainer+losses+metrics merge: 1267 passed after the one test fix. Frozen A/B snapshot
+  ab/s2_m2 at be010fe; F-set launched (clamp restore/hard, fixed adan_sf B vs b2=0, lr 1e-3, spike clip, adamw warmup).
+- F-set @5k (realplksr L1, s2_m2 code; PSNR; R-set refs adamw no clamp 29.87, plain adan 29.87): adamw restore 28.60
+  @500 / 29.87; adamw hard 24.38 @500 / 29.91; fixed adan_sf B (0.98,0.92,0.99) lr 5e-4 29.51; b2=0 29.85;
+  B + spike clip 29.43; B lr 1e-3 29.79; adamw + warmup 1000 29.85. => restore wins early (+4.2 dB @500), ties
+  late (single seed); the Adan difference term hurts (b2=0 is the SF default candidate); spike clip no gain.
+- P4b/P5/P6 @8k (on P3): no aug 28.31/0.1862; FDL 0.05 28.69/0.1830 (best); GAN 0.1 28.43/0.1854.
+- Q-set launched (s2_m2 code, restore, L1, no aug, FDL 0.05, G adan_sf b2=0): D betas B vs b2=0, GAN 0.1,
+  FDL 0.02, GAN start 1000 + ramp 1000, adamw control.
