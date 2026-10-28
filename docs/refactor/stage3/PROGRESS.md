@@ -196,3 +196,7 @@ worktree `.venv` has no torch), each file in its own capped scope (`systemd-run 
   `ruff format` also reformatted 4 lines of topiq.py, 36 of test_s2_trainer.py, 6 of test_qat.py (not ruff-clean
   before stage 3).
 - Next: the owner's Phase 0 GPU A/Bs (E0-E5) with bench.py for speed; Phase B per REVIEW.md after the R3GAN track.
+- R3GAN analysis done: `r3gan/audit.md` (owner code vs paper/reference, cost), `r3gan/neosr_fit.md` (neosr design, efficiency,
+  A/B plan), `r3gan/codex.md` (Codex Astra review + efficiency addendum). Fable synthesis `r3gan/DESIGN.md` (draft) ->
+  critique round (Codex, Opus) -> final + implementation brief. Finding to act on: the stage-2 template GAN is inert
+  (metagan at chance from ~2.4k updates; `gpu_profile.md:204-213`).
