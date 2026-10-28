@@ -201,46 +201,144 @@ def verify_qat(args: argparse.Namespace, onnx_model, torch_model) -> None:
     print("-------- Model successfully verified.")
 
 
-def assert_verify(args: argparse.Namespace, onnx_model, torch_model) -> None:
+TRACE = (1, 3, 20, 20)  # dynamic exports are traced at this input
+
+
+def export_shapes(args: argparse.Namespace) -> list[tuple[int, ...]]:
+    """Static: the trace shape. Dynamic: also a rectangular size of its own and batch 2 (MT-02)."""
+    if args.static is not None:
+        return [(1, *args.static)]
+    _, c, h, w = TRACE
+    return [TRACE, (1, c, h + 12, w + 4), (2, c, h, w)]
+
+
+def assert_verify(
+    args: argparse.Namespace, onnx_model, torch_model, *, fp16: bool = False
+) -> None:
+    """torch vs onnxruntime (CPU) at every export_shapes() input. Float: rtol 1e-2, atol 1e-3 (looser
+    than numpy's 1e-7/0: ORT reorders reductions); fp16 (its fp16 input vs the fp32 torch output):
+    max 2e-2, mean 2e-3 abs. A shape the torch model itself rejects is skipped with a warning (the
+    arch does not support it); any other failure raises naming the shape: a dynamic graph frozen at
+    the trace shape passes there and is silently wrong elsewhere."""
     import onnxruntime  # noqa: PLC0415
 
-    if args.static is not None:
-        dummy_input = torch.randn(1, *args.static, requires_grad=True)
-    else:
-        dummy_input = torch.randn(1, 3, 20, 20, requires_grad=True)
-    # onnxruntime output prediction
-    # NOTE: "CUDAExecutionProvider" errors if some nvidia libs
-    # are not found, defaulting to cpu
-    ort_session = onnxruntime.InferenceSession(
-        onnx_model, providers=["CPUExecutionProvider"]
+    # NOTE: "CUDAExecutionProvider" errors if some nvidia libs are not found
+    sess = onnxruntime.InferenceSession(onnx_model, providers=["CPUExecutionProvider"])
+    feed = sess.get_inputs()[0].name
+    hint = "use -static C H W" if args.static is None else "the arch does not export"
+    gen = torch.Generator().manual_seed(0)
+    for i, shape in enumerate(export_shapes(args)):
+        x = torch.randn(shape, generator=gen)
+        at = "x".join(map(str, shape))
+        try:
+            with torch.inference_mode():
+                ref = torch_model(x).detach().cpu().numpy()
+        except Exception as e:
+            if i == 0:  # the trace shape ran during export
+                raise
+            log.warning(f"verification skips {at}: the torch model fails there ({e})")
+            continue
+        try:
+            xin = x.numpy().astype(np.float16 if fp16 else np.float32)
+            out = sess.run(None, {feed: xin})[0].astype(np.float32)
+        except Exception as e:
+            msg = f"ONNX export fails at {at} in onnxruntime ({e}): {hint}"
+            raise RuntimeError(msg) from e
+        # first: a NaN/inf on either side is its own failure, not a tolerance question
+        if not (np.isfinite(ref).all() and np.isfinite(out).all()):
+            msg = f"ONNX verification failed at {at}: non-finite output (torch or onnxruntime)"
+            raise RuntimeError(msg)
+        if out.shape != ref.shape:
+            msg = f"ONNX export is wrong at {at}: output {out.shape}, torch {ref.shape}; {hint}"
+            raise RuntimeError(msg)
+        err = np.abs(out - ref)
+        ok = (
+            err.max() <= 2e-2 and err.mean() <= 2e-3
+            if fp16
+            else (err <= 1e-3 + 1e-2 * np.abs(ref)).all()
+        )
+        if not ok:
+            msg = (
+                f"ONNX export is wrong at {at} (max err {err.max():.2e}, mean {err.mean():.2e}): "
+                f"this arch/shape is not export-safe; {hint}"
+            )
+            raise RuntimeError(msg)
+    print(
+        f"-------- Model successfully verified at {len(export_shapes(args))} shape(s)."
     )
-    ort_inputs = {ort_session.get_inputs()[0].name: dummy_input.detach().cpu().numpy()}
-    ort_outs = ort_session.run(None, ort_inputs)
 
-    # torch outputs
-    with torch.inference_mode():
-        torch_outputs = torch_model(dummy_input)
 
-    ref = torch_outputs.detach().cpu().numpy()
-    # assert_allclose treats matching NaN/inf as equal: a non-finite output fails outright
-    if not (np.isfinite(ref).all() and np.isfinite(ort_outs[0]).all()):
-        msg = "ONNX verification failed: non-finite output (torch or onnxruntime)"
-        raise RuntimeError(msg)
-    # float export: rtol 1e-2, atol 1e-3 (looser than numpy's 1e-7/0: ORT reorders reductions)
-    np.testing.assert_allclose(ref, ort_outs[0], rtol=0.01, atol=0.001)
-    print("-------- Model successfully verified.")
+# Known export gaps (MT-17; export matrix of the stage-2 audit, opset 17, TorchScript exporter),
+# refused before anything is built or written. An arch that becomes exportable leaves the table.
+NO_ONNX = {
+    "craft": "unsupported operators",
+    "ditn": "unsupported operators",
+    "atd": "uses the Sort operator",
+    "atd_light": "uses the Sort operator",
+    "hit_srf": "the graph exceeds the 2 GiB protobuf limit (dense position-bias constants)",
+    "hit_srf_medium": "the graph exceeds the 2 GiB protobuf limit (dense position-bias constants)",
+    "hit_srf_large": "the graph exceeds the 2 GiB protobuf limit (dense position-bias constants)",
+    "flexnet": "aten::rms_norm has no opset-17 export",
+    "metaflexnet": "aten::rms_norm has no opset-17 export",
+    "esc_light": "its padding cannot be traced",
+    "esc_fp": "its padding cannot be traced",
+    "catanet": "fails to trace, also with -static",
+    "lmlt_tiny": "fails to trace, also with -static",
+    "hma": "onnxruntime rejects its LayerNorm at every shape",
+    "dct": "unsupported operators",
+}
+STATIC_ONLY = {  # dynamic adaptive_max_pool2d output sizes
+    "safmn": "adaptive_max_pool2d output sizes depend on the input",
+    "light_safmnpp": "adaptive_max_pool2d output sizes depend on the input",
+    "msdan": "adaptive_max_pool2d output sizes depend on the input",
+}
+
+
+def check_export(args: argparse.Namespace) -> None:
+    """Every refusal the converter can know up front (MT-17), before a file is written."""
+    if args.fulloptimization:
+        msg = "--fulloptimization (onnxsim) is not available; -optimize runs the ORT optimizer"
+        raise ConfigError(msg)
+    if args.network in NO_ONNX:
+        msg = f"[{args.network}] cannot be exported to ONNX: {NO_ONNX[args.network]}"
+        raise ConfigError(msg)
+    if args.static is None and args.network in STATIC_ONLY:
+        msg = (
+            f"[{args.network}] exports only with a static shape "
+            f"({STATIC_ONLY[args.network]}): add -static C H W"
+        )
+        raise ConfigError(msg)
+    try:
+        import onnx  # noqa: F401, PLC0415
+        import onnxruntime  # noqa: F401, PLC0415
+
+        if args.fp16:  # ships with onnxruntime
+            import onnxruntime.transformers.float16  # noqa: F401, PLC0415
+    except ImportError as e:
+        msg = f"ONNX export needs onnx and onnxruntime (with its float16 converter for -fp16): {e}"
+        raise ConfigError(msg) from e
+
+
+def to_fp16(src: str, dst: str) -> None:
+    """A float16 graph: weights, compute and the input/output tensors (MT-16), with ORT's own
+    converter (onnxconverter-common is unmaintained); ops without fp16 kernels get casts."""
+    import onnx  # noqa: PLC0415
+    from onnxruntime.transformers.float16 import (  # noqa: PLC0415
+        convert_float_to_float16,
+    )
+    from onnxruntime.transformers.onnx_model import OnnxModel  # noqa: PLC0415
+
+    model = OnnxModel(convert_float_to_float16(onnx.load(src)))
+    model.topological_sort()
+    onnx.save(model.model, dst)
+    onnx.checker.check_model(onnx.load(dst))
 
 
 def to_onnx(args: argparse.Namespace, model: nn.Module | None = None) -> None:
     import onnx  # noqa: PLC0415
     import onnxruntime  # noqa: PLC0415
 
-    # error if network can't be converted
-    net_error = ["craft", "ditn"]
-    if args.network in net_error:
-        msg = f"Network [{args.network}] cannot be converted to ONNX."
-        raise RuntimeError(msg)
-
+    check_export(args)
     if model is None:
         model = load_net(args)
     # set model to eval mode
@@ -249,25 +347,19 @@ def to_onnx(args: argparse.Namespace, model: nn.Module | None = None) -> None:
     if qat and args.opset < 13:
         msg = f"a QAT model needs --opset >= 13 (per-channel QuantizeLinear), got {args.opset}"
         raise ConfigError(msg)
+    if qat and args.fp16:
+        msg = "-fp16 does not apply to a QAT (int8 QDQ) export"
+        raise ConfigError(msg)
 
     # set static or dynamic
-    if args.static is not None:
-        dummy_input = torch.randn(1, *args.static, requires_grad=True)
-    else:
-        dummy_input = torch.randn(1, 3, 20, 20, requires_grad=True)
-
-    # dict for dynamic axes
+    dummy_input = torch.randn(export_shapes(args)[0])
+    names = {"input_names": ["input"], "output_names": ["output"]}
     if args.static is None:
-        dyn_axes = {
-            "dynamic_axes": {
-                "input": {0: "batch_size", 2: "width", 3: "height"},
-                "output": {0: "batch_size", 2: "width", 3: "height"},
-            },
-            "input_names": ["input"],
-            "output_names": ["output"],
+        # distinct dim names: a shared name tells the runtime the dims are equal (MT-07)
+        names["dynamic_axes"] = {
+            "input": {0: "batch", 2: "height", 3: "width"},
+            "output": {0: "batch", 2: "out_height", 3: "out_width"},
         }
-    else:
-        dyn_axes = {"input_names": ["input"], "output_names": ["output"]}
 
     # add _fp32 suffix to output str
     filename, extension = osp.splitext(args.output)  # noqa: PTH122
@@ -276,8 +368,6 @@ def to_onnx(args: argparse.Namespace, model: nn.Module | None = None) -> None:
     print("-------- Starting ONNX conversion (this can take a while)...")
 
     with torch.inference_mode(), torch.device("cpu"):
-        # TODO: add param dynamo=True as a switch
-        # py2.5 supports the verify=True flag now as well
         torch.onnx.export(
             model,
             dummy_input,
@@ -286,15 +376,14 @@ def to_onnx(args: argparse.Namespace, model: nn.Module | None = None) -> None:
             opset_version=args.opset,
             do_constant_folding=qat,  # QAT: Q/DQ scale/zero point become initializers
             dynamo=False,  # the TorchScript exporter: torch>=2.9 defaults to dynamo (needs onnxscript)
-            **(dyn_axes or {}),  # type: ignore
+            **names,  # type: ignore[arg-type]
         )
 
     print("-------- Conversion was successful. Verifying...")
     if qat:
         scalarize_qdq(output_fp32)
     # verify onnx
-    load_onnx = onnx.load(output_fp32)
-    onnx.checker.check_model(load_onnx)
+    onnx.checker.check_model(onnx.load(output_fp32))
     print(
         f"-------- Model successfully converted to ONNX format. Saved at: {output_fp32}."
     )
@@ -304,7 +393,6 @@ def to_onnx(args: argparse.Namespace, model: nn.Module | None = None) -> None:
 
     if args.optimize:
         print("-------- Running ONNX optimization...")
-        filename, extension = osp.splitext(args.output)  # noqa: PTH122
         output_optimized = filename + "_fp32_optimized" + extension
         session_opt = onnxruntime.SessionOptions()
         # ENABLE_ALL can cause compatibility issues, leaving EXTENDED as default
@@ -318,62 +406,13 @@ def to_onnx(args: argparse.Namespace, model: nn.Module | None = None) -> None:
         onnx.checker.check_model(onnx.load(output_optimized))
         print(f"-------- Model successfully optimized. Saved at: {output_optimized}")
 
-    if args.fp16:
-        print(
-            "-------- fp16 conversion has been temporarily disabled due to onnxconverter-common not being maintained."
-        )
-        """
+    if args.fp16:  # from the portable fp32 graph, not the ORT-optimized one
         print("-------- Converting to fp16...")
         output_fp16 = filename + "_fp16" + extension
-        # convert to fp16
-        if args.optimize:
-            to_fp16 = convert_float_to_float16(onnx.load(output_optimized))  # type: ignore[reportPossiblyUnboundVariable]
-        else:
-            to_fp16 = convert_float_to_float16(load_onnx)
-        # save
-        onnx.save(to_fp16, output_fp16)
-        # verify
-        onnx.checker.check_model(onnx.load(output_fp16))
-        print(
-            f"-------- Model successfully converted to half-precision. Saved at: {output_fp16}."
-        )
-        """
-
-    if args.fulloptimization:
-        msg = "ONNXSimplify has been temporarily disabled."
-        raise ValueError(msg)
-        """
-        # error if network can't run through onnxsim
-        opt_error = ["omnisr"]
-        if args.network in opt_error:
-            msg = f"Network [{args.network}] doesnt support full optimization."
-            raise RuntimeError(msg)
-
-        print("-------- Running full optimization (this can take a while)...")
-        output_fp32_fulloptimized = filename + "_fp32_fullyoptimized" + extension
-        output_fp16_fulloptimized = filename + "_fp16_fullyoptimized" + extension
-
-        # run onnxsim
-        if args.optimize:
-            simplified, check = simplify(onnx.load(output_optimized))
-        elif args.fp16:
-            simplified, check = simplify(onnx.load(output_fp16))
-        else:
-            simplified, check = simplify(load_onnx)
-        assert check, "Couldn't validate ONNX model."
-
-        # save and verify
-        if args.fp16:
-            onnx.save(simplified, output_fp16_fulloptimized)
-            onnx.checker.check_model(onnx.load(output_fp16_fulloptimized))
-        else:
-            onnx.save(simplified, output_fp32_fulloptimized)
-            onnx.checker.check_model(onnx.load(output_fp32_fulloptimized))
-
-        print(
-            f"-------- Model successfully optimized. Saved at: {output_fp32_fulloptimized}\n"
-        )
-        """
+        to_fp16(output_fp32, output_fp16)
+        if args.nocheck is False:
+            assert_verify(args, output_fp16, model, fp16=True)
+        print(f"-------- Half-precision model saved at: {output_fp16}.")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -392,6 +431,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not args.strip_qat:
             to_onnx(args)
         else:
+            if args.onnx:  # refuse before the float checkpoint is written
+                check_export(args)
             net = strip_qat(args)
             if args.onnx:  # the float ONNX of the stripped net, next to its checkpoint
                 args.output = str(Path(args.output).with_suffix(".onnx"))
