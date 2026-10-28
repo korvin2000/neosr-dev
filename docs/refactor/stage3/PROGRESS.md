@@ -7,3 +7,6 @@
   5 Opus research lanes (archs, losses_metrics, data_degradation, training_infra, recipes_evidence) -> independent
   strategies from Fable 5.1 and Codex Astra -> Opus consensus draft -> cross-critique. Reports: competitor/*.md.
 - Consultation done: lanes + Fable 5.1 + Codex Astra proposals, Opus draft, both critiques -> final CONSENSUS.md.
+- Fable 5.1 re-check of CONSENSUS.md against the full C option/module inventory and neosr code: `REVIEW.md` (inventory
+  complete; placement corrections: generic loss schedule, LPIPS, load/export items, ONNX hygiene and NAFNet into Phase A;
+  i-LN and R3GAN D into Phase B). Implementation brief for the Opus 5.5 xhigh session: `TASK_OPUS.md` (Phase A, A1-A9).

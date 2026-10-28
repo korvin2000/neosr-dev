@@ -14,6 +14,10 @@ Started 2026-10-20. Branch `refactor/stabilize`, checked out as the worktree `.w
 Speed / reliability / memory / training-efficiency pass: `stage2/PLAN.md` (lanes, interfaces), `stage2/PROGRESS.md`
 (log, A/B numbers, benchmark), `stage2/DECISIONS.md` (what changed and why), `stage2/analysis/` (10-lane audit).
 
+## Stage 3 (2026-10-28)
+What to take from traiNNer-redux: `stage3/CONSENSUS.md` (3-model verdict), `stage3/REVIEW.md` (Fable re-check, final
+phased list), `stage3/TASK_OPUS.md` (Phase A implementation brief), `stage3/PROGRESS.md`, `stage3/competitor/` (lane reports).
+
 ## Files
 | file | content |
 |---|---|
