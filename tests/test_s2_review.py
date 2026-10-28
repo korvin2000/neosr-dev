@@ -23,7 +23,16 @@ from neosr.optimizers import adamw_sf, adan, adan_sf
 from neosr.optimizers.adan import clip_grad_norm_
 from neosr.utils import get_root_logger
 from tests.test_config import BASE, HEAD, write
-from tests.test_model import batches, build, loader, make_opt, run
+from tests.test_model import (
+    batches,
+    build,
+    clone,
+    loader,
+    make_opt,
+    opt_tensors,
+    run,
+    same,
+)
 from tests.test_s2_trainer import Log, _phase, _update
 
 
@@ -338,3 +347,51 @@ def test_learned_metric_oom_falls_back_to_the_cpu_per_image(
     }
     with pytest.raises(torch.OutOfMemoryError):
         m.validation(loader(n=1), "x", None, False)
+
+
+# ---------------------------------------------------------------------------- 11 GAN boundary resume
+START, UPDATES = 3, 6  # the GAN term and D's update join at update 4
+
+
+def _gan_opt(tmp):
+    opt = make_opt(tmp, d=True, accumulate=2)
+    opt["train"]["grad_clip"] = "spike"
+    opt["train"]["gan_opt"]["start_iter"] = START
+    return opt
+
+
+def _updates(m, data, n):
+    """n updates (accumulate 2: two micro-batches each); the window log after each."""
+    logs = []
+    for _ in range(n):
+        run(m, data[2 * m.update : 2 * m.update + 2])
+        logs.append(m.get_current_log())
+    return logs
+
+
+@pytest.mark.parametrize("at", [START - 1, START])
+def test_resume_is_exact_across_the_gan_activation(tmp_path, at):
+    data = batches(2 * UPDATES)
+    a = build(_gan_opt(tmp_path / "a"))
+    logs_a = _updates(a, data, UPDATES)
+    assert (
+        "l_g_gan" not in logs_a[START - 1] and "l_g_gan" in logs_a[START]
+    )  # the boundary
+
+    b = build(_gan_opt(tmp_path / "b"))
+    _updates(b, data, at)
+    b.save()
+    opt = _gan_opt(tmp_path / "b")
+    opt["path"]["resume_state"] = tmp_path / "b" / "training_states" / f"{at}.state"
+    r = build(opt, seed=5)
+    r.restore_rng()
+    assert r.update == at
+    logs_r = _updates(r, data, UPDATES - at)
+
+    assert logs_r == logs_a[at:]
+    for x, y in ((a.net_g, r.net_g), (a.net_d, r.net_d)):
+        assert same(clone(x), clone(y))
+    for n in ("net_g", "net_d"):
+        assert same(opt_tensors(a.phases[n].opt), opt_tensors(r.phases[n].opt))
+        pa, pr = a.phases[n], r.phases[n]
+        assert torch.equal(pa.norm_ema, pr.norm_ema)  # the spike clip's EMA
