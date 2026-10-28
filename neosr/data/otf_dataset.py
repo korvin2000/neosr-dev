@@ -10,25 +10,68 @@ from torch import Tensor
 from torch.utils import data
 
 from neosr.config import ConfigError
-from neosr.data.data_util import lmdb_keys, read_img
-from neosr.data.degradations import (  # type: ignore[attr-defined]
-    circular_lowpass_kernel,
-    random_mixed_kernels,
+from neosr.data.data_util import (
+    PathList,
+    image_paths,
+    lmdb_keys,
+    meta_info_names,
+    read_img,
+    reject_normalization,
+    to_float32,
+    train_retry,
 )
+from neosr.data.degradations import circular_lowpass_kernel, random_mixed_kernels  # type: ignore[attr-defined]
 from neosr.data.file_client import FileClient
 from neosr.data.transforms import basic_augment
-from neosr.utils import get_root_logger, img2tensor, scandir, tc
+from neosr.utils import get_root_logger, img2tensor, tc
 from neosr.utils.rng import rng
 
 
-def otf_crop_size(patch_size: int, scale: int) -> int:
-    """GT crop/pad size: at least 512 and the GT patch, a multiple of scale so the
-    degraded LQ (GT // scale) keeps the exact scale ratio.
+def otf_crop_size(patch_size: int, scale: int, *, tight: bool = False) -> int:
+    """GT canvas the dataset crops/pads to and the Degrader works on, a multiple of scale so the
+    degraded LQ (GT // scale) keeps the exact scale ratio: at least 512 px and the GT patch, or with
+    `tight` (`tight_canvas = true`, opt-in until an A/B) the GT patch plus a 32 px margin
+    (Real-ESRGAN, traiNNer): 1/4 of the degradation work at LQ 64 x4, and on 256 px tiles 12%
+    instead of 75% mirrored padding.
     """
     if not (isinstance(patch_size, int) and isinstance(scale, int)) or min(patch_size, scale) < 1:
         msg = f"otf needs positive integer patch_size and scale, got {patch_size!r}, {scale!r}."
         raise ValueError(msg)
-    return math.ceil(max(512, patch_size * scale) / scale) * scale
+    gt = patch_size * scale + 32 if tight else max(512, patch_size * scale)
+    return math.ceil(gt / scale) * scale
+
+
+_KERNELS = {  # kernel type -> the range key it needs besides blur_sigma
+    "iso": None, "aniso": None, "generalized_iso": "betag_range", "generalized_aniso": "betag_range",
+    "plateau_iso": "betap_range", "plateau_aniso": "betap_range", "skewed": None, "skewed_aniso": None,
+}  # fmt: skip
+
+
+def _check_kernel_keys(opt: dict[str, Any]) -> None:
+    """The kernel keys, checked once here instead of failing with a TypeError inside a worker."""
+
+    def number(v: Any) -> bool:
+        return isinstance(v, int | float) and not isinstance(v, bool)
+
+    def numbers(n: int) -> Any:
+        return lambda v: isinstance(v, list | tuple) and len(v) == n and all(map(number, v))
+
+    def checks() -> Any:  # (key, expected, test), in order: later tests rely on earlier ones
+        yield "final_sinc_prob", "a number", number
+        for s in ("", "2"):
+            kinds = opt.get(f"kernel_list{s}")
+            yield f"sinc_prob{s}", "a number", number
+            yield (f"kernel_list{s}", f"a list of {', '.join(_KERNELS)}",
+                   lambda v: isinstance(v, list | tuple) and v and all(k in _KERNELS for k in v))  # fmt: skip
+            yield f"kernel_prob{s}", f"a list of {len(kinds)} numbers", numbers(len(kinds))
+            for key in sorted({"blur_sigma", *(_KERNELS[k] for k in kinds if _KERNELS[k])}):
+                yield f"{key}{s}", "a list of 2 numbers", numbers(2)
+            yield f"blur_sigmay{s}", "a list of 2 numbers", lambda v: v is None or numbers(2)(v)
+
+    for key, want, ok in checks():
+        if not ok(opt.get(key)):
+            msg = f"[degradations] {key} must be {want}, got {opt.get(key)!r}"
+            raise ConfigError(msg, key=key)
 
 
 class otf(data.Dataset):
@@ -55,13 +98,18 @@ class otf(data.Dataset):
         logger = get_root_logger()
         self.opt = opt
         self.file_client: FileClient | None = None
-        self.color = self.opt.get("color", None) != "y"
         self.gt_folder = opt["dataroot_gt"]
 
         if opt.get("dataroot_lq") is not None:
             msg = f"[datasets.{opt.get('phase')}] 'dataroot_lq' is not supported by otf; use paired or remove it"
             raise ConfigError(msg)
-        self.crop_pad_size = otf_crop_size(opt.get("patch_size"), opt.get("scale"))  # type: ignore[arg-type]
+        self.crop_pad_size = otf_crop_size(
+            opt.get("patch_size"),  # type: ignore[arg-type]
+            opt.get("scale"),  # type: ignore[arg-type]
+            tight=bool(opt.get("tight_canvas")),
+        )
+        _check_kernel_keys(opt)
+        reject_normalization(opt)
 
         # sets flag for file_client.py
         if self.gt_folder.endswith("lmdb"):
@@ -78,18 +126,17 @@ class otf(data.Dataset):
             if not self.gt_folder.endswith(".lmdb"):
                 msg = f"{tc.red}'dataroot_gt' should end with '.lmdb', but received {self.gt_folder}{tc.end}"
                 logger.error(msg)
-            self.paths = lmdb_keys(self.gt_folder)
+            paths = lmdb_keys(self.gt_folder)
         elif (meta_info := opt.get("meta_info", opt.get("meta_info_file"))) is not None:
             # disk backend with meta_info ('meta_info_file' is the legacy key)
             # Each line in the meta_info describes the relative path to an image
-            with Path(meta_info).open(encoding="utf-8") as fin:
-                paths = [line.strip().split(" ")[0] for line in fin]
-                self.paths = [str(Path(self.gt_folder) / v) for v in paths]
+            paths = [str(Path(self.gt_folder) / v) for v in meta_info_names(meta_info)]
         else:
             # disk backend
             # it will scan the whole folder to get meta info
             # it will be time-consuming for folders with too many files. It is recommended using an extra meta txt file
-            self.paths = sorted(scandir(self.gt_folder, full_path=True))
+            paths = image_paths(self.gt_folder)
+        self.paths = PathList(paths)
 
         # blur settings for the first degradation
         self.kernel_list = opt.get("kernel_list")
@@ -103,12 +150,12 @@ class otf(data.Dataset):
         self.betap_range = opt.get("betap_range")
         self.sinc_prob = opt.get("sinc_prob")  # the probability for sinc filters
 
-        self.rotation = opt.get('rotation', [-math.pi, math.pi])
+        self.rotation = opt.get("rotation", [-math.pi, math.pi])
         # blur settings for the second degradation
         self.kernel_list2 = opt.get("kernel_list2")
         self.kernel_prob2 = opt.get("kernel_prob2")
         self.blur_sigma2 = opt.get("blur_sigma2")
-        self.blur_sigmay2 = opt.get('blur_sigmay2', self.blur_sigma2)
+        self.blur_sigmay2 = opt.get("blur_sigmay2", self.blur_sigma2)
         self.betag_range2 = opt.get("betag_range2")
         self.betap_range2 = opt.get("betap_range2")
         self.sinc_prob2 = opt.get("sinc_prob2")
@@ -130,6 +177,9 @@ class otf(data.Dataset):
         return len(self.paths)
 
     def __getitem__(self, index: int) -> dict[str, str | Tensor]:
+        return train_retry(self._load, index, len(self), self.opt["phase"])
+
+    def _load(self, index: int) -> dict[str, str | Tensor]:
         if self.file_client is None:
             self.file_client = FileClient(
                 self.io_backend_opt.pop("type"),  # type: ignore[union-attr]
@@ -137,9 +187,9 @@ class otf(data.Dataset):
             )
 
         # -------------------------------- Load gt images -------------------------------- #
-        # Shape: (h, w, c); channel order: BGR; image range: [0, 1], float32.
+        # Shape: (h, w, c); channel order: BGR; uint8 until the canvas is cut (exact either way)
         gt_path = self.paths[index]
-        img_gt = read_img(self.file_client, gt_path, "gt")
+        img_gt = read_img(self.file_client, gt_path, "gt", float32=False)
 
         # -------------------- Do augmentation for training: flip, rotation -------------------- #
         img_gt = basic_augment(  # type: ignore[assignment]
@@ -171,7 +221,7 @@ class otf(data.Dataset):
 
         # ------------------------ Generate kernels (used in the first degradation) ------------------------ #
         kernel_size = random.choice(self.kernel_range)
-        if rng.uniform() < self.opt.get("sinc_prob", None):
+        if rng.uniform() < self.opt["sinc_prob"]:
             # this sinc filter setting is for kernels ranging from [7, 21]
             if kernel_size < 13:
                 omega_c = rng.uniform(np.pi / 3, np.pi)
@@ -195,7 +245,7 @@ class otf(data.Dataset):
 
         # ------------------------ Generate kernels (used in the second degradation) ------------------------ #
         kernel_size = random.choice(self.kernel_range)
-        if rng.uniform() < self.opt.get("sinc_prob2", None):
+        if rng.uniform() < self.opt["sinc_prob2"]:
             if kernel_size < 13:
                 omega_c = rng.uniform(np.pi / 3, np.pi)
             else:
@@ -218,7 +268,7 @@ class otf(data.Dataset):
         kernel2 = np.pad(kernel2, ((pad_size, pad_size), (pad_size, pad_size)))
 
         # ------------------------------------- the final sinc kernel ------------------------------------- #
-        if rng.uniform() < self.opt.get("final_sinc_prob", None):
+        if rng.uniform() < self.opt["final_sinc_prob"]:
             kernel_size = random.choice(self.kernel_range)
             omega_c = rng.uniform(np.pi / 3, np.pi)
             sinc_kernel = circular_lowpass_kernel(omega_c, kernel_size, pad_to=21)
@@ -227,7 +277,8 @@ class otf(data.Dataset):
             sinc_kernel = self.pulse_tensor
 
         # BGR to RGB, HWC to CHW, numpy to tensor
-        img_gt = img2tensor([img_gt], bgr2rgb=True, float32=True, color=self.color)[0]  # type: ignore[reportArgumentType,arg-type]
+        # always RGB: color='y' converts after the degradation (Degrader.degrade), DiffJPEG needs RGB
+        img_gt = img2tensor([to_float32(img_gt)], bgr2rgb=True, float32=True)[0]  # type: ignore[reportArgumentType,arg-type]
         # from_numpy stays on the CPU regardless of the default device
         kernel = torch.from_numpy(kernel).float()
         kernel2 = torch.from_numpy(kernel2).float()

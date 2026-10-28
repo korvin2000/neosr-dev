@@ -4,14 +4,19 @@ Python `random` draws the resize kind and the interpolation modes, `neosr.utils.
 probabilities and scales, torch's RNG the per-sample noise and JPEG qualities.
 """
 
+import logging
 import random
+from collections.abc import Generator
+from contextlib import contextmanager
 from typing import Any
 
+import numpy as np
 import torch
 from torch import Tensor
 from torch.nn import functional as F
 
 from neosr.config import ConfigError
+from neosr.data.data_util import to_float32
 from neosr.data.degradations import (  # type: ignore[attr-defined]
     random_add_gaussian_noise_pt,
     random_add_poisson_noise_pt,
@@ -29,6 +34,26 @@ _STAGE_KEYS = {
     "gray_noise_prob": 0,
 }
 _MODES = ("area", "bilinear", "bicubic")
+# BT.601 luma, the weights of cv2's BGR2GRAY that the paired datasets use for color='y'
+_LUMA = (0.299, 0.587, 0.114)
+
+
+def _quantize(x: Tensor) -> Tensor:
+    return torch.clamp((x * 255.0).round(), 0, 255) / 255.0
+
+
+@contextmanager
+def _no_cudnn_autotune() -> Generator[None]:
+    """cudnn.benchmark off inside the Degrader: the second blur sees a new image size almost every
+    batch (275 distinct conv shapes in 3000 batches at canvas 288, 413 at 512). At batch 1 filter2D
+    takes the cuDNN path, where benchmark_limit=0 autotuned each new shape (~300 ms); batches >= 2
+    run the native depthwise kernel and are unaffected."""
+    cudnn = torch.backends.cudnn
+    prev, cudnn.benchmark = cudnn.benchmark, False
+    try:
+        yield
+    finally:
+        cudnn.benchmark = prev
 
 
 class Degrader:
@@ -56,6 +81,7 @@ class Degrader:
                 raise ConfigError(msg, key=k)
         self.cfg = {k: cfg[k] for k in keys}
         self.scale = scale
+        self.gray = cfg.get("color") == "y"
         self.jpeger = DiffJPEG(differentiable=False).to(device) if self.jpeg else None
 
     @torch.no_grad()
@@ -63,6 +89,12 @@ class Degrader:
         self, gt: Tensor, kernel1: Tensor, kernel2: Tensor, sinc_kernel: Tensor
     ) -> Tensor:
         """`gt` (b,c,h,w) in [0, 1] -> LQ (b,c,h/scale,w/scale), quantised to 8 bit."""
+        with _no_cudnn_autotune():
+            return self._degrade(gt, kernel1, kernel2, sinc_kernel)
+
+    def _degrade(
+        self, gt: Tensor, kernel1: Tensor, kernel2: Tensor, sinc_kernel: Tensor
+    ) -> Tensor:
         k1, k2, sinc = (
             k.to(gt.device, non_blocking=True) for k in (kernel1, kernel2, sinc_kernel)
         )
@@ -93,7 +125,18 @@ class Degrader:
             out = filter2D(
                 F.interpolate(out, size=size, mode=random.choice(_MODES)), sinc
             )
-        return torch.clamp((out * 255.0).round(), 0, 255) / 255.0
+        return _quantize(out)
+
+    def degrade(
+        self, gt: Tensor, kernel1: Tensor, kernel2: Tensor, sinc_kernel: Tensor
+    ) -> tuple[Tensor, Tensor]:
+        """The training pair (gt, lq). color='y' degrades the RGB gt (real chroma JPEG artifacts),
+        then converts gt and lq to luma; lq is re-quantised to 8 bit."""
+        lq = self(gt, kernel1, kernel2, sinc_kernel)
+        if not self.gray:
+            return gt, lq
+        w = gt.new_tensor(_LUMA).view(1, 3, 1, 1)
+        return (gt * w).sum(1, keepdim=True), _quantize((lq * w).sum(1, keepdim=True))
 
     def _resize(self, s: str) -> float:
         kind = random.choices(("up", "down", "keep"), self.cfg[f"resize_prob{s}"])[0]
@@ -137,9 +180,17 @@ class PairPool:
     """Training pair pool: mixes degradations across batches, since one batch shares its resize
     factors. Pass-through while filling; once full, each batch replaces `b` random slots and the
     pairs held there are returned (indexed swap: no full-pool shuffle or copy).
+
+    Members known to be 8 bit are stored as uint8, 4x smaller and bit-exact, chosen by the producer
+    contract (never by inspecting values): lq always (the Degrader quantises it on this device);
+    gt with `gt_8bit` (the otf dataset's 8-bit RGB decode, i.e. color != 'y'), else fp32 (luma gt).
+    Codes decode through the producer's own table: CUDA divides by 255 as a reciprocal multiply,
+    which differs from numpy's division (`to_float32`) at 126 of the 256 levels.
     """
 
-    def __init__(self, size: int, batch: int, *, device: torch.device | str) -> None:
+    def __init__(
+        self, size: int, batch: int, *, device: torch.device | str, gt_8bit: bool = False
+    ) -> None:
         if batch < 1 or size < batch:
             msg = f"queue_size ({size}) must be >= batch_size ({batch})"
             raise ConfigError(msg, key="queue_size")
@@ -151,6 +202,25 @@ class PairPool:
         self.ptr = 0
         self.lq: Tensor | None = None
         self.gt: Tensor | None = None
+        # uint8 code -> the float its producer computed (None: stored as passed in)
+        self.luts = (
+            torch.arange(256, dtype=torch.float32, device=self.device) / 255.0,
+            torch.from_numpy(to_float32(np.arange(256, dtype=np.uint8))).to(self.device)
+            if gt_8bit
+            else None,
+        )
+
+    def _alloc(self, x: Tensor, lut: Tensor | None) -> Tensor:
+        dtype = x.dtype if lut is None else torch.uint8
+        return x.new_empty((self.size, *x.shape[1:]), dtype=dtype, device=self.device)
+
+    @staticmethod
+    def _enc(x: Tensor, lut: Tensor | None) -> Tensor:
+        return x if lut is None else (x * 255.0).round().to(torch.uint8)
+
+    @staticmethod
+    def _dec(x: Tensor, lut: Tensor | None) -> Tensor:
+        return x if lut is None else lut[x.int()]
 
     @torch.no_grad()
     def __call__(self, lq: Tensor, gt: Tensor) -> tuple[Tensor, Tensor]:
@@ -158,15 +228,21 @@ class PairPool:
         if lq.size(0) != b or gt.size(0) != b:
             msg = f"pair pool needs lq/gt batches of batch_size {b}, got {lq.size(0)}/{gt.size(0)}"
             raise ValueError(msg)
+        lut_lq, lut_gt = self.luts
         if self.lq is None or self.gt is None:
-            self.lq = lq.new_empty((self.size, *lq.shape[1:]), device=self.device)
-            self.gt = gt.new_empty((self.size, *gt.shape[1:]), device=self.device)
+            self.lq, self.gt = self._alloc(lq, lut_lq), self._alloc(gt, lut_gt)
+            mib = (self.lq.nbytes + self.gt.nbytes) / 2**20
+            logging.getLogger("neosr").info(
+                f"Pair pool: {self.size} pairs, {mib:.0f} MiB "
+                f"(lq {str(self.lq.dtype)[6:]}, gt {str(self.gt.dtype)[6:]})"
+            )
         if self.ptr < self.size:  # filling: store a copy, train on the batch itself
-            self.lq[self.ptr : self.ptr + b] = lq
-            self.gt[self.ptr : self.ptr + b] = gt
+            self.lq[self.ptr : self.ptr + b] = self._enc(lq, lut_lq)
+            self.gt[self.ptr : self.ptr + b] = self._enc(gt, lut_gt)
             self.ptr += b
             return lq, gt
         idx = torch.randperm(self.size, device=self.device)[:b]
-        out_lq, out_gt = self.lq[idx], self.gt[idx]  # advanced indexing copies
-        self.lq[idx], self.gt[idx] = lq, gt
+        # advanced indexing copies
+        out_lq, out_gt = self._dec(self.lq[idx], lut_lq), self._dec(self.gt[idx], lut_gt)
+        self.lq[idx], self.gt[idx] = self._enc(lq, lut_lq), self._enc(gt, lut_gt)
         return out_lq, out_gt

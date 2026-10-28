@@ -227,14 +227,15 @@ def test_bad_range_raises():
 
 
 def _ids(start, b=2):
-    """Batch whose sample i carries the value start+i in both lq (b,3,2,2) and gt (b,3,8,8)."""
-    v = torch.arange(start, start + b, dtype=torch.float32).view(b, 1, 1, 1)
+    """Batch whose sample i carries the 8-bit value (start+i)/255 in both lq (b,3,2,2) and gt
+    (b,3,8,8), so a gt_8bit pool stores both as uint8 holding start+i (D-15)."""
+    v = torch.arange(start, start + b, dtype=torch.float32).view(b, 1, 1, 1) / 255
     return v.expand(b, 3, 2, 2).clone(), v.expand(b, 3, 8, 8).clone()
 
 
 def test_pair_pool():
     torch.manual_seed(0)
-    pool = PairPool(7, 2, device="cpu")
+    pool = PairPool(7, 2, device="cpu", gt_8bit=True)
     assert pool.size == 6
     for i in range(3):  # filling: pass-through, stored as copies
         lq, gt = _ids(2 * i)
@@ -242,6 +243,7 @@ def test_pair_pool():
         assert out_lq is lq
         assert out_gt is gt
         lq.add_(100)
+    assert pool.lq.dtype == pool.gt.dtype == torch.uint8
     assert sorted(pool.lq[:, 0, 0, 0].tolist()) == list(range(6))
     seen = []
     for i in range(3, 20):
@@ -255,7 +257,7 @@ def test_pair_pool():
         assert (
             out_lq.untyped_storage().data_ptr() != pool.lq.untyped_storage().data_ptr()
         )
-        seen += a.tolist()
+        seen += (a * 255).round().int().tolist()
         held = pool.lq[:, 0, 0, 0].tolist()
         assert torch.equal(pool.lq[:, 0, 0, 0], pool.gt[:, 0, 0, 0])
         assert {2 * i, 2 * i + 1} <= set(held)

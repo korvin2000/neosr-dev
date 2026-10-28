@@ -2,13 +2,16 @@ from typing import Any
 
 from torch import Tensor
 from torch.utils import data
-from torchvision.transforms.functional import normalize
 
 from neosr.data.data_util import (
+    PathList,
     paired_paths_from_folder,
     paired_paths_from_lmdb,
     paired_paths_from_meta_info_file,
     read_img,
+    reject_normalization,
+    to_float32,
+    train_retry,
 )
 from neosr.data.file_client import FileClient
 from neosr.data.transforms import basic_augment, paired_random_crop
@@ -46,8 +49,7 @@ class paired(data.Dataset):
         super().__init__()
         self.opt = opt
         self.file_client: FileClient | None = None
-        self.mean = opt.get("mean")
-        self.std = opt.get("std")
+        reject_normalization(opt)
         self.color = self.opt.get("color", None) != "y"
         self.gt_folder, self.lq_folder = opt["dataroot_gt"], opt["dataroot_lq"]
 
@@ -63,39 +65,43 @@ class paired(data.Dataset):
         if lmdb:
             self.io_backend_opt["db_paths"] = [self.lq_folder, self.gt_folder]  # type: ignore[assignment]
             self.io_backend_opt["client_keys"] = ["lq", "gt"]  # type: ignore[assignment]
-            self.paths: list[str] | list[dict[str, str]] = paired_paths_from_lmdb(
+            paths = paired_paths_from_lmdb(
                 [self.lq_folder, self.gt_folder], ["lq", "gt"]
             )
         elif (meta_info := opt.get("meta_info", opt.get("meta_info_file"))) is not None:
             # disk backend with meta_info ('meta_info_file' is the legacy key)
             # Each line in the meta_info describes the relative path to an image
-            self.paths = paired_paths_from_meta_info_file(
+            paths = paired_paths_from_meta_info_file(
                 [self.lq_folder, self.gt_folder], ["lq", "gt"], meta_info
             )
         else:
             # disk backend
             # it will scan the whole folder to get meta info
             # it will be time-consuming for folders with too many files. It is recommended using an extra meta txt file
-            self.paths = paired_paths_from_folder(
+            paths = paired_paths_from_folder(
                 [self.lq_folder, self.gt_folder], ["lq", "gt"]
             )
+        self.gt_paths = PathList(p["gt_path"] for p in paths)  # type: ignore[index]
+        self.lq_paths = PathList(p["lq_path"] for p in paths)  # type: ignore[index]
 
     def __len__(self) -> int:
-        return len(self.paths)
+        return len(self.gt_paths)
 
     def __getitem__(self, index: int) -> dict[str, str | Tensor]:
+        return train_retry(self._load, index, len(self), self.opt["phase"])
+
+    def _load(self, index: int) -> dict[str, str | Tensor]:
         if self.file_client is None:
             self.file_client = FileClient(
                 self.io_backend_opt.pop("type"),  # type: ignore[union-attr]
                 **self.io_backend_opt,
             )
 
-        # Load gt and lq images. Dimension order: HWC; channel order: BGR;
-        # image range: [0, 1], float32.
-        gt_path = self.paths[index]["gt_path"]  # type: ignore[index]
-        lq_path = self.paths[index]["lq_path"]  # type: ignore[index]
-        img_gt = read_img(self.file_client, gt_path, "gt")
-        img_lq = read_img(self.file_client, lq_path, "lq")
+        # Load gt and lq images. Dimension order: HWC; channel order: BGR; uint8 until the
+        # training crop is taken, then float32 in [0, 1]
+        gt_path, lq_path = self.gt_paths[index], self.lq_paths[index]
+        img_gt = read_img(self.file_client, gt_path, "gt", float32=False)
+        img_lq = read_img(self.file_client, lq_path, "lq", float32=False)
 
         scale = self.opt["scale"]
         # augmentation for training
@@ -114,15 +120,11 @@ class paired(data.Dataset):
         # crop the unmatched GT images during validation or testing
         if self.opt["phase"] != "train":
             img_gt = img_gt[0 : img_lq.shape[0] * scale, 0 : img_lq.shape[1] * scale, :]  # type: ignore[index,union-attr,call-overload]
+        img_gt, img_lq = to_float32(img_gt), to_float32(img_lq)  # type: ignore[arg-type]
 
         # BGR to RGB, HWC to CHW, numpy to tensor
         img_gt, img_lq = img2tensor(
             [img_gt, img_lq], bgr2rgb=True, float32=True, color=self.color
         )
-
-        # normalize
-        if self.mean is not None or self.std is not None:
-            normalize(img_lq, self.mean, self.std, inplace=True)  # type: ignore[reportArgumentType]
-            normalize(img_gt, self.mean, self.std, inplace=True)  # type: ignore[reportArgumentType]
 
         return {"lq": img_lq, "gt": img_gt, "lq_path": lq_path, "gt_path": gt_path}

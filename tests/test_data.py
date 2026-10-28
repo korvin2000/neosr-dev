@@ -116,7 +116,7 @@ def test_lmdb_dotted_keys(tmp_path):
         "phase": "test",
         "dataroot_lq": str(tmp_path / "lq.lmdb"),
     })
-    assert ds.paths == keys
+    assert list(ds.paths) == keys  # a PathList (D-18)
     assert [round(float(ds[i]["lq"].mean()) * 255) for i in range(2)] == [60, 120]
 
 
@@ -139,8 +139,11 @@ def test_folder_pairing_repeated_root_name(tmp_path, monkeypatch, rel):
     assert got == [("image_GT.png",) * 2, ("x_GT/c.png",) * 2]
 
 
-@pytest.mark.parametrize(("scale", "patch_size", "crop"), [(3, 64, 513), (3, 200, 600)])
-def test_otf_item(data_root, scale, patch_size, crop):
+@pytest.mark.parametrize(
+    ("scale", "patch_size", "tight", "crop"),
+    [(3, 64, True, 225), (3, 200, True, 633), (3, 64, False, 513), (3, 200, False, 600)],
+)
+def test_otf_item(data_root, scale, patch_size, tight, crop):
     kernels = {
         "kernel_list": ["iso", "aniso"],
         "kernel_prob": [0.5, 0.5],
@@ -160,11 +163,12 @@ def test_otf_item(data_root, scale, patch_size, crop):
         "sinc_prob": 0.5,
         "sinc_prob2": 0.5,
         "final_sinc_prob": 0.5,
+        "tight_canvas": tight,
     })
     assert ds.crop_pad_size == crop
     item = ds[0]
     assert Path(item["gt_path"]) == data_root / "GT" / "img_00.png"
-    assert item["gt"].shape == (3, crop, crop)  # 256px GT padded up to the crop size
+    assert item["gt"].shape == (3, crop, crop)  # 256px GT cropped or padded to the canvas
     for k in ("kernel1", "kernel2", "sinc_kernel"):
         assert item[k].shape == (21, 21)
         assert item[k].device.type == "cpu"
@@ -296,6 +300,11 @@ def test_otf_crop_size():
     assert otf_crop_size(256, 4) == 1024
     assert otf_crop_size(64, 3) == 513
     assert otf_crop_size(200, 3) == 600
+    # D-02 tight_canvas: GT patch + 32, rounded up to a multiple of scale
+    assert otf_crop_size(64, 4, tight=True) == 288
+    assert otf_crop_size(256, 4, tight=True) == 1056
+    assert otf_crop_size(64, 3, tight=True) == 225
+    assert otf_crop_size(200, 3, tight=True) == 633
     with pytest.raises(ValueError, match="patch_size"):
         otf_crop_size(None, 4)  # type: ignore[arg-type]
 
@@ -399,7 +408,7 @@ def test_build_dataloader_overrides():
         "persistent_workers": False,
     }
     loader = build_dataloader(ds, opt, runtime=_rt(0, 2))
-    assert loader.num_workers == max((os.cpu_count() or 1) // 2, 1)
+    assert loader.num_workers == max((os.process_cpu_count() or 1) // 2 - 1, 1)  # D-17
     assert not loader.pin_memory
     assert not loader.persistent_workers
     val = build_dataloader(ds, {"phase": "val"}, runtime=_rt())
@@ -511,7 +520,7 @@ def test_build_dataloader_runtime():
     loader = build_dataloader(ds, opt, runtime=rt)
     assert (loader.batch_size, loader.num_workers) == (
         2,
-        max((os.cpu_count() or 1) // 2, 1),
+        max((os.process_cpu_count() or 1) // 2 - 1, 1),  # D-17
     )
     assert loader.generator.initial_seed() == 101  # type: ignore[union-attr]
     val = build_dataloader(ds, {"phase": "val"}, runtime=rt)
@@ -555,6 +564,7 @@ def test_epochs_differ(workers, persistent):
 
 
 def test_unreadable_image_in_worker(tmp_path, paired_opt):
+    """D-01: training skips the bad pair (full batches, a warning with the path); val raises."""
     root = tmp_path / "bad"
     write_pairs(root, n=4)
     (root / "LQ" / "img_02.png").write_bytes(b"not an image")
@@ -567,8 +577,13 @@ def test_unreadable_image_in_worker(tmp_path, paired_opt):
     del opt["meta_info"]
     rt = Runtime(torch.device("cpu"), 0, 1, 0, distributed=False)
     loader = build_dataloader(build_dataset(opt), opt, runtime=rt)
+    batches = list(loader)
+    assert len(batches) == 1
+    assert batches[0]["gt"].shape == (4, 3, 256, 256)
+    assert not any("img_02" in p for p in batches[0]["lq_path"])
+    val = build_dataset({**opt, "phase": "val"})
     with pytest.raises(OSError, match=r"img_02\.png"):
-        list(loader)
+        list(build_dataloader(val, {"phase": "val"}, runtime=rt))
 
 
 def test_build_dataset_unknown_type():

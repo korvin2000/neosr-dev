@@ -1,7 +1,9 @@
+import logging
 import os
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+import cv2
 import torch
 from torch.utils.data import DataLoader, Dataset, Sampler, get_worker_info
 
@@ -28,6 +30,16 @@ def build_dataset(cfg: Mapping[str, Any]) -> Dataset:
 def worker_init_fn(_: int) -> None:
     # torch already seeds random, torch and legacy numpy from this per-worker seed
     seed_rng(get_worker_info().seed)  # type: ignore[union-attr]
+    # one thread per worker: the workers are the parallelism (cv2 would spawn a pool per worker)
+    cv2.setNumThreads(0)
+    torch.set_num_threads(1)
+
+
+def auto_workers(world_size: int) -> int:
+    """`num_worker_per_gpu = "auto"`: the CPUs this process may run on (affinity-aware), split over
+    the processes, minus one core for each training process itself."""
+    cpus = os.process_cpu_count() or 1
+    return max(cpus // max(world_size, 1) - 1, 1)
 
 
 def build_dataloader(
@@ -37,7 +49,7 @@ def build_dataloader(
     runtime: "Runtime",
     sampler: Sampler | None = None,
 ) -> DataLoader:
-    """Train: `batch_size` and `num_worker_per_gpu` (default 4, "auto": CPUs per process) per process,
+    """Train: `batch_size` and `num_worker_per_gpu` (default 4, "auto": `auto_workers`) per process,
     shuffled unless `sampler` is given. Val/test: batch 1 in the main process.
 
     The loader generator, seeded `runtime.seed + runtime.rank`, drives shuffling and the per-epoch
@@ -52,7 +64,8 @@ def build_dataloader(
     if train:
         workers = cfg.get("num_worker_per_gpu", 4)
         if workers == "auto":
-            workers = max((os.cpu_count() or 1) // max(runtime.world_size, 1), 1)
+            workers = auto_workers(runtime.world_size)
+            logging.getLogger("neosr").info(f"num_worker_per_gpu auto: {workers}")
         batch_size = cfg["batch_size"]
     return DataLoader(
         dataset,
