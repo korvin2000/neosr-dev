@@ -51,7 +51,12 @@ def test_esc_rpe_bias_bitwise(ws: int, heads: int) -> None:
     m = esc_arch.WindowAttention(16, ws, heads, F.scaled_dot_product_attention, "sdpa")
     idx = _old_esc_idxs(ws, heads)
     old = m.relative_position_bias[idx[:, 0], idx[:, 1]].reshape(1, heads, ws * ws, ws * ws)
-    assert torch.equal(old, m.rpe_bias_of())
+    new = m.rpe_bias_of()
+    assert torch.equal(old, new)
+    g = torch.randn_like(new)  # the gather's backward: same table gradient
+    (ga,) = torch.autograd.grad(old, m.relative_position_bias, g)
+    (gb,) = torch.autograd.grad(new, m.relative_position_bias, g)
+    torch.testing.assert_close(ga, gb, rtol=1e-6, atol=1e-6)
     assert m.rpe_idx.shape == (ws * ws, ws * ws)
     assert "rpe_idx" not in m.state_dict()  # non-persistent: checkpoints unchanged
 
@@ -154,6 +159,13 @@ def test_catanet_initted_bitwise_and_sync_free(monkeypatch) -> None:
             with _NoHostSync():
                 yb = new(x)
             assert torch.equal(ya, yb)
+            if mode:
+                g = torch.randn_like(ya)
+                (ya * g).sum().backward()
+                (yb * g).sum().backward()
+                for p, q in zip(old.parameters(), new.parameters(), strict=True):
+                    assert torch.equal(p.grad, q.grad)
+                old.zero_grad(set_to_none=True), new.zero_grad(set_to_none=True)
     for a, b in zip(old.buffers(), new.buffers(), strict=True):
         assert torch.equal(a, b)
 
@@ -371,8 +383,18 @@ def test_microsr_masks_bitwise(monkeypatch, patch_size: int) -> None:
             m.setattr(SwinTransformerBlock, "calculate_mask", lambda s, *a: built.append(a) or calc(s, *a))
             y = net(x)
         assert len(built) == (1 if patch_size == 1 else 0)  # once per forward; none unshifted
+        new_fwd = SwinTransformerBlock.forward
         monkeypatch.setattr(SwinTransformerBlock, "forward", _old_microsr_block)
         assert torch.equal(y, net(x))
+    grads = []
+    for fwd in (new_fwd, _old_microsr_block):  # train mode: same gradients (zero mask == none)
+        monkeypatch.setattr(SwinTransformerBlock, "forward", fwd)
+        net.train().zero_grad(set_to_none=True)
+        torch.manual_seed(0)
+        net(x).square().mean().backward()
+        grads.append([p.grad for p in net.parameters()])
+    for a, b in zip(*grads, strict=True):
+        assert torch.equal(a, b)
 
 
 # ---------------------------------------------------------------- MX-04/07/08/09/10 HMA
