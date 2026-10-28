@@ -22,7 +22,8 @@ class _RestoringClamp(torch.autograd.Function):
     @staticmethod
     def backward(ctx, g: Tensor) -> tuple[Tensor, None, None]:
         (x,) = ctx.saved_tensors
-        return g.masked_fill(((x < ctx.lo) & (g > 0)) | ((x > ctx.hi) & (g < 0)), 0), None, None
+        out = ((x < ctx.lo) & (g > 0)) | ((x > ctx.hi) & (g < 0))
+        return g.masked_fill(out, 0), None, None
 
 
 def restoring_clamp(x: Tensor, lo: float = 0.0, hi: float = 1.0) -> Tensor:

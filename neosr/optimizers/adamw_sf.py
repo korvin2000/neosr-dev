@@ -164,12 +164,7 @@ class adamw_sf(Optimizer):
             if group["foreach"] and len(active_p) > 0:
                 y, grad, exp_avg_sq, z = zip(
                     *[
-                        (
-                            p,
-                            p.grad,
-                            self.state[p]["exp_avg_sq"],
-                            self.state[p]["z"],
-                        )
+                        (p, p.grad, self.state[p]["exp_avg_sq"], self.state[p]["z"])
                         for p in active_p
                     ],
                     strict=False,

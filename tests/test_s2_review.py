@@ -55,7 +55,9 @@ def test_adan_clips_by_the_group_max_grad_norm(make):
     p = torch.nn.Parameter(torch.randn(16))
     q = torch.nn.Parameter(p.detach().clone())
     resumed = make([p], lr=1e-2, max_grad_norm=0.0)
-    resumed.param_groups[0]["max_grad_norm"] = 0.5  # what a resume restores over the config
+    resumed.param_groups[0]["max_grad_norm"] = (
+        0.5  # what a resume restores over the config
+    )
     reference = make([q], lr=1e-2, max_grad_norm=0.5)
     for i in range(3):
         g = torch.randn(16, generator=torch.Generator().manual_seed(i)) * 10
@@ -94,7 +96,9 @@ def test_adamw_sf_step_bumps_the_parameter_version(foreach):
 
 # ---------------------------------------------------------------------------- 4 run record
 def test_resume_warns_about_global_objective_keys(tmp_path, caplog, monkeypatch):
-    monkeypatch.setattr(get_root_logger(), "propagate", True)  # caplog listens on the root logger
+    monkeypatch.setattr(
+        get_root_logger(), "propagate", True
+    )  # caplog listens on the root logger
     m = build(make_opt(tmp_path))
     run(m, batches(1))
     m.save()
@@ -109,19 +113,29 @@ def test_resume_warns_about_global_objective_keys(tmp_path, caplog, monkeypatch)
 
 # ---------------------------------------------------------------------------- 5 mean/std
 def test_validate_train_rejects_identity_normalisation_like_the_datasets(tmp_path):
-    body = BASE.replace("batch_size = 2", "batch_size = 2\nmean = [0, 0, 0]\nstd = [1, 1, 1]", 1)
-    with pytest.raises(ConfigError, match=r"\[datasets.train\] 'mean' is not supported"):
-        validate_train(load_config(write(tmp_path, body, HEAD), is_train=True, root=tmp_path))
+    body = BASE.replace(
+        "batch_size = 2", "batch_size = 2\nmean = [0, 0, 0]\nstd = [1, 1, 1]", 1
+    )
+    with pytest.raises(
+        ConfigError, match=r"\[datasets.train\] 'mean' is not supported"
+    ):
+        validate_train(
+            load_config(write(tmp_path, body, HEAD), is_train=True, root=tmp_path)
+        )
 
 
 # ---------------------------------------------------------------------------- 6 skip streak
 def test_skip_streak_survives_a_resume():
-    _, _, a = _phase(True, names=["0.weight", "0.bias", "1.weight", "1.bias"], max_skip_streak=3)
+    _, _, a = _phase(
+        True, names=["0.weight", "0.bias", "1.weight", "1.bias"], max_skip_streak=3
+    )
     assert _update(a, math.nan) is False
     assert _update(a, math.nan) is False
     sd = a.state_dict()
     assert sd["streak"] == 2
-    _, _, b = _phase(True, names=["0.weight", "0.bias", "1.weight", "1.bias"], max_skip_streak=3)
+    _, _, b = _phase(
+        True, names=["0.weight", "0.bias", "1.weight", "1.bias"], max_skip_streak=3
+    )
     b.load_state_dict(sd, Log())
     with pytest.raises(FloatingPointError, match="3 consecutive"):
         _update(b, math.nan)

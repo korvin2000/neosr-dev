@@ -455,7 +455,8 @@ def validate_train(cfg: dict[str, Any]) -> None:
         if d.get("dataset_enlarge_ratio", 1) < 1:
             msg = f"datasets.{phase}.dataset_enlarge_ratio must be >= 1, got {d['dataset_enlarge_ratio']}"
             raise ConfigError(msg)
-        for key in ("mean", "std"):  # before the model build; the datasets reject them too
+        # before the model build; the datasets reject them too
+        for key in ("mean", "std"):
             if d.get(key) is not None:
                 msg = f"[datasets.{phase}] {key!r} is not supported (images stay in [0, 1]); remove it"
                 raise ConfigError(msg, key=key)
