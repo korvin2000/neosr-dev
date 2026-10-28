@@ -5,11 +5,13 @@ import logging
 import pytest
 import torch
 
+from neosr.config import ConfigError, load_config, validate_train
 from neosr.losses.base import restoring_clamp
 from neosr.losses.consistency_loss import consistency_loss
 from neosr.optimizers import adamw_sf, adan, adan_sf
 from neosr.optimizers.adan import clip_grad_norm_
 from neosr.utils import get_root_logger
+from tests.test_config import BASE, HEAD, write
 from tests.test_model import batches, build, make_opt, run
 
 
@@ -101,3 +103,10 @@ def test_resume_warns_about_global_objective_keys(tmp_path, caplog, monkeypatch)
         build(opt)
     assert "train.match_lq_colors: None -> True" in caplog.text
     assert "wavelet" not in caplog.text  # unset before and after: not a change
+
+
+# ---------------------------------------------------------------------------- 5 mean/std
+def test_validate_train_rejects_identity_normalisation_like_the_datasets(tmp_path):
+    body = BASE.replace("batch_size = 2", "batch_size = 2\nmean = [0, 0, 0]\nstd = [1, 1, 1]", 1)
+    with pytest.raises(ConfigError, match=r"\[datasets.train\] 'mean' is not supported"):
+        validate_train(load_config(write(tmp_path, body, HEAD), is_train=True, root=tmp_path))

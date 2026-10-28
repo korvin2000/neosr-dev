@@ -455,15 +455,10 @@ def validate_train(cfg: dict[str, Any]) -> None:
         if d.get("dataset_enlarge_ratio", 1) < 1:
             msg = f"datasets.{phase}.dataset_enlarge_ratio must be >= 1, got {d['dataset_enlarge_ratio']}"
             raise ConfigError(msg)
-        mean, std = d.get("mean"), d.get("std")
-        if (mean, std) != (None, None) and (
-            mean is None or std is None or any(mean) or any(v != 1 for v in std)
-        ):
-            msg = (
-                f"datasets.{phase}: mean/std normalisation is not inverted for the losses, the "
-                f"outputs or the metrics; remove mean and std (got {mean}, {std})"
-            )
-            raise ConfigError(msg)
+        for key in ("mean", "std"):  # before the model build; the datasets reject them too
+            if d.get(key) is not None:
+                msg = f"[datasets.{phase}] {key!r} is not supported (images stay in [0, 1]); remove it"
+                raise ConfigError(msg, key=key)
         if phase != "train":
             if (name := d.get("name", phase)) in names:
                 msg = (
