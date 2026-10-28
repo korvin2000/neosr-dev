@@ -273,3 +273,327 @@ def test_channels_first_layer_norm(name: str, fmt) -> None:
         new, old = m(xb), _ln_manual(m, xb)
     err = [float((y.double() - exact).norm() / exact.norm()) for y in (new, old)]
     assert err[0] < 4e-3 < err[1], err
+
+
+# ---------------------------------------------------------------- gradient census (A-03, A-05, A-06, A-10)
+@pytest.mark.parametrize("name", ROWS)
+def test_gradient_census(name: str) -> None:
+    """Every trainable parameter gets a finite gradient from one train step (DDP with
+    find_unused_parameters=False needs that); frozen ones are deploy copies or unused branches."""
+    net = _net(name).train()
+    sr = ARCHS[name][1] is not None
+    x = torch.rand(1, 3, *((24, 20) if sr else (64, 64)))
+    out = net(x)
+    out = out[0] if isinstance(out, tuple | list) else out
+    out.float().square().mean().backward()
+    missing = [
+        n for n, p in net.named_parameters() if p.requires_grad and p.grad is None
+    ]
+    assert not missing, missing
+    stray = [
+        n
+        for n, p in net.named_parameters()
+        if not p.requires_grad and p.grad is not None
+    ]
+    assert not stray, stray
+    bad = [
+        n
+        for n, p in net.named_parameters()
+        if p.grad is not None and not p.grad.isfinite().all()
+    ]
+    assert not bad, bad
+
+
+@pytest.mark.parametrize("name", ["plainusr", "plainusr_ultra", "plainusr_large"])
+def test_plainusr_trains_the_network_it_evaluates(name: str) -> None:
+    """A-03: plainusr_ultra's training graph dropped blockm/block2; eval ran them untrained."""
+    net = _net(name)
+    x = torch.rand(1, 3, 13, 11)
+    with torch.no_grad():
+        torch.testing.assert_close(net.train()(x), net.eval()(x), rtol=1e-5, atol=1e-5)
+
+
+def test_aether_prepare_qat_in_reduced_precision() -> None:
+    """A-13: the priming forward of prepare_qat() runs in the net's dtype."""
+    net = _net("aether_small").to(torch.bfloat16)
+    net.prepare_qat()
+    assert net.is_quantized
+
+
+# ---------------------------------------------------------------- online re-parameterisation (A-01)
+# The branch forms these blocks trained with before A-01, kept here as the reference.
+def _conv3xc_branch(m, x):
+    return m.conv(F.pad(x, (1, 1, 1, 1), "constant", 0)) + m.sk(x)
+
+
+def _omnishift_branch(m, x):
+    a = m.alpha
+    return a[0] * x + a[1] * m.conv1x1(x) + a[2] * m.conv3x3(x) + a[3] * m.conv5x5(x)
+
+
+def _mbconv_branch(m, x):
+    out = m.expand_conv(x)
+    t, b0 = (
+        F.pad(out, (1, 1, 1, 1), "constant", 0),
+        m.expand_conv.bias.view(1, -1, 1, 1),
+    )
+    t[:, :, :1, :] = b0  # old pad_tensor: the 1-px border holds the expand bias
+    t[:, :, -1:, :] = b0
+    t[:, :, :, :1] = b0
+    t[:, :, :, -1:] = b0
+    return m.reduce_conv(m.se(m.fea_conv(t)) + out) + x
+
+
+def _lk_branch(m, x):
+    lk, sk = m.lk_conv(x), m.sk_conv(x)
+    return lk + m.lk_bias.view(1, -1, 1, 1) + sk + m.sk_bias.view(1, -1, 1, 1)
+
+
+BRANCH = {
+    span_arch.Conv3XC: _conv3xc_branch,  # SPAN+ Conv3XC subclasses it
+    flexnet_arch.OmniShift: _omnishift_branch,
+    plainusr_arch.MBConv: _mbconv_branch,
+    aether_arch.ReparamLargeKernelConv: _lk_branch,
+}
+BLOCKS = {
+    "conv3xc": lambda: span_arch.Conv3XC(6, 5, gain1=2),
+    "conv3xc_nobias": lambda: span_arch.Conv3XC(6, 5, gain1=2, bias=False),
+    "conv3xc_s2": lambda: span_arch.Conv3XC(6, 5, gain1=2, s=2),
+    "spanplus_conv3xc": lambda: spanplus_arch.Conv3XC(6, 5, gain=2),
+    "omnishift": lambda: flexnet_arch.OmniShift(6),
+    "mbconv": lambda: plainusr_arch.MBConv(6),
+    "reparam_lk": lambda: aether_arch.ReparamLargeKernelConv(6, 6, 11, 1, 6, 3),
+}
+
+
+def _branch_of(m: nn.Module):
+    return next(f for cls, f in BRANCH.items() if isinstance(m, cls))
+
+
+def _out_and_grads(net, x, fwd=None):
+    out = (fwd or net)(x)
+    params = [p for p in net.parameters() if p.requires_grad]
+    grads = torch.autograd.grad(
+        out, [x, *params], torch.ones_like(out) / out.numel() ** 0.5
+    )
+    return out, grads
+
+
+@pytest.mark.parametrize("dtype", [torch.float64, torch.float32])
+@pytest.mark.parametrize("name", BLOCKS)
+def test_fused_training_block_equals_branch_form(name: str, dtype) -> None:
+    """Same function of (x, params): outputs and every gradient match, borders included."""
+    m = BLOCKS[name]().to(dtype).train()
+    with torch.no_grad():  # non-trivial biases, alphas and an unsaturated ASR
+        for p in m.parameters():
+            if p.requires_grad:
+                p.normal_(0, 0.3)
+    x = torch.randn(2, 6, 17, 23, dtype=dtype, requires_grad=True)
+    out, grads = _out_and_grads(m, x)
+    ref, ref_grads = _out_and_grads(m, x, lambda t: _branch_of(m)(m, t))
+    tol = (
+        {"rtol": 1e-10, "atol": 1e-12}
+        if dtype == torch.float64
+        else {"rtol": 1e-4, "atol": 1e-5}
+    )
+    torch.testing.assert_close(out, ref, **tol)
+    for g, r in zip(grads, ref_grads, strict=True):
+        torch.testing.assert_close(g, r, **tol)
+
+
+REPARAM_NETS = {
+    "span": {},
+    "span_fast": {},
+    "spanplus": {},
+    "spanplus_sts": {},
+    "flexnet": {"num_blocks": (1, 1), "dim": 16},
+    "plainusr": {},
+    "plainusr_ultra": {},
+    "plainusr_large": {},
+    "aether_small": {"drop_path_rate": 0.0},
+}
+
+
+@pytest.mark.parametrize("name", REPARAM_NETS)
+def test_fused_training_network_equals_branch_form(monkeypatch, name: str) -> None:
+    """fp64, whole network in train mode: output and every parameter gradient as with the branch
+    forms (state_dict keys and init are unchanged, so old checkpoints train on identically)."""
+    net = _net(name, **REPARAM_NETS[name]).double().train()
+    x = torch.rand(1, 3, 19, 13, dtype=torch.float64, requires_grad=True)
+    out, grads = _out_and_grads(net, x)
+    for cls, f in BRANCH.items():
+        monkeypatch.setattr(cls, "forward", f)
+    ref, ref_grads = _out_and_grads(net, x)
+    torch.testing.assert_close(out, ref, rtol=1e-9, atol=1e-11)
+    for g, r in zip(grads, ref_grads, strict=True):
+        torch.testing.assert_close(g, r, rtol=1e-8, atol=1e-11)
+
+
+# ---------------------------------------------------------------- eval kernel cache (MT-09)
+CACHED = {"span": {}, "spanplus": {}, "flexnet": {"num_blocks": (1, 1), "dim": 16}}
+
+
+def _fresh(net: nn.Module, x: torch.Tensor) -> torch.Tensor:
+    """What the current weights give: a train-mode copy fuses on the fly. Also asserts that the
+    deploy kernel each block just ran with is the fused kernel of its current weights."""
+    with torch.no_grad():
+        for m in net.modules():
+            if isinstance(m, span_arch.Conv3XC | flexnet_arch.OmniShift):
+                k = m.fused_kernel()
+                k = k[0] if isinstance(k, tuple) else k
+                deploy = m.eval_conv if hasattr(m, "eval_conv") else m.conv5x5_reparam
+                assert torch.equal(deploy.weight, k)
+        return copy.deepcopy(net).train()(x)
+
+
+@pytest.mark.parametrize("name", CACHED)
+def test_eval_forward_uses_the_cached_kernel(monkeypatch, name: str) -> None:
+    net = _net(name, **CACHED[name]).eval()  # eval() fuses once
+    calls = []
+    for cls in (span_arch.Conv3XC, flexnet_arch.OmniShift):
+        f = cls.fused_kernel
+        monkeypatch.setattr(
+            cls, "fused_kernel", lambda self, f=f: calls.append(1) or f(self)
+        )
+    x = torch.rand(1, 3, 20, 12)
+    with torch.inference_mode():
+        net(x)
+        net(x)
+    assert not calls
+
+
+@pytest.mark.parametrize("name", CACHED)
+def test_eval_kernel_follows_ema_optimizer_and_load(name: str) -> None:
+    """The EMA copy stays in eval and is lerped in place; load_state_dict and optimizer steps write
+    in place too: every in-place update reaches the next eval forward without an eval() call."""
+    net = _net(name, **CACHED[name]).train()
+    x = torch.rand(1, 3, 20, 12)
+    ema = Ema(net, decay=0.5)
+    ema.update()  # the first update copies
+    with torch.inference_mode():
+        before = ema.module(x)
+    opt = torch.optim.SGD([p for p in net.parameters() if p.requires_grad], lr=0.5)
+    for _ in range(2):
+        net(x).square().mean().backward()
+        opt.step()
+        opt.zero_grad()
+        ema.update()  # torch._foreach_lerp_
+    with torch.inference_mode():
+        out = ema.module(x)
+    assert not torch.allclose(out, before)
+    torch.testing.assert_close(out, _fresh(ema.module, x))
+    # load_state_dict into a model that already cached its kernels in eval mode
+    other = _net(name, **CACHED[name]).eval()
+    with torch.inference_mode():
+        other(x)
+    other.load_state_dict(net.state_dict())
+    with torch.inference_mode():
+        torch.testing.assert_close(other(x), _fresh(net, x))
+    # an optimizer step on a net that is in eval mode
+    other(x).square().mean().backward()
+    torch.optim.SGD(other.parameters(), lr=0.5).step()
+    with torch.inference_mode():
+        torch.testing.assert_close(other(x), _fresh(other, x))
+
+
+# ---------------------------------------------------------------- ONNX export (MT-01)
+@pytest.mark.filterwarnings("ignore")
+@pytest.mark.parametrize("name", ["span", "span_fast", "spanplus", "plainusr_ultra"])
+def test_reparam_family_exports_dynamic_onnx(name: str) -> None:
+    """The TorchScript exporter rejects a conv whose kernel is computed: SPAN's eval forward is the
+    deploy conv again, PlainUSR (and float Aether, test_qat) export their branch form; spanplus
+    also carries DySample's dynamic normaliser."""
+    errs = _ort_errors(
+        _net(name),
+        (1, 3, 20, 20),
+        [(1, 3, 20, 20), (1, 3, 32, 24), (1, 3, 27, 41), (2, 3, 24, 32)],
+    )
+    assert max(errs) < 1e-4, errs
+
+
+def _convert_py():
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location(
+        "neosr_entry_convert_s2", root / "convert.py"
+    )
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod
+
+
+@pytest.mark.filterwarnings("ignore")
+def test_convert_exports_span(tmp_path) -> None:
+    pytest.importorskip("onnxruntime")
+    torch.save({"params": _net("span", 2).state_dict()}, tmp_path / "w.pth")
+    argv = ["--input", str(tmp_path / "w.pth"), "-net", "span", "-s", "2"]
+    assert _convert_py().main(argv) == 0
+    assert (tmp_path / "w_fp32.onnx").is_file()
+
+
+# ---------------------------------------------------------------- Aether float graph (A-09)
+def test_aether_float_training_is_one_dynamo_graph() -> None:
+    """Idle QuantStubs were 68 skipped calls: 10 graphs / 9 breaks per forward."""
+    torch._dynamo.reset()
+    try:
+        net = _net("aether_small").train()
+        exp = torch._dynamo.explain(net)(torch.rand(1, 3, 16, 16))
+    finally:
+        torch._dynamo.reset()
+    assert (exp.graph_count, exp.graph_break_count) == (1, 0), exp.break_reasons
+
+
+# ---------------------------------------------------------------- PlainUSR deploy (A-11)
+@pytest.mark.parametrize("name", ["plainusr", "plainusr_ultra", "plainusr_large"])
+def test_plainusr_deploy_matches_eval(name: str) -> None:
+    net = _net(name)
+    with torch.no_grad():  # trained-like weights: unsaturated ASR, non-uniform PConv
+        for p in net.parameters():
+            p.add_(0.05 * torch.randn_like(p))
+    net.eval()
+    x = torch.rand(1, 3, 13, 11)
+    with torch.no_grad():
+        ref = net(x)
+        deployed = copy.deepcopy(net)
+        deployed.switch_to_deploy()
+        out = deployed(x)
+        net.switch_to_deploy(prune=True)
+        pruned = net(x)
+    blocks = (plainusr_arch.MBConv, plainusr_arch.PConv)
+    assert not any(isinstance(m, blocks) for m in deployed.modules())
+    torch.testing.assert_close(out, ref, rtol=1e-4, atol=1e-4)
+    assert pruned.shape == ref.shape
+    assert pruned.isfinite().all()
+
+
+# ---------------------------------------------------------------- FlexNet SDPA (MX-14)
+def test_flexnet_sdpa_gets_4d_inputs(monkeypatch) -> None:
+    """3-D q/k/v always take the math kernel; (B', 1, N, C) is flash/efficient-eligible."""
+    seen = []
+    sdpa = F.scaled_dot_product_attention
+    monkeypatch.setattr(
+        F,
+        "scaled_dot_product_attention",
+        lambda q, k, v, **kw: seen.append(q.ndim) or sdpa(q, k, v, **kw),
+    )
+    net = _net("flexnet", num_blocks=(1, 1), dim=16)
+    assert net(torch.rand(1, 3, 19, 13)).isfinite().all()
+    assert seen
+    assert set(seen) == {4}
+
+
+# ---------------------------------------------------------------- span_fast init (A-06)
+def test_span_fast_init_keeps_every_block_alive() -> None:
+    """fan_out init made the bias-free SPAB chain underflow to exact zeros by block 3: blocks 3-5
+    and conv_2 got zero/subnormal gradients that Adam (eps 1e-8) cannot move."""
+    net = _net("span_fast").train()
+    feats = []
+    for b in (net.block_1, net.block_3, net.block_5):
+        b.register_forward_hook(lambda _m, _i, o: feats.append(o[0].std().item()))
+    net(torch.rand(2, 3, 32, 32)).square().mean().backward()
+    assert min(feats) > 1e-2, feats
+    weak = [
+        n
+        for n, p in net.named_parameters()
+        if p.requires_grad and p.grad.abs().max() < 1e-6
+    ]
+    assert not weak, weak

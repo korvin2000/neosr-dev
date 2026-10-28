@@ -7,6 +7,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from neosr.archs.arch_util import DySample
+from neosr.archs.span_arch import param_key
 
 
 class Interpolate(nn.Module):
@@ -99,7 +100,8 @@ class OmniShift(nn.Module):
         )
         self.alpha = nn.Parameter(torch.randn(4), requires_grad=True)
 
-        # deploy conv (export): fused kernel, refreshed on eval() and state_dict()
+        # deploy conv (eval, export): fused kernel, refreshed on eval(), state_dict() and in an
+        # eval forward after any in-place parameter update (EMA lerp, load_state_dict)
         self.conv5x5_reparam = nn.Conv2d(
             in_channels=dim,
             out_channels=dim,
@@ -108,18 +110,7 @@ class OmniShift(nn.Module):
             groups=dim,
             bias=False,
         ).requires_grad_(requires_grad=False)
-
-    def forward_train(self, x):
-        out1x1 = self.conv1x1(x)
-        out3x3 = self.conv3x3(x)
-        out5x5 = self.conv5x5(x)
-
-        return (
-            self.alpha[0] * x
-            + self.alpha[1] * out1x1
-            + self.alpha[2] * out3x3
-            + self.alpha[3] * out5x5
-        )
+        self._key = None  # param_key() the deploy conv was fused at
 
     def fused_kernel(self):
         """Identity, conv1x1, conv3x3 and conv5x5 folded into one depth-wise 5x5 kernel."""
@@ -137,6 +128,7 @@ class OmniShift(nn.Module):
     @torch.no_grad()
     def reparam_5x5(self):
         self.conv5x5_reparam.weight.copy_(self.fused_kernel())
+        self._key = param_key(self)
 
     def _save_to_state_dict(self, destination, prefix, keep_vars):
         self.reparam_5x5()  # saved deploy kernel matches weights changed in any mode
@@ -149,10 +141,13 @@ class OmniShift(nn.Module):
         return self
 
     def forward(self, x):
-        if self.training:
-            return self.forward_train(x)
-        # fused on the fly: never stale, whatever changed the branch weights in eval mode
-        return F.conv2d(x, self.fused_kernel(), padding=2, groups=self.conv5x5.groups)
+        if self.training or torch.compiler.is_compiling():
+            # online re-parameterisation: alpha-weighted identity + dw 1x1/3x3/5x5 is one dw 5x5,
+            # the same function of (x, params), so outputs and gradients match the branch form
+            return F.conv2d(x, self.fused_kernel(), padding=2, groups=self.conv5x5.groups)
+        if self._key != param_key(self):
+            self.reparam_5x5()
+        return self.conv5x5_reparam(x)
 
 
 class LMLTVIT(nn.Module):
@@ -242,14 +237,15 @@ class LMLTVIT(nn.Module):
         v, lepe = self.get_lepe(v, self.get_v)
 
         if self.flash_attn:
+            # 4-D (B', 1, N, C): fused SDPA kernels need it, 3-D always takes the math path
             x = (
                 F.scaled_dot_product_attention(
-                    q,
-                    k,
-                    v,
+                    q[:, None],
+                    k[:, None],
+                    v[:, None],
                     scale=self.scale,
                     dropout_p=self.attn_drop_v if self.training else 0.0,
-                )
+                )[:, 0]
                 + lepe
             )
         else:

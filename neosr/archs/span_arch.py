@@ -49,6 +49,12 @@ def pixelshuffle_block(in_channels, out_channels, upscale_factor=2, kernel_size=
     return sequential(conv, pixel_shuffle)
 
 
+def param_key(m: nn.Module) -> tuple:
+    """Changes on every in-place parameter update (optimizer step, EMA lerp, load_state_dict) and on
+    reallocation (.to(), deepcopy); not on writes through `.data` (eval() refreshes after those)."""
+    return tuple((p.data_ptr(), p._version) for p in m.parameters())
+
+
 def fuse_conv3xc(sk: nn.Conv2d, conv: nn.Sequential):
     """Fold the 1x1 skip and the 1x1-3x3-1x1 branch into one 3x3 kernel (fp32 under autocast)."""
     with torch.autocast(sk.weight.device.type, enabled=False):
@@ -112,7 +118,8 @@ class Conv3XC(nn.Module):
             ),
         )
 
-        # deploy conv (export): fused kernel, refreshed on eval() and state_dict()
+        # deploy conv (eval, export): fused kernel, refreshed on eval(), state_dict() and in an
+        # eval forward after any in-place parameter update (EMA lerp, load_state_dict)
         self.eval_conv = nn.Conv2d(
             in_channels=c_in,
             out_channels=c_out,
@@ -121,6 +128,7 @@ class Conv3XC(nn.Module):
             stride=s,
             bias=bias,
         ).requires_grad_(requires_grad=False)
+        self._key = None  # param_key() the eval_conv was fused at
 
     def fused_kernel(self):
         return fuse_conv3xc(self.sk, self.conv)
@@ -132,6 +140,7 @@ class Conv3XC(nn.Module):
         self.eval_conv.weight.copy_(w)
         if b is not None:
             self.eval_conv.bias.copy_(b)
+        self._key = param_key(self)
 
     def _save_to_state_dict(self, destination, prefix, keep_vars):
         self.update_params()  # saved deploy kernel matches weights changed in any mode
@@ -144,10 +153,13 @@ class Conv3XC(nn.Module):
         return self
 
     def forward(self, x):
-        if self.training:
-            return self.conv(F.pad(x, (1, 1, 1, 1), "constant", 0)) + self.sk(x)
-        # fused on the fly: never stale, whatever changed the branch weights in eval mode
-        return F.conv2d(x, *self.fused_kernel(), stride=self.stride, padding=1)
+        if self.training or torch.compiler.is_compiling():
+            # online re-parameterisation: the fused kernel is the same function of (x, params) as
+            # 1x1 skip + 1x1-3x3-1x1 on the zero-padded input, so outputs and gradients match
+            return F.conv2d(x, *self.fused_kernel(), stride=self.stride, padding=1)
+        if self._key != param_key(self):
+            self.update_params()
+        return self.eval_conv(x)
 
 
 class SPAB(nn.Module):
@@ -186,7 +198,7 @@ class span(nn.Module):
     @staticmethod
     def _init_weights(m) -> None:
         if isinstance(m, nn.Conv2d | nn.Linear):
-            nn.init.kaiming_normal_(m.weight, a=0, mode='fan_out', nonlinearity='linear')
+            nn.init.kaiming_normal_(m.weight, a=0, mode="fan_in", nonlinearity="linear")
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
@@ -255,7 +267,14 @@ class span(nn.Module):
         )
 
         if self.fast:
+            # A-06: variance-preserving init with the head scaled so the features start at std ~4.
+            # The bias-free SPAB gate (out3 + x) * (sigmoid(out3) - 0.5) is quadratic below
+            # |out3| ~ 2: with fan_out init the chain underflowed to exact zeros by block 3 (no
+            # gradient for blocks 3-5 and conv_2). conv_cat takes the head features back down.
             self.apply(self._init_weights)
+            with torch.no_grad():
+                self.conv_9x9.weight.mul_(8)
+                self.conv_cat.weight.mul_(1 / 8)
 
     @property
     def is_norm(self):
