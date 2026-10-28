@@ -44,7 +44,9 @@ bf16 stays the penalty default of the recipe only if all hold, else the template
   and scalar256) and at a trained patch D (2k GAN updates): max |raw R1/R2 relative error| <= 3 %; penalty-only
   D-parameter gradient cosine >= 0.999 per batch, norm ratio in [0.97, 1.03], every parameter tensor's cosine >= 0.99;
 - the CUDA double-backward tests (bf16, channels_last, both heads) pass;
-- 2k GAN updates from the pretrain, bf16 vs `penalty_fp32`, same seed: dev |dPSNR| <= 0.1 dB, |dTOPIQ| <= 0.005,
-  |dLPIPS| <= 0.003, |dDISTS| <= 0.002 at 2k, mean raw R1/R2 over updates 1k-2k within a factor 0.8-1.25, no skipped update.
+- 2k GAN updates from the pretrain, bf16 vs `penalty_fp32`, same seed, plus a bf16 replicate (cuDNN autotuning makes
+  same-config runs differ): dev |dPSNR| <= 0.1 dB, |dTOPIQ| <= 0.005, |dLPIPS| <= 0.003, |dDISTS| <= 0.002 at 2k, each
+  widened to twice the replicate gap if that is larger; mean raw R1/R2 over updates 1k-2k within a factor 0.8-1.25; no
+  skipped update.
 Reported but not gating: one-probe gradient variance (16 draws, 2 batches) and fixed-probe clip incidence (EMA G for the
 trained probe, unaugmented batches, gamma 1). The clip incidence that matters is each arm's logged `clipped_d`.
