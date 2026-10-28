@@ -455,6 +455,7 @@ Ultra light).
 | [DUnet](https://github.com/umzi2/DUnet) | `dunet` | 2024 |
 | [MetaGan](https://github.com/umzi2/MetaGan) | `metagan` | 2024 |
 | [ResGAN](https://github.com/neosr-project/neosr/blob/master/neosr/archs/resgan_arch.py) | `resgan` | 2023 |
+| [R3GAN](https://github.com/brownvc/R3GAN) D (group width 16, patch or the paper's 4x4 scalar head) | `r3gan`, `r3gan_scalar128`, `r3gan_scalar256` | 2024 |
 
 ### other components
 

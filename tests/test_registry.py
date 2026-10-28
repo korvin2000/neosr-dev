@@ -23,7 +23,10 @@ TABLES = {
     "neosr.metrics": "METRICS",
 }
 # networks that take no run scale (discriminators, feature extractors)
-NON_SR_ARCHS = {"dunet", "ea2fpn", "metagan", "patchgan", "resgan", "unet"}
+NON_SR_ARCHS = {
+    *("dunet", "ea2fpn", "metagan", "patchgan", "resgan", "unet"),
+    *("r3gan", "r3gan_scalar128", "r3gan_scalar256"),
+}
 # reviewed exceptions: the scale kwarg is read from **kwargs, so the signature cannot show it
 SCALE_VIA_KWARGS = {("neosr.archs", "omnisr")}
 

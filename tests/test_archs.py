@@ -26,9 +26,12 @@ SIZE = {
     "lmlt": 64,
     "lmlt_tiny": 64,
     "lmlt_large": 64,
-}  # lmlt pads to its window only above 32 px
+    "r3gan_scalar256": 256,
+}  # lmlt pads to its window only above 32 px; the r3gan scalar head needs an exact 4x4 final map
 UNSUPPORTED = {("swinir_large", 2): "swinir_large asserts x4 in its ctor"}
 ONLY_1X = {"nafnet", "nafnet_l"}  # 1x restoration networks
+# added after the pre-migration fixture archive: smoke-tested only in NEOSR_ARCH_FIXTURE mode
+NO_FIXTURE = {"nafnet", "nafnet_l", "r3gan", "r3gan_scalar128", "r3gan_scalar256"}
 TOO_BIG = {
     "hit_srf_large": "allocates >9.6 GiB per forward at any input size (shared 24 GiB GPU)"
 }
@@ -163,7 +166,7 @@ def test_arch(name: str, scale: int | None) -> None:
     size = SIZE.get(name, 32 if kw else 128)
 
     fx = None
-    if FIXTURE is not None:
+    if FIXTURE is not None and name not in NO_FIXTURE:
         fx = torch.load(FIXTURE / f"{name}_s{scale or 4}.pt", weights_only=True)
         net.load_state_dict(fx["state_dict"], strict=True)
     x = fx["input"] if fx else torch.rand(1, 3, size, size)

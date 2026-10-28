@@ -202,3 +202,30 @@ worktree `.venv` has no torch), each file in its own capped scope (`systemd-run 
   (metagan at chance from ~2.4k updates; `gpu_profile.md:204-213`).
 - R3GAN design final (`r3gan/DESIGN.md` section 7: Opus and Codex approved with changes, applied); brief `r3gan/TASK_R3GAN.md`;
   implementation + A/B handed to an Opus 5.5 xhigh session in this worktree.
+
+## 2026-10-28 session 5: R3GAN track (Opus 5.5 implements, Codex gpt-6-astra reviews each diff; brief `r3gan/TASK_R3GAN.md`)
+Tests as in session 4 (main checkout venv, `PYTHONPATH` = worktree, `CUDA_VISIBLE_DEVICES=` so CPU paths run, one file per
+4 GB-capped scope).
+
+### R1 discriminator
+- Done: `neosr/archs/r3gan_arch.py` (class `r3gan`, factories `r3gan_scalar128`/`r3gan_scalar256`; `ARCHS` rows with scale
+  `None`): 1x1 stem, residual blocks with 1x1 expand / grouped 3x3 (group width 16) / zero-init 1x1 project, in-place
+  biased leaky ReLU 0.2 (bias cast to the activation dtype: no fp32 promotion under bf16), fix-up init (MSR, block gain
+  `sqrt(2/1.04) * (blocks * stages)^(-1/4)`), FIR `[1,3,3,1]^2/64` stride-2 depthwise conv (non-persistent buffer) + 1x1
+  projection, heads `patch` / `scalar` (exact 4x4 basis; `ValueError` naming the GT size), 4-D output. Measured: 0.869 M
+  / 1.210 M / 1.546 M params; 0.604 / 2.415 GMAC at GT 128 / 256 (patch), 0.609 / 2.442 (scalar128 / scalar256): the
+  spec's numbers. readme discriminator row; `test_registry` NON_SR list; `test_archs` sizes (scalar256 at 256) and a
+  `NO_FIXTURE` set (nafnet and r3gan postdate the pre-migration fixture archive).
+- Tests `tests/test_s3_r3gan.py` (19): golden keys/shapes/params per row, no persistent buffer, wrong-size refusal; zero
+  `lin3` and linearity at init; init draw arguments recorded per layer (exact gains and grouped fan-in); a randomised
+  D (both activation branches) against a functional reference; FIR == reshape reference == explicit window sum,
+  channels_last; `gradgradcheck` (fp64, both heads); penalty parameter gradients vs finite differences
+  (`functional_call`, fp64); bf16 activations under autocast; `aot_eager` == eager; a regularised update through a
+  compiled D runs the eager module.
+- Codex review: no defect against the spec or the reference (`Networks.py`, `Resamplers.py`, `FusedOperators.py`); 3
+  findings fixed: fixture mode would demand r3gan fixtures (also nafnet: `NO_FIXTURE`); the init test's 10 % tolerance
+  accepted gain `sqrt(2)` and the init-time linearity test was blind to slope/gain/order (-> recorded draw arguments +
+  functional reference with non-zero lin3/biases); `gradgradcheck` on the input only never checked the penalty's
+  parameter gradients (-> finite-difference test). "Export tables": no discriminator export table exists (Ds are not
+  in `convert.py`'s `NO_ONNX` either); the readme table and the registry's D list are the listings.
+- Verified: test_s3_r3gan (19), test_registry, test_archs (CPU part): 213 passed.

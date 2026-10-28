@@ -64,6 +64,8 @@ ARCHS: dict[str, tuple[str, str | None]] = {
     "plainusr": ("plainusr_arch", "scale"), "plainusr_ultra": ("plainusr_arch", "scale"),
     "plainusr_large": ("plainusr_arch", "scale"),
     "plksr": ("plksr_arch", "upscaling_factor"), "plksr_tiny": ("plksr_arch", "upscaling_factor"),
+    "r3gan": ("r3gan_arch", None), "r3gan_scalar128": ("r3gan_arch", None),
+    "r3gan_scalar256": ("r3gan_arch", None),
     "rcan": ("rcan_arch", "scale"),
     "realplksr": ("realplksr_arch", "upscaling_factor"),
     "realplksr_s": ("realplksr_arch", "upscaling_factor"),
