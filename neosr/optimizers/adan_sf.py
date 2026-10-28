@@ -6,80 +6,70 @@ import torch
 from torch import Tensor
 from torch.optim.optimizer import Optimizer
 
+from neosr.config import ConfigError
+from neosr.optimizers.adamw_sf import swap_sf_weights
+from neosr.optimizers.adan import adan_group_step, clip_grad_norm_
 
-def _multi_tensor_adan(
+_SF_STATE = ("z", "exp_avg_sq", "exp_avg_diff", "neg_pre_grad")
+
+
+def _multi_tensor_sf_adan(
     params: list[Tensor],
     grads: list[Tensor],
-    exp_avgs: list[Tensor],
+    z: list[Tensor],
     exp_avg_sqs: list[Tensor],
-    exp_avg_diffs: list[Tensor],
-    neg_pre_grads: list[Tensor],
+    exp_avg_diffs: list[Tensor] = (),  # type: ignore[assignment]
+    neg_pre_grads: list[Tensor] = (),  # type: ignore[assignment]
     *,
     beta1: float,
     beta2: float,
     beta3: float,
-    bias_correction1: float,
     bias_correction2: float,
-    bias_correction3_sqrt: float,
     lr: float,
     ckp1: float,
-    z: list[Tensor],
     weight_decay: float,
     eps: float,
-    schedule_free: bool,
-    clip_global_grad_norm: Tensor | float,
 ) -> None:
-    if len(params) == 0:
-        return
-
-    torch._foreach_mul_(grads, clip_global_grad_norm)
-
-    # for memory saving, we use `neg_pre_grads`
-    # to get some temp variable in a inplace way
-    torch._foreach_add_(neg_pre_grads, grads)
-
-    torch._foreach_mul_(exp_avgs, beta1)
-    torch._foreach_add_(exp_avgs, grads, alpha=1 - beta1)  # m_t
-
-    torch._foreach_mul_(exp_avg_diffs, beta2)
-    torch._foreach_add_(exp_avg_diffs, neg_pre_grads, alpha=1 - beta2)  # diff_t
-
-    torch._foreach_mul_(neg_pre_grads, beta2)
-    torch._foreach_add_(neg_pre_grads, grads)
+    """Schedule-free Adan step; grads are overwritten with the direction U (as adamw_sf does).
+    With beta2 = 0 these are exactly adamw_sf's ops with betas (beta1, beta3)."""
+    u = grads
+    if beta2:
+        torch._foreach_add_(neg_pre_grads, grads)  # d_t = g_t - g_{t-1}
+        torch._foreach_lerp_(exp_avg_diffs, neg_pre_grads, 1 - beta2)  # v_t
+        torch._foreach_mul_(neg_pre_grads, beta2)
+        torch._foreach_add_(neg_pre_grads, grads)  # u_t = g_t + b2 d_t
+        u = neg_pre_grads
     torch._foreach_mul_(exp_avg_sqs, beta3)
-    torch._foreach_addcmul_(
-        exp_avg_sqs, neg_pre_grads, neg_pre_grads, value=1 - beta3
-    )  # n_t
-
+    torch._foreach_addcmul_(exp_avg_sqs, u, u, value=1 - beta3)  # n_t
     denom = torch._foreach_sqrt(exp_avg_sqs)
-    torch._foreach_div_(denom, bias_correction3_sqrt)
     torch._foreach_add_(denom, eps)
-
-    torch._foreach_mul_(params, 1 - lr * weight_decay)
-
-    if schedule_free:
-        step_size_diff = lr * (beta2 / bias_correction2 * (1 - ckp1))
-        step_size = lr * (bias_correction1 * (1 - ckp1))
-        # in-place
-        torch._foreach_lerp_(params, z, weight=ckp1)
-        torch._foreach_addcdiv_(params, exp_avgs, denom, value=-step_size)
-        torch._foreach_addcdiv_(params, exp_avg_diffs, denom, value=-step_size_diff)
-        # z step
-        torch._foreach_sub_(z, grads, alpha=lr)
-    else:
-        step_size_diff = lr * beta2 / bias_correction2
-        step_size = lr / bias_correction1
-        torch._foreach_addcdiv_(params, exp_avgs, denom, value=-step_size)
-        torch._foreach_addcdiv_(params, exp_avg_diffs, denom, value=-step_size_diff)
-
-    torch._foreach_zero_(neg_pre_grads)
-    torch._foreach_add_(neg_pre_grads, grads, alpha=-1.0)
+    if beta2:
+        torch._foreach_copy_(neg_pre_grads, grads)
+        torch._foreach_neg_(neg_pre_grads)  # -g_t for the next step
+        torch._foreach_add_(grads, exp_avg_diffs, alpha=beta2 / bias_correction2)
+    torch._foreach_div_(grads, denom)
+    if weight_decay != 0:
+        torch._foreach_add_(grads, params, alpha=weight_decay)  # decay at the old y
+    # y <- (1-b1) z + b1 x in place, without computing x
+    torch._foreach_lerp_(params, z, weight=ckp1)
+    torch._foreach_add_(params, grads, alpha=lr * (beta1 * (1 - ckp1) - 1))
+    torch._foreach_sub_(z, grads, alpha=lr)
 
 
 class adan_sf(Optimizer):
-    """Unofficial adaptation of Schedule-Free to the Adan optimizer:
-        https://arxiv.org/abs/2405.15682
-        https://arxiv.org/abs/2208.06677.
+    """Schedule-Free (https://arxiv.org/abs/2405.15682) Adan (https://arxiv.org/abs/2208.06677).
+
+    Schedule-free mode, per step with g_t the (clipped) gradient at the train weights y_t:
+        d_t = g_t - g_{t-1} (d_1 = 0),  v_t = b2 v + (1-b2) d_t,  u_t = g_t + b2 d_t,
+        n_t = b3 n + (1-b3) u_t^2,  gamma_t = lr * min(t / warmup_steps, 1) * sqrt(1 - b3^t),
+        U_t = (g_t + b2 / (1 - b2^t) v_t) / (sqrt(n_t) + eps) + weight_decay * y_t,
+        z <- z - gamma_t U_t,  x <- (1 - c_t) x + c_t z,  y = (1 - b1) z + b1 x,
+    with c_t the weight_lr_power/r averaging weight of adamw_sf. Adan's first moment is replaced
+    by the schedule-free interpolation (b1). betas[1] = 0 drops the difference term and is
+    exactly adamw_sf with betas (b1, b3). schedule_free=False is plain Adan (no_prox) with warmup.
+
+    State per parameter: z, exp_avg_sq, plus exp_avg_diff and neg_pre_grad when betas[1] > 0.
+    Schedule-free groups carry sf_version; states of the old recurrence (no sf_version) are refused.
 
     This optimizer requires that .train() and .eval() be called before the
     beginning of training and evaluation respectively. The optimizer should
@@ -90,14 +80,15 @@ class adan_sf(Optimizer):
         params (iterable): iterable of parameters to optimize or
             dicts defining parameter groups.
         lr (float, optional): learning rate. (default: 1.6e-3)
-        betas (Tuple[float, float, float], optional): coefficients used for
-            first- and second-order moments. (default: (0.98, 0.92, 0.9955))
+        betas (Tuple[float, float, float], optional): interpolation (b1),
+            difference EMA (b2) and second moment (b3). (default: (0.98, 0.92, 0.99))
         eps (float, optional): term added to the denominator to improve
             numerical stability. (default: 1e-8)
         weight_decay (float, optional): decoupled weight decay
             (L2 penalty) (default: 0.02)
         max_grad_norm (float, optional): value used to clip
-            global grad norm (default: 0.0 no clip)
+            global grad norm (default: 0.0 no clip; the trainer
+            already clips with train.grad_clip)
         warmup_steps (int): Enables a linear learning rate warmup (default: 0).
         r (float): Use polynomial weighting in the average
             with power r (default: 0).
@@ -107,6 +98,9 @@ class adan_sf(Optimizer):
         schedule_free (bool): Whether to enable Schedule-Free (default: True)
 
     """
+
+    # 2: z takes the preconditioned step (1, unversioned: raw-gradient z, Adan first moment)
+    STATE_VERSION = 2
 
     def __init__(  # type: ignore[no-untyped-def]
         self,
@@ -160,31 +154,15 @@ class adan_sf(Optimizer):
         if not 0.0 <= beta3 < 1.0:
             msg = f"Invalid beta parameter at index 2: {beta3}"
             raise ValueError(msg)
+        if group["schedule_free"]:
+            param_group["sf_version"] = self.STATE_VERSION
         super().add_param_group(param_group)
 
-    @torch.no_grad()
     def eval(self) -> None:
-        for group in self.param_groups:
-            beta1, _, _ = group["betas"]
-            if group["schedule_free"] and group["train_mode"]:
-                for p in group["params"]:
-                    state = self.state[p]
-                    if "z" in state:
-                        # Set p.data to x
-                        p.data.lerp_(end=state["z"], weight=1 - 1 / beta1)
-                group["train_mode"] = False
+        swap_sf_weights(self, train=False)
 
-    @torch.no_grad()
     def train(self) -> None:
-        for group in self.param_groups:
-            beta1, _, _ = group["betas"]
-            if group["schedule_free"] and not group["train_mode"]:
-                for p in group["params"]:
-                    state = self.state[p]
-                    if "z" in state:
-                        # Set p.data to y
-                        p.data.lerp_(end=state["z"], weight=1 - beta1)
-                group["train_mode"] = True
+        swap_sf_weights(self, train=True)
 
     @torch.no_grad()
     def step(self, closure: Callable[..., Any] | None = None) -> float:  # type: ignore[reportIncompatibleMethodOverride,override]
@@ -198,126 +176,74 @@ class adan_sf(Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
-        if self.defaults["max_grad_norm"] > 0:
-            device = self.param_groups[0]["params"][0].device
-            global_grad_norm = torch.zeros((), device=device)
-            for group in self.param_groups:
-                for p in group["params"]:
-                    if p.grad is not None:
-                        grad = p.grad
-                        global_grad_norm.add_(grad.pow(2).sum())
-
-            global_grad_norm = torch.sqrt(global_grad_norm)
-
-            # stays a 0-dim tensor and max_grad_norm a python float:
-            # .item() or torch.tensor(..., device=cuda) would force a host sync every step
-            clip_global_grad_norm: Tensor | float = torch.clamp(
-                self.defaults["max_grad_norm"] / (global_grad_norm + self.param_groups[-1]["eps"]),
-                max=1.0,
-            )
-        else:
-            clip_global_grad_norm = 1.0
-
+        clip_grad_norm_(self.param_groups, self.defaults["max_grad_norm"])
         for group in self.param_groups:
-            params_with_grad = []
-            grads = []
-            exp_avgs = []
-            exp_avg_sqs = []
-            exp_avg_diffs = []
-            z = []
-            neg_pre_grads = []
-
-            beta1, beta2, beta3 = group["betas"]
+            step = group["step"] = group.get("step", 0) + 1
             warmup_steps = group["warmup_steps"]
-            weight_lr_power = group["weight_lr_power"]
-
-            # assume same step across group now to simplify things
-            # per parameter step can be easily support
-            # by making it tensor, or pass list into kernel
-            if "step" in group:
-                group["step"] += 1
-            else:
-                group["step"] = 1
-
-            bias_correction1 = 1.0 - beta1 ** group["step"]
-            bias_correction2 = 1.0 - beta2 ** group["step"]
-            bias_correction3 = 1.0 - beta3 ** group["step"]
-
-            sched = group["step"] / warmup_steps if group["step"] < warmup_steps else 1.0
-            lr = group["lr"] * sched
-            schedule_free = group["schedule_free"]
-
-            if schedule_free:
-                # averaging weights; the step size itself is `lr`, since the
-                # kernel already bias-corrects the denominator
-                r = group["r"]
-                lr_max = group["lr_max"] = max(
-                    lr * math.sqrt(bias_correction3), group["lr_max"]
+            sched = step / warmup_steps if step < warmup_steps else 1.0
+            if not group["schedule_free"]:
+                adan_group_step(
+                    self.state, group, group["lr"] * sched, no_prox=True, foreach=True
                 )
-                weight = (group["step"] ** r) * (lr_max**weight_lr_power)
-                weight_sum = group["weight_sum"] = group["weight_sum"] + weight
-
-                try:
-                    ckp1 = weight / weight_sum
-                except ZeroDivisionError:
-                    ckp1 = 0
-            else:
-                ckp1 = None
-
-            for p in group["params"]:
-                if p.grad is None:
-                    continue
-                params_with_grad.append(p)
-                grads.append(p.grad)
-
-                state = self.state[p]
-                if len(state) == 0:
-                    state["exp_avg"] = torch.zeros_like(p)
-                    state["exp_avg_sq"] = torch.zeros_like(p)
-                    state["exp_avg_diff"] = torch.zeros_like(p)
-                    if schedule_free:
-                        state["z"] = torch.clone(p)
-
-                if "neg_pre_grad" not in state or group["step"] == 1:
-                    state["neg_pre_grad"] = p.grad.clone().mul_(-clip_global_grad_norm)
-
-                exp_avgs.append(state["exp_avg"])
-                exp_avg_sqs.append(state["exp_avg_sq"])
-                exp_avg_diffs.append(state["exp_avg_diff"])
-                if schedule_free:
-                    z.append(state["z"])
-                neg_pre_grads.append(state["neg_pre_grad"])
-
-            if not params_with_grad:
                 continue
 
-            kwargs = {
-                "params": params_with_grad,
-                "grads": grads,
-                "exp_avgs": exp_avgs,
-                "exp_avg_sqs": exp_avg_sqs,
-                "exp_avg_diffs": exp_avg_diffs,
-                "z": z,
-                "neg_pre_grads": neg_pre_grads,
-                "beta1": beta1,
-                "beta2": beta2,
-                "beta3": beta3,
-                "bias_correction1": bias_correction1,
-                "bias_correction2": bias_correction2,
-                "bias_correction3_sqrt": math.sqrt(bias_correction3),
-                "lr": lr,
-                "ckp1": ckp1,
-                "weight_decay": group["weight_decay"],
-                "eps": group["eps"],
-                "schedule_free": schedule_free,
-                "clip_global_grad_norm": clip_global_grad_norm,
-            }
+            beta1, beta2, beta3 = group["betas"]
+            # gamma_t: the bias correction of n is folded into the step, as in adamw_sf
+            lr = group["lr"] * sched * math.sqrt(1.0 - beta3**step)
+            lr_max = group["lr_max"] = max(lr, group["lr_max"])
+            weight = (step ** group["r"]) * (lr_max ** group["weight_lr_power"])
+            weight_sum = group["weight_sum"] = group["weight_sum"] + weight
+            ckp1 = weight / weight_sum if weight_sum else 0.0
 
-            _multi_tensor_adan(**kwargs)
+            params = [p for p in group["params"] if p.grad is not None]
+            if not params:
+                continue
+            for p in params:
+                state = self.state[p]
+                if "z" not in state:
+                    state["z"] = torch.clone(p)
+                    state["exp_avg_sq"] = torch.zeros_like(p)
+                if beta2 and "neg_pre_grad" not in state:
+                    state["exp_avg_diff"] = torch.zeros_like(p)
+                    state["neg_pre_grad"] = -p.grad  # d_1 = 0
+            states = [self.state[p] for p in params]
+            keys = _SF_STATE if beta2 else _SF_STATE[:2]
+
+            _multi_tensor_sf_adan(
+                params,
+                [p.grad for p in params],
+                *([s[k] for s in states] for k in keys),
+                beta1=beta1,
+                beta2=beta2,
+                beta3=beta3,
+                bias_correction2=1.0 - beta2**step,
+                lr=lr,
+                ckp1=ckp1,
+                weight_decay=group["weight_decay"],
+                eps=group["eps"],
+            )
 
         return loss
 
-    def __setstate__(self, state: dict[str, bool]) -> None:
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        # runs for load_state_dict and unpickling, before the optimizer is touched
+        for group in state["param_groups"]:
+            if group.setdefault("schedule_free", True):
+                self._check_sf_group(group, state["state"])
         super().__setstate__(state)
-        for group in self.param_groups:
-            group.setdefault("schedule_free", True)
+
+    @classmethod
+    def _check_sf_group(cls, group: dict[str, Any], state: dict) -> None:
+        hint = "; start a new run with pretrain_network_* instead of resuming"
+        if (version := group.get("sf_version", 1)) != cls.STATE_VERSION:
+            msg = (
+                f"adan_sf: schedule-free state version {version!r}, this adan_sf needs "
+                f"{cls.STATE_VERSION} (the recurrence changed){hint}"
+            )
+            raise ConfigError(msg)
+        need = _SF_STATE if group["betas"][1] else _SF_STATE[:2]
+        for i, p in enumerate(group["params"]):
+            # an empty state is a parameter that has not been stepped yet
+            if (s := state.get(p)) and (missing := [k for k in need if k not in s]):
+                msg = f"adan_sf: schedule-free state of parameter #{i} lacks {missing}{hint}"
+                raise ConfigError(msg)

@@ -1,4 +1,5 @@
 import io
+import math
 
 import pytest
 import torch
@@ -32,16 +33,21 @@ FACTORIES = {
 }
 
 
-def test_adan_sf_warmup_scales_z_step():
+def test_adan_sf_warmup_scales_first_step():
+    # stage 1 asserted the raw-gradient z step (-LR * g), i.e. the O-01 bug
     deltas = []
     for warmup in (0, 10):
         p = _param()
         p0 = p.detach().clone()
-        opt = adan_sf([p], lr=LR, warmup_steps=warmup)
+        opt = adan_sf([p], lr=LR, warmup_steps=warmup, weight_decay=0.0)
         _run(opt, p, 1)
-        deltas.append(opt.state[p]["z"] - p0)
-    torch.testing.assert_close(deltas[0], -LR * _grad(0))
-    torch.testing.assert_close(deltas[1], deltas[0] / 10)
+        deltas.append((opt.state[p]["z"] - p0, p.detach() - p0))
+    # z and y take the same preconditioned step: gamma_1 * g / (sqrt(n_1) + eps)
+    g, q = _grad(0), math.sqrt(1 - 0.99)
+    for d in deltas[0]:
+        torch.testing.assert_close(d, -LR * q * g / (q * g.abs() + 1e-8))
+    for d0, d1 in zip(*deltas, strict=True):
+        torch.testing.assert_close(d1, d0 / 10)
 
 
 def test_adan_sf_warmup_scales_update_without_sf():
