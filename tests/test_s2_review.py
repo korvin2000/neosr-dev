@@ -1,7 +1,7 @@
 """Stage 2 review fixes (two Codex reviews of the merged branch): one regression test per finding."""
 
-import logging
 import importlib.util
+import logging
 import math
 import weakref
 from pathlib import Path
@@ -12,14 +12,14 @@ from torch import nn
 from torch.nn import functional as F
 from torch.utils._python_dispatch import TorchDispatchMode
 
-from neosr.archs.arch_util import window_sdpa
+from neosr.archs.arch_util import DySample, window_sdpa
+from neosr.cli import convert_args
 from neosr.config import ConfigError, load_config, validate_train
 from neosr.losses.base import restoring_clamp
 from neosr.losses.consistency_loss import consistency_loss
 from neosr.metrics.calculate import _ssim_kernel, calculate_ssim_pt
 from neosr.optimizers import adamw_sf, adan, adan_sf
 from neosr.optimizers.adan import clip_grad_norm_
-from neosr.cli import convert_args
 from neosr.utils import get_root_logger
 from tests.test_config import BASE, HEAD, write
 from tests.test_model import batches, build, make_opt, run
@@ -47,8 +47,10 @@ def test_consistency_loss_passes_inward_gradients_of_out_of_range_outputs():
     loss = consistency_loss(blur=False, cosim=False)
     loss(restoring_clamp(raw), gt).backward()
     g = raw.grad
-    assert (g[..., :4, :4] <= 0).all() and g[..., :4, :4].any()
-    assert (g[..., -4:, -4:] >= 0).all() and g[..., -4:, -4:].any()
+    assert (g[..., :4, :4] <= 0).all()
+    assert g[..., :4, :4].any()
+    assert (g[..., -4:, -4:] >= 0).all()
+    assert g[..., -4:, -4:].any()
     # in-range values: unchanged from the legacy hard clamp
     ref = gt.clone().requires_grad_()
     loss(ref.clamp(1 / 255, 1), gt.flip(-1)).backward()
@@ -238,7 +240,10 @@ class PaddedWindows(nn.Module):
     def __init__(self, ws: int = 20, c: int = 4) -> None:
         super().__init__()
         self.ws, n = ws, ws * ws
-        self.inp, self.out = nn.Conv2d(3, c, 3, padding=1), nn.Conv2d(c, 3, 3, padding=1)
+        self.inp, self.out = (
+            nn.Conv2d(3, c, 3, padding=1),
+            nn.Conv2d(c, 3, 3, padding=1),
+        )
         self.bias = nn.Parameter(torch.randn(1, n, n))
         self.register_buffer("tri", torch.triu(torch.ones(n, n), 1) * -100.0)
 
@@ -250,7 +255,9 @@ class PaddedWindows(nn.Module):
         t = x.view(b, c, hp // ws, ws, wp // ws, ws).permute(0, 2, 4, 3, 5, 1)
         t = t.reshape(-1, 1, ws * ws, c)
         nw = (hp // ws) * (wp // ws)
-        mask = (torch.arange(nw) > 0).float().view(-1, 1, 1) * self.tri  # shift-mask-like
+        mask = (torch.arange(nw) > 0).float().view(
+            -1, 1, 1
+        ) * self.tri  # shift-mask-like
         t = window_sdpa(t, t, t, self.bias, mask, scale=0.5)
         t = t.reshape(b, hp // ws, wp // ws, ws, ws, c).permute(0, 5, 1, 3, 2, 4)
         return self.out(t.reshape(b, c, hp, wp)[..., :h, :w])
@@ -259,5 +266,36 @@ class PaddedWindows(nn.Module):
 def test_dynamic_export_traced_at_one_window_runs_at_several(tmp_path, onnx_deps):
     torch.manual_seed(0)
     net = PaddedWindows().eval()
-    assert convert_py.TRACE[-2:] == (20, 20)  # one window at the trace shape, four at 32x24
-    convert_py.to_onnx(_convert_argv(tmp_path), net)  # verified at 20x20, 32x24 and batch 2
+    assert convert_py.TRACE[-2:] == (
+        20,
+        20,
+    )  # one window at the trace shape, four at 32x24
+    convert_py.to_onnx(
+        _convert_argv(tmp_path), net
+    )  # verified at 20x20, 32x24 and batch 2
+
+
+# ---------------------------------------------------------------------------- 8 fp16 DySample
+def test_module_path_of_exported_node_names():
+    mp = convert_py._module_path
+    assert mp("/a/a.0/a.0.0/up/offset/Conv") == "a.0.0.up.offset"
+    assert mp("/ups.0/ups.0.1/Mul_3") == "ups.0.1"
+    assert mp("/Mul") == mp("Constant_7") == ""
+
+
+def test_fp16_export_keeps_dysample_in_fp32_at_a_wide_input(tmp_path, onnx_deps):
+    torch.manual_seed(0)
+    net = nn.Sequential(nn.Conv2d(3, 4, 1), nn.Sequential(DySample(4, 3, 2, 4))).eval()
+    args = _convert_argv(
+        tmp_path, "-fp16", "-static", "3", "4", "1024"
+    )  # output width 2048
+    convert_py.to_onnx(
+        args, net
+    )  # verified: fp16 ORT vs fp32 torch, max 2e-2, mean 2e-3
+    import onnx  # ruff: ignore[import-outside-top-level]
+
+    graph = onnx.load(str(tmp_path / "m_fp16.onnx")).graph
+    assert graph.input[0].type.tensor_type.elem_type == onnx.TensorProto.FLOAT16
+    grid = [n for n in graph.node if n.op_type == "GridSample"]
+    assert grid
+    assert all(n.name.startswith("/1/1.0/") for n in grid)

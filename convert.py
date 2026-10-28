@@ -15,6 +15,7 @@ from torch import nn
 from torch.ao.quantization import FakeQuantizeBase
 
 from neosr.archs import build_network
+from neosr.archs.arch_util import DySample
 from neosr.cli import convert_args
 from neosr.config import ConfigError
 from neosr.models.checkpoint import load_weights, read_weights
@@ -349,16 +350,60 @@ def check_export(args: argparse.Namespace) -> None:
         raise ConfigError(msg) from e
 
 
-def to_fp16(src: str, dst: str) -> None:
+def _module_path(node_name: str) -> str:
+    """The qualified module name of a TorchScript-exported node ("/a/a.0/up/Conv" -> "a.0.up"): a
+    scope segment is the full name below a container, else the name relative to its parent."""
+    path = ""
+    for seg in node_name.split("/")[1:-1]:
+        path = seg if not path or seg.startswith(path + ".") else f"{path}.{seg}"
+    return path
+
+
+def _cast_to(node) -> int:
+    return next(a.i for a in node.attribute if a.name == "to")
+
+
+def to_fp16(src: str, dst: str, fp32_modules: Sequence[str] = ()) -> None:
     """A float16 graph: weights, compute and the input/output tensors (MT-16), with ORT's own
-    converter (onnxconverter-common is unmaintained); ops without fp16 kernels get casts."""
+    converter (onnxconverter-common is unmaintained); ops without fp16 kernels get casts. The nodes
+    of `fp32_modules` (qualified names) and every GridSample stay fp32: DySample's sampling grid
+    holds pixel coordinates that fp16 rounds to whole pixels at widths of 1-2k."""
     import onnx  # noqa: PLC0415
     from onnxruntime.transformers.float16 import (  # noqa: PLC0415
+        DEFAULT_OP_BLOCK_LIST,
         convert_float_to_float16,
     )
     from onnxruntime.transformers.onnx_model import OnnxModel  # noqa: PLC0415
 
-    model = OnnxModel(convert_float_to_float16(onnx.load(src)))
+    graph = onnx.load(src)
+    keep = [
+        n.name
+        for n in graph.graph.node
+        if any(
+            not q or (p := _module_path(n.name)) == q or p.startswith(q + ".")
+            for q in fp32_modules
+        )
+    ]
+    model = OnnxModel(
+        convert_float_to_float16(
+            graph,
+            op_block_list=[*DEFAULT_OP_BLOCK_LIST, "GridSample"],
+            node_block_list=keep,
+        )
+    )
+    # the converter casts every kept node's output to fp16 and back for the next kept node: skip the
+    # fp16 round trip (only Cast(fp16) -> Cast(fp32) pairs, so no int or other casts collapse)
+    f16, f32 = onnx.TensorProto.FLOAT16, onnx.TensorProto.FLOAT
+    producer = model.output_name_to_node()
+    for n in model.nodes():
+        p = producer.get(n.input[0]) if n.op_type == "Cast" else None
+        if (
+            p is not None
+            and p.op_type == "Cast"
+            and (_cast_to(p), _cast_to(n)) == (f16, f32)
+        ):
+            n.input[0] = p.input[0]
+    model.prune_graph()
     model.topological_sort()
     onnx.save(model.model, dst)
     onnx.checker.check_model(onnx.load(dst))
@@ -439,7 +484,8 @@ def to_onnx(args: argparse.Namespace, model: nn.Module | None = None) -> None:
     if args.fp16:  # from the portable fp32 graph, not the ORT-optimized one
         print("-------- Converting to fp16...")
         output_fp16 = filename + "_fp16" + extension
-        to_fp16(output_fp32, output_fp16)
+        dysample = [n for n, m in model.named_modules() if isinstance(m, DySample)]
+        to_fp16(output_fp32, output_fp16, dysample)
         if args.nocheck is False:
             assert_verify(args, output_fp16, model, fp16=True)
         print(f"-------- Half-precision model saved at: {output_fp16}.")
