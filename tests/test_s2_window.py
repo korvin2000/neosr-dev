@@ -8,6 +8,7 @@ stay within a small multiple of the old one.
 
 import copy
 import inspect
+import math
 import subprocess
 import types
 from pathlib import Path
@@ -92,7 +93,6 @@ SMALL = {
 CLS = {"craft_dead_pos": "craft"}
 # aligned to img_size (persistent-mask path), non-aligned (padded, mask rebuilt), odd
 SIZES = {"craft": ((16, 16), (32, 16), (20, 12)), "craft_dead_pos": ((16, 16), (20, 12))}
-NEW_KW = {"craft": {"pad_extra_window": True}, "craft_dead_pos": {"pad_extra_window": True}}
 
 
 def no_drop_path(cls) -> dict:
@@ -109,7 +109,7 @@ def pair(name: str, new_kw: dict | None = None, **kw):
         for n, p in a.named_parameters():
             if n.endswith("relative_position_bias_table"):
                 p.normal_()
-    b = getattr(NEW[stem], cls)(upscale=2, **cfg, **kw, **NEW_KW.get(name, {}), **(new_kw or {}))
+    b = getattr(NEW[stem], cls)(upscale=2, **cfg, **kw, **(new_kw or {}))
     b.load_state_dict(a.state_dict(), strict=True)  # old weights keep loading
     return a, b
 
@@ -302,16 +302,18 @@ def test_cuda_default_rows_parity(row):
         for n, p in a.named_parameters():
             if n.endswith("relative_position_bias_table"):
                 p.normal_()
-    extra = {"pad_extra_window": True} if row == "craft" else {}
-    b = build_network({"type": row, **kw, **extra}, scale=2)
+    b = build_network({"type": row, **kw}, scale=2)
     b.load_state_dict(a.state_dict(), strict=True)
     a, b = a.cuda(), b.cuda()
     torch.manual_seed(1)
     x = torch.rand(2, 3, 32, 40, device="cuda")  # non-aligned: masks rebuilt, padded
-    # Whole-net gradients are compared as one vector with a 1e-4 slack: a rounding-sized change can flip a
-    # LeakyReLU kink and move upstream gradients by ~1e-3 max-abs / ~5e-5 in norm (swinirdense: the old path
-    # does the same under 3e-7 relative noise on its attention outputs), so a tight per-parameter bound is a
-    # kink detector, not a parity measure; the kernel test above is the tight one.
+    # Every trainable parameter must get a gradient on both paths (only CRAFT's frozen dead position bias is
+    # exempt, W-08). Per parameter, an error is measured against the float64 run of the old code and scaled by
+    # max(|g_ref|, 1e-2 * the largest |g_ref|): DAT/RGT position-bias output biases have an exactly-zero true
+    # gradient (softmax shift invariance), so a pure relative error is meaningless there. Slack, from measured
+    # worst cases: fp32 3e-3 (swinirdense: SDPA rounding flips one LeakyReLU at a 6.9e-8 pre-activation in
+    # layers.1, moving upstream grads by up to 1.3e-3 on this scale; no other row exceeds 3e-7), bf16 5e-2
+    # (dat_s 1.6e-2: bf16 grads are 1e-3..1e-1 off for both paths). The kernel test above is the tight one.
     yr, gr = run(copy.deepcopy(a).double(), x.double())
     y0, g0 = run(a, x)
     with sdpa_kernel([SDPBackend.EFFICIENT_ATTENTION, SDPBackend.FLASH_ATTENTION]):  # no math fallback
@@ -320,13 +322,21 @@ def test_cuda_default_rows_parity(row):
             yb, gb = run(b, x)
     with torch.autocast("cuda", dtype=torch.bfloat16):
         ya, ga = run(a, x)
-    cat = lambda g: torch.cat([g[n].flatten() for n in g1])  # noqa: E731
-    assert set(g1) <= set(g0)
+    frozen = {n for n, p in b.named_parameters() if not p.requires_grad}
+    assert all(".pos." in n for n in frozen)
+    assert row == "craft" or not frozen
+    train = {n for n, _ in b.named_parameters()} - frozen
+    assert set(g1) == set(gb) == train
+    assert train <= set(g0) & set(ga) & set(gr)
     assert nrel(y1, yr) <= 4 * nrel(y0, yr) + 1e-6
-    assert nrel(cat(g1), cat(gr)) <= 4 * nrel(cat(g0), cat(gr)) + 1e-4
     # bf16 autocast: the new path stays within rounding (no further from fp32 than ~the old bf16 path)
     assert nrel(yb, yr) <= 1.5 * nrel(ya, yr) + 1e-3
-    assert nrel(cat(gb), cat(gr)) <= 1.5 * nrel(cat(ga), cat(gr)) + 1e-3
+    floor = 1e-2 * max(gr[n].norm().item() for n in train)
+    for n in sorted(train):
+        ref = max(gr[n].norm().item(), floor)
+        e1, e0, eb, ea = ((g[n] - gr[n]).norm().item() / ref for g in (g1, g0, gb, ga))
+        assert e1 <= 4 * e0 + 3e-3, n
+        assert eb <= 1.5 * ea + 5e-2, n
 
 
 # ---------------------------------------------------------------- W-02 / W-08
@@ -499,6 +509,42 @@ def test_tiny_inputs(name, kw):
             net.train(train)
             for h, w in sizes:
                 assert net(torch.rand(1, 3, h, w)).shape == (1, 3, 2 * h, 2 * w)
+
+
+def test_rgt_small_training_inputs_train_every_parameter():
+    # sizes that used to raise: padded so the recursion depth is >= 1 (depth 0 leaves reduction1 with grad
+    # None, which breaks DDP); 4..15 on both sides keeps its old depth 0 (exact, not covered here)
+    net = small("rgt").train()
+    for h, w in ((2, 3), (3, 8), (2, 20), (17, 1)):
+        net.zero_grad(set_to_none=True)
+        y = net(torch.rand(1, 3, h, w))
+        assert y.shape == (1, 3, 2 * h, 2 * w)
+        y.mean().backward()
+        assert all(p.grad is not None for p in net.parameters())
+
+
+def test_atd_fp16_scaled_query_does_not_overflow():
+    # fp16 keeps the manual order (q @ k^T, then * scale): q * scale (100) overflows for |q| > 655
+    torch.manual_seed(0)
+    kw = {"dim": 8, "input_resolution": (4, 4), "num_tokens": 4, "num_heads": 2, "category_size": 8}
+    msa = {f: atd_arch.AC_MSA(**kw, flash_attn=f) for f in (False, True)}
+    msa[True].load_state_dict(msa[False].state_dict())
+    with torch.no_grad():
+        msa[False].logit_scale.fill_(math.log(100.0))
+        msa[True].logit_scale.fill_(math.log(100.0))
+    qkv = torch.randn(1, 16, 24) * 0.01
+    qkv[..., :8] = 1000.0  # large queries, small keys: q @ k^T * scale is finite
+    sim = torch.randn(1, 16, 4)
+    out = {}
+    for f, m in msa.items():
+        m.half()
+        x = qkv.half().requires_grad_()
+        y = m(x, sim, (4, 4))
+        y.float().square().sum().backward()
+        out[f] = (y, x.grad, m.logit_scale.grad)
+        assert all(torch.isfinite(t).all() for t in out[f])
+    for a, b in zip(out[True], out[False], strict=True):
+        torch.testing.assert_close(a, b, rtol=0, atol=0)
 
 
 # ---------------------------------------------------------------- W-13 / W-14 / W-15

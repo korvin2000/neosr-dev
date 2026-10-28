@@ -775,7 +775,9 @@ class craft(nn.Module):
         resi_connection: The convolutional block before residual connection. '1conv'/'3conv'
         flash_attn (bool): Exact SDPA attention; False = the manual reference path. Default: True
         pad_extra_window (bool): The upstream padding, which adds one more window even to aligned inputs
-            (64 -> 80 px); for old checkpoints that must reproduce their border outputs. Default: False
+            (64 -> 80 px). False pads to the next window multiple only (-24 % CPU fwd+bwd at 64 px) but
+            changes the border context the existing checkpoints were trained with (W-06: opt-in until an
+            A/B on real data). Default: True
 
     """
 
@@ -806,7 +808,7 @@ class craft(nn.Module):
         upscale=4,
         img_range=1.0,
         resi_connection="1conv",
-        pad_extra_window=False,
+        pad_extra_window=True,
     ):
         super(craft, self).__init__()
 

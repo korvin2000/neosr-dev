@@ -884,9 +884,10 @@ class rgt(nn.Module):
     def forward(self, x):
         """Input: x: (B, C, H, W)"""
         h, w = x.shape[2:]
-        # the RG-SA recursion depth is log4(H // 16) in eval, log4(H // 4) in training: pad sides below
-        # that (which used to raise a math domain error), crop after
-        m = 4 if self.training else 16
+        # the RG-SA recursion depth is log4(H // 16) in eval, max over sides of log4(H // 4) in training: pad
+        # sides below that (which used to raise a math domain error), crop after. A training input that used to
+        # raise is padded so the recursion runs at least once (depth 0 leaves reduction1 without a gradient)
+        m = 16 if not self.training or (min(h, w) < 4 and max(h, w) < 16) else 4
         ph, pw = max(m - h, 0), max(m - w, 0)
         if ph or pw:
             x = F.pad(x, (0, pw, 0, ph), "replicate")
