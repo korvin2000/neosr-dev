@@ -1,4 +1,4 @@
-# R3GAN in neosr: design (Fable 5.1 synthesis, 2026-10-28; draft for the critique round)
+# R3GAN in neosr: design (Fable 5.1 synthesis, 2026-10-28; critique round: Opus approved with changes, applied; Codex pending)
 
 Inputs: `audit.md` (Opus: the owner's implementations vs paper and reference), `neosr_fit.md` (Opus: neosr side,
 efficiency, A/B plan), `codex.md` (Codex Astra: independent review + efficiency addendum). Disputes settled by evidence
@@ -46,15 +46,19 @@ GMAC, 6 M params; owner defaults 7.68 GMAC; dunet 23 GMAC). `widths=(16,...)` ha
    False` forces the old path (the parity check and a fallback; no other knob).
 4. **Gamma schedule as a pure function of `ctx.it`**: `gamma_decay` (final/initial ratio, default 1 = constant) and
    `gamma_iters` (cosine length from the first GAN update, default 0). No state, no sync, resume-exact.
-5. Logs `l_d_r1`, `l_d_r2` (weighted; `l_d_reg` kept as their sum), effective gamma on request.
-6. `ConfigError` at the first D call when a gamma > 0 meets a batch-coupled D (BN: the per-sample penalty is not per-sample).
-   A grid_sample D (dunet) fails at the first regularised update with torch's explicit error; documented, not wrapped.
+5. Logs: raw per-sample squared gradient norms `r1`, `r2` (before gamma; their ratio is the paper's stability diagnostic),
+   weighted `l_d_r1`, `l_d_r2` (`l_d_reg` kept as their sum).
+6. Build-time checks through one generic hook on `Loss` (called once after nets and losses are built; no loop branch):
+   a gamma > 0 with a batch-coupled D (BN) -> `ConfigError`; a gamma > 0 under fp16 AMP -> `ConfigError` ("use bf16": the
+   paper reports fp16 cripples R3GAN training, and the inner grad is not loss-scaled); a 32 px double-backward probe through D
+   (`autograd.grad(create_graph=True)` + backward on zeros) so a D without double backward (dunet: grid_sample) fails at
+   build, not at the GAN start.
 7. Validation: `gamma_decay` in [0,1], `gamma_iters >= 0`, a schedule with both gammas 0 is an error, gammas finite.
 ### 1.3 Recipe arm `options/train_realplksr_r3gan.toml` (opt-in)
 `pretrain_network_g` from the non-GAN run (E5; D and optimizers fresh), `network_d.type = "r3gan"`, `[train.optim_d] type =
 "adam", lr = 2e-4, betas = [0.0, 0.99], weight_decay = 0`, `gan_opt`: `rpgan`, `loss_weight = 0.3`, `r1_gamma = r2_gamma =
-10` (per position), `reg_every = 1`, `wavelet_guided = false` (the penalty acts on D's RGB input), template `grad_clip` in
-round 1. Not ported: beta2 0.9->0.99 schedule (fixed 0.99; serves from-scratch generation), ADA augmentation (paired data),
+1` (per position; grid in section 4), `reg_every = 1`, `wavelet_guided = false` (the penalty acts on D's RGB input), template
+`grad_clip` in round 1 (`clipped_d` is logged; a per-net clip arm follows only if D is clipped often). Not ported: beta2 0.9->0.99 schedule (fixed 0.99; serves from-scratch generation), ADA augmentation (paired data),
 EMA half-life ramp (`ema_power` exists), lr decay inside the A/B horizon (E2 decides).
 
 ## 2. Efficiency (owner criterion)
@@ -63,9 +67,9 @@ EMA half-life ramp (`ema_power` exists), lr decay inside the A/B horizon (E2 dec
 | group width 16 instead of the owner's dense high-res 3x3 | D FLOPs 7.68 -> 2.42 GMAC/img at GT 256 (3.2x), same memory | different model (the paper's choice) |
 | FIR as grouped conv (not `reshape(B*C,1,H,W)`) | no layout copy under channels_last; same values | exact |
 | in-place biased leaky ReLU | -39 % forward saved bytes, -24 % penalty graph | exact (gradgradcheck passes) |
-| one `cat` forward for loss + both penalties (today) | 12 D-forward units per regularised D update instead of 16-20 in the owner's variants | exact for per-sample Ds |
+| one `cat` forward for loss + both penalties (today) | 12 D-forward units per regularised D update (the minimal v2 loss: 12 with two forwards; traiNNer's alternative: 16-20) | exact for per-sample Ds |
 | bf16 penalty pass | graph 4.0 -> 1.55 GB at GT 256 B 8; ~2x tensor throughput vs TF32 | 1-2 % per-sample error, gradient direction unchanged |
-| every-step R1+R2 | D-related work 15 units vs 9 without penalty: +~230 GFLOP on a ~3 TFLOP update (+8 %; G fwd+bwd ~1.45 TFLOP, FDL ~1.3 TFLOP); est. +0-10 ms on a ~100 ms step (bf16), +10-25 ms (fp32) | the reference objective |
+| every-step R1+R2 | D-related work 15 units vs 9 without penalty: +~230 GFLOP on a ~3 TFLOP update (+8 %; G fwd+bwd ~1.45 TFLOP, FDL ~1.3 TFLOP); FLOP-based estimate +0-10 ms on a ~100 ms step (bf16), +10-25 ms (fp32); the CPU wall ratio of a penalty update was 3.4x at a 2.0x FLOP ratio, so this is optimistic and `bench.py` decides | the reference objective |
 | lazy `reg_every` 4/16 | average time only; peak VRAM unchanged (set by the regularised update); not exact under Adam + shared clip; paper: worse | measured option, not the recipe |
 | launches | r3gan every step ~1010 aten ops per update vs metagan without penalty ~3400: less host time than today | - |
 | real-logit reuse across phases | would need a phase-order change and a `Context` write for 6.7 % of D work; not bitwise | rejected |
@@ -80,11 +84,11 @@ peak VRAM per arm before the quality A/B.
 | penalty on a map | `||grad sum_p D_p||^2 / P` (exact only for disjoint RFs) | Rademacher per-position estimator (unbiased; the deterministic sum is 2-3x too high on overlapping RFs) | scalarise before both terms, or define a local objective with its Jacobian penalty | Rademacher estimator: it is the local objective's penalty at one backward's cost; sum/P and mean-logit are biased |
 | penalty precision | paper ran bf16 stages | bf16 when the phase is bf16, fp32 leaves | fp32 eager as the reference arm, bf16 mixed as a candidate | bf16-following with fp32 leaves/accumulation as default of this opt-in path; `penalty_fp32` for the parity check |
 | lazy regularisation | every step; lazy = paper-rejected deviation | every step; lazy not exact under Adam/clip | every step first, benchmark 4 | every step in the recipe; lazy 4/16 measured in round 2 |
-| gamma | 0.1-1 (mean-logit convention, /4 for [0,1]) | patch 10 per position, scalar 150/15 at GT 256 (toy anchors) | screen 0.1/1/10 scalar | grid: patch {1, 10}, scalar {150, 15}; constant; cosine x0.1 as a round-2 arm |
+| gamma | /4 for [0,1] inputs: FFHQ-256's 150->15 is 37.5->3.75; patch toy at 10 nearly frozen | patch 10 per position, scalar 150/15 (toy anchors) | screen 0.1/1/10 scalar | grid: patch {1, 3} (+10 optional), scalar {40, 4} at GT 256 (paper values / 4); constant; cosine x0.1 as a round-2 arm |
 | D size | gw 16 on owner widths (0.87 M, 4.83 GFLOP) | (32..256) gw 16, 1 block (0.87 M, 2.42 GMAC) | lean (16..256), 1 block (~1.0 M, 1.33 GFLOP) | `widths` kwarg; default (32..256); slim (16..256) only if bench.py exceeds the cost gate |
-| D optimizer | Adam (0, 0.99) | same, fixed beta2 | same; beta2 schedule optional | Adam (0, 0.99), no schedule |
+| D optimizer | Adam (0, 0.99); the paper calls a low initial beta2 crucial at lr 2e-4 | same, fixed beta2 | same; beta2 schedule optional | Adam (0, 0.99); a beta2 0.9 -> 0.99 warm-up only if round-1 logs show early margin runaway (then a 5-line per-update betas rule) |
 | beta2 / EMA / ADA schedules | - | not ported | optional, phase-owned hooks | not ported |
-| fail-fast | build-time tiny double-backward probe | ConfigError for batch-coupled D only | reject batch-coupled D | ConfigError for batch-coupled; grid_sample fails explicitly at update 1 with `reg_every = 1` |
+| fail-fast | build-time tiny double-backward probe | ConfigError for batch-coupled D only | reject batch-coupled D | all three at build through one `Loss` hook: batch-coupled, fp16 AMP, 32 px double-backward probe |
 | real-logit caching | - | no (6.7 %, order change) | no, initially | no |
 
 ## 4. A/B on the owner's data (one RTX 4090, one job at a time, memory-capped; ~15 GPU-hours over three rounds)
@@ -92,11 +96,12 @@ Round 0 (E0-lite): a fixed held-out split of ~300 tiles from the 10,607 (meta_in
 photos, 512 px) and a fixed visual set (16 tiles: foliage, hair, fabric, text, faces, sky). Judges: TOPIQ-FR pipal, LPIPS,
 DISTS (none is a training loss in these arms), PSNR for fidelity sanity; EMA weights every 2k updates.
 Round 1 (20k GAN updates after one shared 20k non-GAN pretrain, seed 7): A0 template GAN (metagan, bce, adan_sf D) - confirms
-the inert baseline; A1 no D; A2 metagan + rpgan without penalty; R1 `r3gan` patch gamma 10; R2 gamma 1; R3 `r3gan_scalar256`
-gamma 150 (15 if D freezes). Each arm: `bench.py` ms/update and peak VRAM; logs `out_d_margin`, `l_d_r1/r2`, `grad_norm_d`,
+the inert baseline; A1 no D; R1 `r3gan` patch gamma 1, `loss_weight` 0.3; R2 patch gamma 3; R3 patch gamma 1, `loss_weight`
+0.1 (the owner's runs trained at an effective 0.007-0.01 and 0.01 already cost 0.17 dB by 7k); R4 `r3gan_scalar256` gamma 40
+(4 if D freezes). A2 (metagan + rpgan, no penalty) moves to round 2 if A0 is confirmed inert. Each arm: `bench.py` ms/update and peak VRAM; logs `out_d_margin`, `l_d_r1/r2`, `grad_norm_d`,
 `clipped_d`, skips; `scripts/term_grads.py` shares at 0/10k/20k.
-Round 2 (best R): lazy 16 and 4; gamma cosine x0.1; `grad_clip = false`; D lr 1e-4; `loss_weight 0.1`; bf16 vs fp32 penalty
-by a 10-batch parity check (no run).
+Round 2 (best R): lazy 16 and 4; gamma cosine x0.1; D clip off (per-net clip, only if `clipped_d` was frequent); D lr 1e-4;
+beta2 warm-up (only on early-margin evidence); A2; bf16 vs fp32 penalty by a 10-batch parity check (no run).
 Round 3: top two arms + A0 with a second seed; the best arm past 80k updates.
 Acceptance (replace the template GAN only if all hold): two seeds and the long run agree; TOPIQ-pipal and LPIPS better than A0
 by more than A0's seed spread, DISTS not worse; better than A1 (the GAN must do something); PSNR within 0.3 dB of A0; owner's
@@ -109,7 +114,8 @@ Note: the owner's LQ is a clean area-like downscale of real-photo GT; real degra
 Inert baseline (every arm is in effect vs no GAN: controls A0/A1 settle it); gamma is D-, head- and size-specific (grid);
 cuDNN speed of group-width-16 NHWC bf16 convs and their double backward unmeasured (bench.py first); the Rademacher penalty is
 beyond the paper (scalar control arm); behaviour changes of an opt-in never-A/B'd path (map penalty meaning, penalty dtype:
-record in DECISIONS); DDP + compile + double backward only CPU-tested (owner trains on one GPU).
+record in DECISIONS); DDP + compile + double backward only CPU-tested (owner trains on one GPU); resume exactness of the probe draw on multi-GPU
+needs every rank's RNG state saved (today rank 0 only) or a draw seeded by (seed, it, rank).
 
 ## 6. Tests
 `neosr_fit.md` section 7 (20 tests) is the list: golden keys/param counts/shapes, zero-init and linearity at init, FIR equivalence,
