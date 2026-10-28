@@ -1,20 +1,25 @@
 """Stage 2 review fixes (two Codex reviews of the merged branch): one regression test per finding."""
 
 import logging
+import importlib.util
 import math
 import weakref
+from pathlib import Path
 
 import pytest
 import torch
+from torch import nn
 from torch.nn import functional as F
 from torch.utils._python_dispatch import TorchDispatchMode
 
+from neosr.archs.arch_util import window_sdpa
 from neosr.config import ConfigError, load_config, validate_train
 from neosr.losses.base import restoring_clamp
 from neosr.losses.consistency_loss import consistency_loss
 from neosr.metrics.calculate import _ssim_kernel, calculate_ssim_pt
 from neosr.optimizers import adamw_sf, adan, adan_sf
 from neosr.optimizers.adan import clip_grad_norm_
+from neosr.cli import convert_args
 from neosr.utils import get_root_logger
 from tests.test_config import BASE, HEAD, write
 from tests.test_model import batches, build, make_opt, run
@@ -201,3 +206,58 @@ def test_ssim_frees_each_channel_before_the_next_with_an_identical_score():
     assert (
         old.peak - new.peak > channel_stats
     )  # the previous channel's maps no longer overlap
+
+
+# ---------------------------------------------------------------------------- 7 window_sdpa trace
+def _convert_py():
+    spec = importlib.util.spec_from_file_location(
+        "convert_py", Path(__file__).resolve().parents[1] / "convert.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+convert_py = _convert_py()
+
+
+def _convert_argv(tmp, *extra):
+    argv = ["--input", str(tmp / "w.pth"), "-net", "compact", "-s", "2"]
+    return convert_args([*argv, "--output", str(tmp / "m.onnx"), *extra])
+
+
+@pytest.fixture
+def onnx_deps():
+    pytest.importorskip("onnx")
+    pytest.importorskip("onnxruntime")
+
+
+class PaddedWindows(nn.Module):
+    """Pad to the window, masked window attention, crop: one window at the 20x20 trace size."""
+
+    def __init__(self, ws: int = 20, c: int = 4) -> None:
+        super().__init__()
+        self.ws, n = ws, ws * ws
+        self.inp, self.out = nn.Conv2d(3, c, 3, padding=1), nn.Conv2d(c, 3, 3, padding=1)
+        self.bias = nn.Parameter(torch.randn(1, n, n))
+        self.register_buffer("tri", torch.triu(torch.ones(n, n), 1) * -100.0)
+
+    def forward(self, x):
+        b, _, h, w = x.shape
+        ws, x = self.ws, self.inp(x)
+        x = F.pad(x, (0, -w % ws, 0, -h % ws))
+        c, hp, wp = x.shape[1:]
+        t = x.view(b, c, hp // ws, ws, wp // ws, ws).permute(0, 2, 4, 3, 5, 1)
+        t = t.reshape(-1, 1, ws * ws, c)
+        nw = (hp // ws) * (wp // ws)
+        mask = (torch.arange(nw) > 0).float().view(-1, 1, 1) * self.tri  # shift-mask-like
+        t = window_sdpa(t, t, t, self.bias, mask, scale=0.5)
+        t = t.reshape(b, hp // ws, wp // ws, ws, ws, c).permute(0, 5, 1, 3, 2, 4)
+        return self.out(t.reshape(b, c, hp, wp)[..., :h, :w])
+
+
+def test_dynamic_export_traced_at_one_window_runs_at_several(tmp_path, onnx_deps):
+    torch.manual_seed(0)
+    net = PaddedWindows().eval()
+    assert convert_py.TRACE[-2:] == (20, 20)  # one window at the trace shape, four at 32x24
+    convert_py.to_onnx(_convert_argv(tmp_path), net)  # verified at 20x20, 32x24 and batch 2
