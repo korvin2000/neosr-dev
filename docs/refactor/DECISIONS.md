@@ -40,3 +40,13 @@ Port candidates per area: `analysis/competitor/H1..H4.md`.
 9. EMA warmup (session 2): new optional `train.ema_power` (ema_pytorch-style decay ramp, competitor recipe 0.75); code default = constant
    decay (backward compatible); shipped templates get `ema_power = 0.75` next to `ema = 0.999`. Evidence: acceptance runs, EMA PSNR 6.55
    vs live 23.51 at update 1000.
+
+## Owner decisions, 2026-10-28 (stage 3 goals)
+- 1x restoration is a goal: Phase A item A7 (NAFNet) and `psnr_loss` stay.
+- Real-world photographs are the main target (not anime or synthetic images): Phase B OTF realism is approved in
+  principle, after the R3GAN track below.
+- R3GAN track first: deeply and critically analyse the owner's R3GAN experiments in `/home/korvin/apps/r3gan/` (three loss
+  variants, three traiNNer `sr_model` integrations, the paper) plus traiNNer's `r3gan_loss.py` and
+  `rpgan_r3gan_scalar_discriminator_arch.py`, with Opus 5.5 and Codex Astra; pick the most workable base, fix and improve
+  it, migrate a complete, correct R3GAN (loss + discriminator + recipe) into neosr and test it on the owner's real data.
+  Docs: `stage3/r3gan/`.

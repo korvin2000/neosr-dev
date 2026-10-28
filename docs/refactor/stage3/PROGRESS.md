@@ -38,3 +38,6 @@ worktree `.venv` has no torch), each file in its own capped scope (`systemd-run 
 - Open: a best export written after the last state, then a crash (abandoned timeline) is overwritten by the resumed
   run's next improvement over the restored record; DDP rank-0 write/failure of save_best is covered by reasoning only
   (validation() already all-reduces a rank-0 failure).
+- Owner: 1x restoration needed (A7 stays); real-world photos are the main goal (Phase B OTF approved after R3GAN);
+  R3GAN track started: analysis lanes (Opus audit, Opus neosr-fit, Codex Astra) -> Fable design -> implementation brief.
+  Reports in `stage3/r3gan/`.
