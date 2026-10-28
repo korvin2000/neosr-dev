@@ -3,9 +3,27 @@ import math
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 from torch.nn.init import trunc_normal_
+from torch.utils.checkpoint import checkpoint
 
 from neosr.archs.arch_util import to_2tuple
+
+
+def _window_sdpa(q, k, v, bias, mask=None, scale=None, dropout_p=0.0):
+    """softmax(q k^T * scale + bias [+ mask]) v as one fused SDPA call (the probabilities are not
+    saved for backward). q, k, v: (b*nw, heads, n, d); bias: (heads, n, n); mask: (nw, n, n)."""
+    if mask is None:
+        out = F.scaled_dot_product_attention(
+            q, k, v, bias.unsqueeze(0).to(q.dtype), dropout_p, scale=scale
+        )
+        return out
+    b_, h, n = q.shape[:3]
+    nw = mask.shape[0]
+    q, k, v = (t.reshape(b_ // nw, nw * h, n, -1) for t in (q, k, v))  # mask broadcasts over b
+    m = (bias.unsqueeze(0) + mask.unsqueeze(1)).reshape(1, nw * h, n, n).to(q.dtype)
+    out = F.scaled_dot_product_attention(q, k, v, m, dropout_p, scale=scale)
+    return out.view(b_, h, n, -1)
 
 
 def drop_path(x, drop_prob: float = 0.0, training: bool = False):
@@ -209,7 +227,6 @@ class WindowAttention(nn.Module):
         self.proj_drop = nn.Dropout(proj_drop)
 
         trunc_normal_(self.relative_position_bias_table, std=0.02)
-        self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, x, rpi, mask=None):
         """
@@ -222,38 +239,17 @@ class WindowAttention(nn.Module):
         qkv = x.reshape(b_, n, 3, self.num_heads, c // self.num_heads // 3).permute(
             2, 0, 3, 1, 4
         )
-        q, k, v = (
-            qkv[0],
-            qkv[1],
-            qkv[2],
-        )  # make torchscript happy (cannot use tensor as tuple)
-
-        q = q * self.scale
-        attn = q @ k.transpose(-2, -1)
+        q, k, v = qkv[0], qkv[1], qkv[2]
 
         relative_position_bias = self.relative_position_bias_table[rpi.view(-1)].view(
             self.window_size[0] * self.window_size[1],
             self.window_size[0] * self.window_size[1],
             -1,
         )  # Wh*Ww,Wh*Ww,nH
-        relative_position_bias = relative_position_bias.permute(
-            2, 0, 1
-        ).contiguous()  # nH, Wh*Ww, Wh*Ww
-        attn = attn + relative_position_bias.unsqueeze(0)
-
-        if mask is not None:
-            nw = mask.shape[0]
-            attn = attn.view(b_ // nw, nw, self.num_heads, n, n) + mask.unsqueeze(
-                1
-            ).unsqueeze(0)
-            attn = attn.view(-1, self.num_heads, n, n)
-            attn = self.softmax(attn)
-        else:
-            attn = self.softmax(attn)
-
-        attn = self.attn_drop(attn)
-
-        x = (attn @ v).transpose(1, 2).reshape(b_, n, c // 3)
+        relative_position_bias = relative_position_bias.permute(2, 0, 1)  # nH, N, N
+        p = self.attn_drop.p if self.training else 0.0
+        x = _window_sdpa(q, k, v, relative_position_bias, mask, self.scale, p)
+        x = x.transpose(1, 2).reshape(b_, n, c // 3)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
@@ -504,12 +500,16 @@ class AffineTransform(nn.Module):
 
         # define a parameter table of relative position bias
         self.position_bias = position_bias
+        self.pos_const = False
         if self.position_bias:
             self.pos = DynamicPosBias(self.dim // 4, self.num_heads)
+            # pos_dim 1: LayerNorm(1) outputs its bias, so the MLP yields one constant per head, a
+            # softmax no-op. Skip it; the frozen parameters stay for state_dict compatibility.
+            self.pos_const = self.pos.pos_dim == 1
+            if self.pos_const:
+                self.pos.requires_grad_(False)
 
         self.attn_drop = nn.Dropout(attn_drop)
-
-        self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, q, k, v, h, w):
         """
@@ -518,16 +518,15 @@ class AffineTransform(nn.Module):
             rpi: relative position index
             mask: (0/-inf) mask with shape of (num_windows, Wh*Ww, Wh*Ww) or None
         """
-        q = q * self.scale
-        attn = q @ k.transpose(-2, -1)
+        bias = None
         group_size = (h, w)
-        if self.position_bias:
+        if self.position_bias and not self.pos_const:
             # generate mother-set
             position_bias_h = torch.arange(
-                1 - group_size[0], group_size[0], device=attn.device
+                1 - group_size[0], group_size[0], device=q.device
             )
             position_bias_w = torch.arange(
-                1 - group_size[1], group_size[1], device=attn.device
+                1 - group_size[1], group_size[1], device=q.device
             )
             biases = torch.stack(
                 torch.meshgrid([position_bias_h, position_bias_w], indexing="ij")
@@ -537,8 +536,8 @@ class AffineTransform(nn.Module):
             )  # (2h-1)*(2w-1) 2
 
             # get pair-wise relative position index for each token inside the window
-            coords_h = torch.arange(group_size[0], device=attn.device)
-            coords_w = torch.arange(group_size[1], device=attn.device)
+            coords_h = torch.arange(group_size[0], device=q.device)
+            coords_w = torch.arange(group_size[1], device=q.device)
             coords = torch.stack(
                 torch.meshgrid([coords_h, coords_w], indexing="ij")
             )  # 2, Gh, Gw
@@ -559,17 +558,10 @@ class AffineTransform(nn.Module):
             relative_position_bias = pos[relative_position_index.view(-1)].view(
                 group_size[0] * group_size[1], group_size[0] * group_size[1], -1
             )  # Gh*Gw,Gh*Gw,nH
-            relative_position_bias = relative_position_bias.permute(
-                2, 0, 1
-            ).contiguous()  # nH, Gh*Gw, Gh*Gw
-            attn = attn + relative_position_bias.unsqueeze(0)
+            bias = relative_position_bias.permute(2, 0, 1).unsqueeze(0).to(q.dtype)
 
-        attn = self.softmax(attn)
-
-        x = self.attn_drop(attn)
-        x = x @ v
-
-        return x
+        p = self.attn_drop.p if self.training else 0.0
+        return F.scaled_dot_product_attention(q, k, v, bias, p, scale=self.scale)
 
 
 class GridAttention(nn.Module):
@@ -1170,6 +1162,8 @@ class hma(nn.Module):
 
         self.window_size = window_size
         self.shift_size = window_size // 2
+        self.pad_size = math.lcm(window_size, interval_size)
+        self.use_checkpoint = use_checkpoint
 
         num_in_ch = in_chans
         num_out_ch = in_chans
@@ -1298,10 +1292,10 @@ class hma(nn.Module):
         relative_position_index = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
         return relative_position_index
 
-    def calculate_mask(self, x_size):
+    def calculate_mask(self, x_size, device=None):
         # calculate attention mask for SW-MSA
         h, w = x_size
-        img_mask = torch.zeros((1, h, w, 1))  # 1 h w 1
+        img_mask = torch.zeros((1, h, w, 1), device=device)  # 1 h w 1
         h_slices = (
             slice(0, -self.window_size),
             slice(-self.window_size, -self.shift_size),
@@ -1342,7 +1336,7 @@ class hma(nn.Module):
 
         # Calculate attention mask and relative position index in advance to speed up inference.
         # The original code is very time-cosuming for large window size.
-        attn_mask = self.calculate_mask(x_size).to(x.device)
+        attn_mask = self.calculate_mask(x_size, x.device)
         params = {"attn_mask": attn_mask, "rpi_sa": self.relative_position_index_SA}
 
         x = self.patch_embed(x)
@@ -1351,14 +1345,28 @@ class hma(nn.Module):
         x = self.pos_drop(x)
 
         for layer in self.layers:
-            x = layer(x, x_size, params)
+            if self.use_checkpoint and self.training:
+                x = checkpoint(layer, x, x_size, params, use_reentrant=False)
+            else:
+                x = layer(x, x_size, params)
 
         x = self.norm(x)  # b seq_len c
         x = self.patch_unembed(x, x_size)
 
         return x
 
+    def check_image_size(self, x):
+        # pad to a multiple of lcm(window, interval) (reflect needs pad < size)
+        _, _, h, w = x.size()
+        ph, pw = (-h) % self.pad_size, (-w) % self.pad_size
+        if ph or pw:
+            mode = "reflect" if ph < h and pw < w else "replicate"
+            x = F.pad(x, (0, pw, 0, ph), mode)
+        return x
+
     def forward(self, x):
+        h, w = x.shape[2:]
+        x = self.check_image_size(x)
         self.mean = self.mean.type_as(x)
         x = (x - self.mean) * self.img_range
 
@@ -1371,7 +1379,7 @@ class hma(nn.Module):
 
         x = x / self.img_range + self.mean
 
-        return x
+        return x[:, :, : h * self.upscale, : w * self.upscale]
 
 
 def hma_medium(**kwargs):

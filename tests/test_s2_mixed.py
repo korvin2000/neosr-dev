@@ -21,10 +21,12 @@ def _build(name: str, scale: int = 4, seed: int = 0, **kw) -> nn.Module:
 def _assert_grads_close(a: nn.Module, b: nn.Module, rtol: float = 1e-4) -> None:
     # same parameters, same loss: gradients agree up to accumulation-order rounding
     for (n, p), q in zip(a.named_parameters(), b.parameters(), strict=True):
+        if not p.requires_grad:
+            continue
         assert p.grad is not None, n
         assert q.grad is not None, n
         torch.testing.assert_close(
-            p.grad, q.grad, rtol=rtol, atol=rtol * q.grad.abs().max().item(), msg=n
+            p.grad, q.grad, rtol=rtol, atol=rtol * q.grad.abs().max().item() + 1e-7, msg=n
         )
 
 
@@ -352,3 +354,214 @@ def test_microsr_masks_bitwise(monkeypatch, patch_size: int) -> None:
             y = net(x)
         monkeypatch.setattr(SwinTransformerBlock, "forward", _old_microsr_block)
         assert torch.equal(y, net(x))
+
+
+# ---------------------------------------------------------------- MX-04/07/08/09/10 HMA
+
+
+def _old_hma_wa(self, x, rpi, mask=None):
+    # hma WindowAttention.forward before MX-08 (explicit softmax probabilities)
+    b_, n, c = x.shape
+    qkv = x.reshape(b_, n, 3, self.num_heads, c // self.num_heads // 3).permute(2, 0, 3, 1, 4)
+    q, k, v = qkv[0], qkv[1], qkv[2]
+    attn = (q * self.scale) @ k.transpose(-2, -1)
+    rpb = self.relative_position_bias_table[rpi.view(-1)].view(n, n, -1).permute(2, 0, 1)
+    attn = attn + rpb.unsqueeze(0)
+    if mask is not None:
+        nw = mask.shape[0]
+        attn = attn.view(b_ // nw, nw, self.num_heads, n, n) + mask.unsqueeze(1).unsqueeze(0)
+        attn = attn.view(-1, self.num_heads, n, n)
+    attn = self.attn_drop(attn.softmax(-1))
+    return self.proj_drop(self.proj((attn @ v).transpose(1, 2).reshape(b_, n, c // 3)))
+
+
+def _old_hma_affine(self, q, k, v, h, w):
+    # hma AffineTransform.forward before MX-08/MX-09 (bias always computed, even when constant)
+    attn = (q * self.scale) @ k.transpose(-2, -1)
+    if self.position_bias:
+        d = attn.device
+        biases = torch.stack(
+            torch.meshgrid(torch.arange(1 - h, h, device=d), torch.arange(1 - w, w, device=d), indexing="ij")
+        )
+        biases = biases.flatten(1).transpose(0, 1).float()
+        coords = torch.stack(
+            torch.meshgrid(torch.arange(h, device=d), torch.arange(w, device=d), indexing="ij")
+        ).flatten(1)
+        rel = (coords[:, :, None] - coords[:, None, :]).permute(1, 2, 0).contiguous()
+        rel[:, :, 0] += h - 1
+        rel[:, :, 1] += w - 1
+        rel[:, :, 0] *= 2 * w - 1
+        pos = self.pos(biases)
+        attn = attn + pos[rel.sum(-1).view(-1)].view(h * w, h * w, -1).permute(2, 0, 1).unsqueeze(0)
+    return self.attn_drop(attn.softmax(-1)) @ v
+
+
+def _hma_old(m):
+    from neosr.archs.hma_arch import AffineTransform, WindowAttention
+
+    m.setattr(WindowAttention, "forward", _old_hma_wa)
+    m.setattr(AffineTransform, "forward", _old_hma_affine)
+
+
+# reduced, same blocks; embed_dim 60 -> grid pos_dim 1 (the default), 96 -> pos_dim 3 (as hma_medium)
+HMA_SMALL = {"depths": (2, 2), "num_heads": (6, 6), "drop_path_rate": 0.0}
+
+
+@pytest.mark.parametrize("dim", [60, 96])
+def test_hma_sdpa_parity_outputs_and_grads(monkeypatch, dim: int) -> None:
+    from neosr.archs.hma_arch import AffineTransform
+
+    new = _build("hma", embed_dim=dim, **HMA_SMALL).train()
+    affine = [m for m in new.modules() if isinstance(m, AffineTransform)]
+    assert all(m.pos_const == (dim == 60) for m in affine)
+    if dim == 60:  # the skipped bias is a per-head constant: perturbing its weights changes nothing
+        for m in affine:
+            for p in m.pos.parameters():
+                p.data.normal_()
+    old = _build("hma", embed_dim=dim, **HMA_SMALL).train()
+    old.load_state_dict(new.state_dict())
+    x = torch.rand(2, 3, 32, 48)
+    y = new(x)
+    with monkeypatch.context() as m:
+        _hma_old(m)
+        y_old = old(x)
+    torch.testing.assert_close(y, y_old, rtol=1e-4, atol=1e-5)
+    g = torch.randn_like(y)
+    (y * g).sum().backward()
+    (y_old * g).sum().backward()
+    _assert_grads_close(new, old)
+    frozen = [n for n, p in new.named_parameters() if not p.requires_grad]
+    assert all(".pos." in n for n in frozen)
+    assert len(frozen) == (14 * len(affine) if dim == 60 else 0)  # frozen, keys kept
+
+
+def test_hma_checkpoint_grad_parity() -> None:
+    a = _build("hma", **HMA_SMALL).train()
+    b = _build("hma", **HMA_SMALL, use_checkpoint=True).train()
+    b.load_state_dict(a.state_dict())
+    x = torch.rand(2, 3, 32, 32)
+    a(x).square().mean().backward()
+    b(x).square().mean().backward()
+    _assert_grads_close(a, b, rtol=1e-5)
+
+
+def test_hma_pad_is_identity_on_aligned_inputs(monkeypatch) -> None:
+    net = _build("hma", **HMA_SMALL).eval()
+    x = torch.rand(1, 3, 40, 24)
+    with torch.no_grad():
+        y = net(x)
+        monkeypatch.setattr(type(net), "check_image_size", lambda self, t: t)
+        assert torch.equal(y, net(x))
+
+
+# ---------------------------------------------------------------- MX-02/04/07/08/10 MFGHMoE
+
+
+def _ref_window_attn(q, k, v, bias, mask=None, scale=None, dropout_p=0.0):
+    # the replaced attention core of HAB/OCAB (explicit fp32 probabilities)
+    b_, h, n = q.shape[:3]
+    attn = (q * scale) @ k.transpose(-2, -1) + bias.unsqueeze(0)
+    if mask is not None:
+        nw = mask.shape[0]
+        attn = (attn.view(b_ // nw, nw, h, n, -1) + mask.unsqueeze(1).unsqueeze(0)).view(b_, h, n, -1)
+    return F.dropout(attn.softmax(-1), dropout_p) @ v
+
+
+def _old_dual_routing(self, x):
+    # DualRouting.forward before MX-02: per-group boolean masks, constant one-hot
+    from einops import rearrange
+
+    B, C, H, W = x.shape
+    x = rearrange(x, "b c h w -> (b h w) c")
+    _, top = F.softmax(self.w_group_gate(x), dim=-1).topk(1, dim=-1)
+    one_hot = torch.zeros(x.size(0), self.num_experts, device=x.device)
+    for g in range(2):
+        gm = (top == g).squeeze(-1)
+        if gm.any():
+            xg = x[gm] + self.group_embedding(torch.tensor(g, device=x.device)).expand(int(gm.sum()), -1)
+            _, e = F.softmax(self.w_expert_gates[g](xg), dim=-1).topk(1, dim=-1)
+            one_hot[gm, g * self.group_size + e.squeeze(-1)] = 1
+    return rearrange(one_hot, "(b h w) n -> b h w n", b=B, h=H, w=W), None
+
+
+def _old_hmoe(self, x, x_t):
+    # HMoE.forward before MX-02: dense 16-expert stack times the one-hot
+    from einops import rearrange
+
+    B, _N, H, W = x.shape
+    gate, _ = self.gate(x_t)
+    outs = torch.stack([rearrange(e(x), "b c h w -> (b h w) c") for e in self.experts], dim=-1)
+    out = (rearrange(gate, "b h w n -> (b h w) n").unsqueeze(-2) * outs).sum(-1)
+    return rearrange(out, "(b h w) c -> b c h w", b=B, h=H, w=W)
+
+
+def _mfghmoe_old(m):
+    from neosr.archs import mfghmoe_arch as ma
+
+    m.setattr(ma, "_window_sdpa", _ref_window_attn)
+    m.setattr(ma.DualRouting, "forward", _old_dual_routing)
+    m.setattr(ma.HMoE, "forward", _old_hmoe)
+
+
+# reduced, same blocks: the default (6x6 HAB groups, 180 ch) is covered by the census below
+MOE_SMALL = {"embed_dim": 48, "depths": (2, 2), "num_heads": (6, 6), "drop_path_rate": 0.0}
+
+
+def test_mfghmoe_routing_matches_old_one_hot() -> None:
+    from neosr.archs.mfghmoe_arch import DualRouting
+
+    torch.manual_seed(0)
+    r = DualRouting(64, 16)
+    x = torch.randn(3, 64, 9, 11)
+    idx, w = r(x)
+    one_hot, _ = _old_dual_routing(r, x)
+    assert torch.equal(one_hot.sum(-1), torch.ones(3, 9, 11))
+    assert torch.equal(idx.squeeze(1), one_hot.argmax(-1))
+    assert torch.equal(w, torch.ones_like(w))  # value-preserving straight-through weight
+    assert w.requires_grad
+    # d w / d p = 1, so the router receives the Switch-Transformer gradient <g, E_sel(x)>
+    w.sum().backward()
+    assert all(p.grad is not None for p in r.parameters())
+
+
+def test_mfghmoe_parity_outputs_and_grads(monkeypatch) -> None:
+    from neosr.archs.mfghmoe_arch import DualRouting
+
+    new = _build("mfghmoe", **MOE_SMALL).train()
+    old = _build("mfghmoe", **MOE_SMALL).train()
+    old.load_state_dict(new.state_dict())
+    x = torch.rand(2, 3, 32, 32)
+    with _NoHostSync():
+        new(x).sum().backward()  # the router and the routing-feature branch learn now
+    reached = {n for n, p in new.named_parameters() if p.grad is not None}
+    new.zero_grad(set_to_none=True)
+    route = DualRouting.forward
+    with monkeypatch.context() as m:  # without the straight-through gradient: the old backward
+        m.setattr(DualRouting, "forward", lambda self, t: (lambda r: (r[0], r[1].detach()))(route(self, t)))
+        y = new(x)
+    with monkeypatch.context() as m:
+        _mfghmoe_old(m)
+        y_old = old(x)
+    torch.testing.assert_close(y, y_old, rtol=1e-4, atol=1e-5)  # same routing, same forward
+    g = torch.randn_like(y)
+    (y * g).sum().backward()
+    (y_old * g).sum().backward()
+    assert sum(q.grad is None for q in old.parameters()) == 7 + 4 * 2 + 2  # router, mfg convs, aggr
+    for (n, p), q in zip(new.named_parameters(), old.parameters(), strict=True):
+        assert n in reached
+        if q.grad is None:  # dead before MX-02: router, mfg conv stacks, aggr_conv
+            assert n.startswith(("upsample.0.gate.", "mfg.", "aggr_conv.")), n
+            continue
+        torch.testing.assert_close(
+            p.grad, q.grad, rtol=1e-4, atol=1e-4 * q.grad.abs().max().item() + 1e-7, msg=n
+        )
+
+
+def test_mfghmoe_checkpoint_grad_parity() -> None:
+    a = _build("mfghmoe", **MOE_SMALL).train()
+    b = _build("mfghmoe", **MOE_SMALL, use_checkpoint=True).train()
+    b.load_state_dict(a.state_dict())
+    x = torch.rand(1, 3, 32, 32)
+    a(x).square().mean().backward()
+    b(x).square().mean().backward()
+    _assert_grads_close(a, b, rtol=1e-5)
