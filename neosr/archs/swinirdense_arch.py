@@ -7,7 +7,8 @@ import torch.utils.checkpoint as checkpoint
 from torch import nn
 from torch.nn.init import trunc_normal_
 
-from .arch_util import to_2tuple, DropPath
+from .arch_util import to_2tuple, DropPath, shift_mask, window_sdpa
+from .swinir_arch import calculate_mask
 
 
 class Mlp(nn.Module):
@@ -57,11 +58,9 @@ def window_reverse(windows, window_size, h, w):
     Returns:
         x: (b, h, w, c)
     """
-    b = int(windows.shape[0] / (h * w / window_size / window_size))
-    x = windows.view(b, h // window_size, w // window_size,
-                     window_size, window_size, -1)
-    x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(b, h, w, -1)
-    return x
+    c = windows.shape[-1]
+    x = windows.view(-1, h // window_size, w // window_size, window_size, window_size, c)
+    return x.permute(0, 1, 3, 2, 4, 5).reshape(-1, h, w, c)
 
 #@torch.cuda.amp.custom_fwd(cast_inputs=torch.bfloat16)
 class WindowAttention(nn.Module):
@@ -132,16 +131,12 @@ class WindowAttention(nn.Module):
         # make torchscript happy (cannot use tensor as tuple)
         q, k, v = qkv[0], qkv[1], qkv[2]
 
-        if self.flash_attn is True:
-            # flash attention
-            # NOTE: at time of writing, FlashAttention won't be enabled by SDPA
-            # unless fp16 or bf16 is casted, and attention_mask is None.
-            # The context manager might break graphs when using .compile(),
-            # solution seems to use it outside SDPA instead.
-
-            x = nn.functional.scaled_dot_product_attention(
-                q, k, v, scale=self.scale,
-                dropout_p=self.dropout_p if self.training else 0.0)
+        if self.flash_attn:
+            # exact SDPA (memory-efficient kernel) with bias + shift mask as a float mask
+            bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
+                n, n, -1).permute(2, 0, 1)
+            x = window_sdpa(q, k, v, bias, mask, scale=self.scale,
+                            dropout_p=self.dropout_p if self.training else 0.0)
             x = x.transpose(1, 2).reshape(b_, n, c)
 
         else:
@@ -263,28 +258,7 @@ class SwinTransformerBlock(nn.Module):
         self.register_buffer('attn_mask', attn_mask)
 
     def calculate_mask(self, x_size, device=None):
-        # calculate attention mask for SW-MSA
-        h, w = x_size
-        img_mask = torch.zeros((1, h, w, 1), device=device)  # 1 h w 1
-        h_slices = (slice(0, -self.window_size), slice(-self.window_size,
-                                                       -self.shift_size), slice(-self.shift_size, None))
-        w_slices = (slice(0, -self.window_size), slice(-self.window_size,
-                                                       -self.shift_size), slice(-self.shift_size, None))
-        cnt = 0
-        for h in h_slices:
-            for w in w_slices:
-                img_mask[:, h, w, :] = cnt
-                cnt += 1
-
-        # nw, window_size, window_size, 1
-        mask_windows = window_partition(img_mask, self.window_size)
-        mask_windows = mask_windows.view(-1,
-                                         self.window_size * self.window_size)
-        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(
-            attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
-
-        return attn_mask
+        return calculate_mask(tuple(x_size), self.window_size, self.shift_size, device)
 
     def forward(self, x, x_size):
         h, w = x_size
@@ -309,12 +283,15 @@ class SwinTransformerBlock(nn.Module):
         x_windows = x_windows.view(-1, self.window_size * self.window_size, c)
 
         # W-MSA/SW-MSA (to be compatible for testing on images whose shapes are the multiple of window size
-        if self.input_resolution == x_size:
-            # nw*b, window_size*window_size, c
-            attn_windows = self.attn(x_windows, mask=self.attn_mask)
-        else:
-            attn_windows = self.attn(
-                x_windows, mask=self.calculate_mask(x_size, x.device))
+        # (a trace never takes the img_size buffer: it would freeze the export to that size)
+        if self.shift_size == 0:
+            mask = None
+        elif self.input_resolution == x_size and not torch.jit.is_tracing():
+            mask = self.attn_mask
+        else:  # one mask per forward on device, shared by all shifted blocks
+            mask = shift_mask(calculate_mask, tuple(x_size), self.window_size, self.shift_size, x.device)
+        # nw*b, window_size*window_size, c
+        attn_windows = self.attn(x_windows, mask=mask)
 
         # merge windows
         attn_windows = attn_windows.view(-1,
@@ -477,7 +454,7 @@ class BasicLayer(nn.Module):
 
     def forward(self, x, x_size):
         for blk in self.blocks:
-            if self.use_checkpoint:
+            if self.use_checkpoint and self.training:
                 x = checkpoint.checkpoint(blk, x, x_size, use_reentrant=False)
             else:
                 x = blk(x, x_size)
@@ -788,7 +765,7 @@ class swinirdense(nn.Module):
                  embed_dim=60,
                  depths=(6, 6, 6, 6),
                  num_heads=(6, 6, 6, 6),
-                 flash_attn=False,
+                 flash_attn=True,
                  window_size=8,
                  mlp_ratio=2.0,
                  qkv_bias=True,
@@ -963,7 +940,7 @@ class swinirdense(nn.Module):
         _, _, h, w = x.size()
         ws = min(self.window_size, *self.patches_resolution)  # blocks clamp to img_size
         ph, pw = (-h) % ws, (-w) % ws
-        if ph or pw:
+        if ph or pw or torch.jit.is_tracing():  # a trace must keep the pad
             mode = 'reflect' if ph < h and pw < w else 'replicate'
             x = nn.functional.pad(x, (0, pw, 0, ph), mode)
         return x

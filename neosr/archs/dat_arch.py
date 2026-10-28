@@ -10,7 +10,7 @@ from torch.nn import functional as F
 from torch.nn.init import trunc_normal_
 from torch.utils import checkpoint
 
-from neosr.archs.arch_util import DropPath
+from neosr.archs.arch_util import DropPath, shift_mask, window_sdpa
 
 
 def img2windows(img, H_sp, W_sp):
@@ -29,11 +29,45 @@ def windows2img(img_splits_hw, H_sp, W_sp, H, W):
     """Input: Window Partition (B', N, C)
     Output: Image (B, H, W, C)
     """
-    B = int(img_splits_hw.shape[0] / (H * W / H_sp / W_sp))
+    C = img_splits_hw.shape[-1]
+    img = img_splits_hw.view(-1, H // H_sp, W // W_sp, H_sp, W_sp, C)
+    return img.permute(0, 1, 3, 2, 4, 5).reshape(-1, H, W, C)
 
-    img = img_splits_hw.view(B, H // H_sp, W // W_sp, H_sp, W_sp, -1)
-    img = img.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
-    return img
+
+def calculate_mask(H, W, split_size, shift_size, device=None):
+    # The implementation builds on Swin Transformer code https://github.com/microsoft/Swin-Transformer/blob/main/models/swin_transformer.py
+    # attention masks for the shifted (s0 x s1) window-0 and (s1 x s0) window-1: 0 within a region, -100 across
+    masks = []
+    for a, b in ((0, 1), (1, 0)):
+        img_mask = torch.zeros((1, H, W, 1), device=device)  # 1 H W 1
+        h_slices = (
+            slice(0, -split_size[a]),
+            slice(-split_size[a], -shift_size[a]),
+            slice(-shift_size[a], None),
+        )
+        w_slices = (
+            slice(0, -split_size[b]),
+            slice(-split_size[b], -shift_size[b]),
+            slice(-shift_size[b], None),
+        )
+        cnt = 0
+        for h in h_slices:
+            for w in w_slices:
+                img_mask[:, h, w, :] = cnt
+                cnt += 1
+        img_mask = img_mask.view(
+            1, H // split_size[a], split_size[a], W // split_size[b], split_size[b], 1
+        )
+        mask_windows = (
+            img_mask.permute(0, 1, 3, 2, 4, 5)
+            .contiguous()
+            .view(-1, split_size[a] * split_size[b])
+        )  # nW, sw[a]*sw[b]
+        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
+        masks.append(
+            attn_mask.masked_fill(attn_mask != 0, -100.0).masked_fill(attn_mask == 0, 0.0)
+        )
+    return tuple(masks)
 
 
 class SpatialGate(nn.Module):
@@ -187,6 +221,7 @@ class Spatial_Attention(nn.Module):
         proj_drop=0.0,
         qk_scale=None,
         position_bias=True,
+        flash_attn=True,
     ):
         super().__init__()
         self.dim = dim
@@ -195,6 +230,7 @@ class Spatial_Attention(nn.Module):
         self.num_heads = num_heads
         self.idx = idx
         self.position_bias = position_bias
+        self.flash_attn = flash_attn
 
         head_dim = dim // num_heads
         self.scale = qk_scale or head_dim**-0.5
@@ -260,10 +296,8 @@ class Spatial_Attention(nn.Module):
         k = self.im2win(k, H, W)
         v = self.im2win(v, H, W)
 
-        q = q * self.scale
-        attn = q @ k.transpose(-2, -1)  # B head N C @ B head C N --> B head N N
-
         # calculate drpe
+        relative_position_bias = None
         if self.position_bias:
             pos = self.pos(self.rpe_biases)
             # select position bias
@@ -273,22 +307,33 @@ class Spatial_Attention(nn.Module):
             relative_position_bias = relative_position_bias.permute(
                 2, 0, 1
             ).contiguous()
-            attn = attn + relative_position_bias.unsqueeze(0)
 
-        N = attn.shape[3]
+        if self.flash_attn:  # exact SDPA: bias + shift mask as one float mask
+            x = window_sdpa(
+                q, k, v, relative_position_bias, mask, scale=self.scale,
+                dropout_p=self.attn_drop.p if self.training else 0.0,
+            )  # fmt: skip
+        else:
+            q = q * self.scale
+            attn = q @ k.transpose(-2, -1)  # B head N C @ B head C N --> B head N N
+            if relative_position_bias is not None:
+                attn = attn + relative_position_bias.unsqueeze(0)
 
-        # use mask for shift window
-        if mask is not None:
-            nW = mask.shape[0]
-            attn = attn.view(B, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(
-                0
-            ).to(attn.dtype)
-            attn = attn.view(-1, self.num_heads, N, N)
+            N = attn.shape[3]
 
-        attn = nn.functional.softmax(attn, dim=-1, dtype=attn.dtype)
-        attn = self.attn_drop(attn)
+            # use mask for shift window
+            if mask is not None:
+                nW = mask.shape[0]
+                attn = attn.view(B, nW, self.num_heads, N, N) + mask.unsqueeze(
+                    1
+                ).unsqueeze(0).to(attn.dtype)
+                attn = attn.view(-1, self.num_heads, N, N)
 
-        x = attn @ v
+            # no dtype=: autocast keeps the softmax in fp32 (an explicit dtype pinned it to bf16)
+            attn = nn.functional.softmax(attn, dim=-1)
+            attn = self.attn_drop(attn)
+            x = attn @ v
+
         x = x.transpose(1, 2).reshape(
             -1, self.H_sp * self.W_sp, C
         )  # B head N N @ B head N C
@@ -327,6 +372,7 @@ class Axial_Spatial_Attention(nn.Module):
         attn_drop=0.0,
         rg_idx=0,
         b_idx=0,
+        flash_attn=True,
     ):
         super().__init__()
         self.dim = dim
@@ -361,6 +407,7 @@ class Axial_Spatial_Attention(nn.Module):
                 attn_drop=attn_drop,
                 proj_drop=drop,
                 position_bias=True,
+                flash_attn=flash_attn,
             )
             for i in range(self.branch_num)
         ])
@@ -398,83 +445,7 @@ class Axial_Spatial_Attention(nn.Module):
         )
 
     def calculate_mask(self, H, W, device=None):
-        # The implementation builds on Swin Transformer code https://github.com/microsoft/Swin-Transformer/blob/main/models/swin_transformer.py
-        # calculate attention mask for shift window
-        img_mask_0 = torch.zeros((1, H, W, 1), device=device)  # 1 H W 1 idx=0
-        img_mask_1 = torch.zeros((1, H, W, 1), device=device)  # 1 H W 1 idx=1
-        h_slices_0 = (
-            slice(0, -self.split_size[0]),
-            slice(-self.split_size[0], -self.shift_size[0]),
-            slice(-self.shift_size[0], None),
-        )
-        w_slices_0 = (
-            slice(0, -self.split_size[1]),
-            slice(-self.split_size[1], -self.shift_size[1]),
-            slice(-self.shift_size[1], None),
-        )
-
-        h_slices_1 = (
-            slice(0, -self.split_size[1]),
-            slice(-self.split_size[1], -self.shift_size[1]),
-            slice(-self.shift_size[1], None),
-        )
-        w_slices_1 = (
-            slice(0, -self.split_size[0]),
-            slice(-self.split_size[0], -self.shift_size[0]),
-            slice(-self.shift_size[0], None),
-        )
-        cnt = 0
-        for h in h_slices_0:
-            for w in w_slices_0:
-                img_mask_0[:, h, w, :] = cnt
-                cnt += 1
-        cnt = 0
-        for h in h_slices_1:
-            for w in w_slices_1:
-                img_mask_1[:, h, w, :] = cnt
-                cnt += 1
-
-        # calculate mask for window-0
-        img_mask_0 = img_mask_0.view(
-            1,
-            H // self.split_size[0],
-            self.split_size[0],
-            W // self.split_size[1],
-            self.split_size[1],
-            1,
-        )
-        img_mask_0 = (
-            img_mask_0.permute(0, 1, 3, 2, 4, 5)
-            .contiguous()
-            .view(-1, self.split_size[0], self.split_size[1], 1)
-        )  # nW, sw[0], sw[1], 1
-        mask_windows_0 = img_mask_0.view(-1, self.split_size[0] * self.split_size[1])
-        attn_mask_0 = mask_windows_0.unsqueeze(1) - mask_windows_0.unsqueeze(2)
-        attn_mask_0 = attn_mask_0.masked_fill(attn_mask_0 != 0, -100.0).masked_fill(
-            attn_mask_0 == 0, 0.0
-        )
-
-        # calculate mask for window-1
-        img_mask_1 = img_mask_1.view(
-            1,
-            H // self.split_size[1],
-            self.split_size[1],
-            W // self.split_size[0],
-            self.split_size[0],
-            1,
-        )
-        img_mask_1 = (
-            img_mask_1.permute(0, 1, 3, 2, 4, 5)
-            .contiguous()
-            .view(-1, self.split_size[1], self.split_size[0], 1)
-        )  # nW, sw[1], sw[0], 1
-        mask_windows_1 = img_mask_1.view(-1, self.split_size[1] * self.split_size[0])
-        attn_mask_1 = mask_windows_1.unsqueeze(1) - mask_windows_1.unsqueeze(2)
-        attn_mask_1 = attn_mask_1.masked_fill(attn_mask_1 != 0, -100.0).masked_fill(
-            attn_mask_1 == 0, 0.0
-        )
-
-        return attn_mask_0, attn_mask_1
+        return calculate_mask(H, W, tuple(self.split_size), tuple(self.shift_size), device)
 
     def forward(self, x, H, W):
         """Input: x: (B, H*W, C), H, W
@@ -523,7 +494,10 @@ class Axial_Spatial_Attention(nn.Module):
             qkv_1 = qkv_1.view(3, B, _L, C // 2)
 
             if self.patches_resolution != _H or self.patches_resolution != _W:
-                mask_tmp = self.calculate_mask(_H, _W, x.device)
+                # one mask pair per forward on device, shared by all shifted blocks
+                mask_tmp = shift_mask(
+                    calculate_mask, _H, _W, tuple(self.split_size), tuple(self.shift_size), x.device
+                )
                 x1_shift = self.attns[0](qkv_0, _H, _W, mask=mask_tmp[0])
                 x2_shift = self.attns[1](qkv_1, _H, _W, mask=mask_tmp[1])
             else:
@@ -702,6 +676,7 @@ class DATB(nn.Module):
         norm_layer=nn.LayerNorm,
         rg_idx=0,
         b_idx=0,
+        flash_attn=True,
     ):
         super().__init__()
 
@@ -721,6 +696,7 @@ class DATB(nn.Module):
                 attn_drop=attn_drop,
                 rg_idx=rg_idx,
                 b_idx=b_idx,
+                flash_attn=flash_attn,
             )
         else:
             # DCTB
@@ -792,6 +768,7 @@ class ResidualGroup(nn.Module):
         use_chk=False,
         resi_connection="1conv",
         rg_idx=0,
+        flash_attn=True,
     ):
         super().__init__()
         self.use_chk = use_chk
@@ -814,6 +791,7 @@ class ResidualGroup(nn.Module):
                 norm_layer=norm_layer,
                 rg_idx=rg_idx,
                 b_idx=i,
+                flash_attn=flash_attn,
             )
             for i in range(depth)
         ])
@@ -836,7 +814,7 @@ class ResidualGroup(nn.Module):
         H, W = x_size
         res = x
         for blk in self.blocks:
-            if self.use_chk:
+            if self.use_chk and self.training:
                 x = checkpoint.checkpoint(blk, x, x_size, use_reentrant=False)
             else:
                 x = blk(x, x_size)
@@ -954,6 +932,7 @@ class dat(nn.Module):
         img_range=1.0,
         resi_connection="1conv",
         upsampler="pixelshuffle",
+        flash_attn=True,
     ):
         super().__init__()
 
@@ -1007,6 +986,7 @@ class dat(nn.Module):
                 use_chk=use_chk,
                 resi_connection=resi_connection,
                 rg_idx=i,
+                flash_attn=flash_attn,
             )
             self.layers.append(layer)
 

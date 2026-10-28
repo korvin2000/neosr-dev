@@ -6,7 +6,8 @@ from torch import nn
 from torch.nn.init import trunc_normal_
 from torch.utils.checkpoint import checkpoint
 
-from neosr.archs.arch_util import DropPath, to_2tuple
+from neosr.archs.arch_util import DropPath, shift_mask, to_2tuple, window_sdpa
+from neosr.archs.swinir_arch import calculate_mask
 
 
 class ChannelAttention(nn.Module):
@@ -103,12 +104,9 @@ def window_reverse(windows, window_size, H, W):
         x: (B, H, W, C)
 
     """
-    B = int(windows.shape[0] / (H * W / window_size / window_size))
-    x = windows.view(
-        B, H // window_size, W // window_size, window_size, window_size, -1
-    )
-    x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
-    return x
+    C = windows.shape[-1]
+    x = windows.view(-1, H // window_size, W // window_size, window_size, window_size, C)
+    return x.permute(0, 1, 3, 2, 4, 5).reshape(-1, H, W, C)
 
 
 class WindowAttention(nn.Module):
@@ -136,11 +134,13 @@ class WindowAttention(nn.Module):
         qk_scale=None,
         attn_drop=0.0,
         proj_drop=0.0,
+        flash_attn=True,
     ):
         super().__init__()
         self.dim = dim
         self.window_size = window_size  # Wh, Ww
         self.num_heads = num_heads
+        self.flash_attn = flash_attn
         head_dim = dim // num_heads
         self.scale = qk_scale or head_dim**-0.5
 
@@ -196,9 +196,6 @@ class WindowAttention(nn.Module):
             qkv[2],
         )  # make torchscript happy (cannot use tensor as tuple)
 
-        q = q * self.scale
-        attn = q @ k.transpose(-2, -1)
-
         relative_position_bias = self.relative_position_bias_table[
             self.relative_position_index.view(-1)
         ].view(
@@ -209,6 +206,16 @@ class WindowAttention(nn.Module):
         relative_position_bias = relative_position_bias.permute(
             2, 0, 1
         ).contiguous()  # nH, Wh*Ww, Wh*Ww
+        if self.flash_attn:  # exact SDPA: bias + shift mask as one float mask
+            x = window_sdpa(
+                q, k, v, relative_position_bias, mask, scale=self.scale,
+                dropout_p=self.attn_drop.p if self.training else 0.0,
+            )  # fmt: skip
+            x = self.proj(x.transpose(1, 2).reshape(B_, N, C))
+            return self.proj_drop(x)
+
+        q = q * self.scale
+        attn = q @ k.transpose(-2, -1)
         attn = attn + relative_position_bias.unsqueeze(0)
 
         if mask is not None:
@@ -268,6 +275,7 @@ class SwinTransformerBlock(nn.Module):
         drop_path=0.0,
         act_layer=nn.GELU,
         norm_layer=nn.LayerNorm,
+        flash_attn=True,
     ):
         super().__init__()
         self.dim = dim
@@ -293,6 +301,7 @@ class SwinTransformerBlock(nn.Module):
             qk_scale=qk_scale,
             attn_drop=attn_drop,
             proj_drop=drop,
+            flash_attn=flash_attn,
         )
 
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
@@ -313,35 +322,7 @@ class SwinTransformerBlock(nn.Module):
         self.register_buffer("attn_mask", attn_mask)
 
     def calculate_mask(self, x_size, device=None):
-        # calculate attention mask for SW-MSA
-        H, W = x_size
-        img_mask = torch.zeros((1, H, W, 1), device=device)  # 1 H W 1
-        h_slices = (
-            slice(0, -self.window_size),
-            slice(-self.window_size, -self.shift_size),
-            slice(-self.shift_size, None),
-        )
-        w_slices = (
-            slice(0, -self.window_size),
-            slice(-self.window_size, -self.shift_size),
-            slice(-self.shift_size, None),
-        )
-        cnt = 0
-        for h in h_slices:
-            for w in w_slices:
-                img_mask[:, h, w, :] = cnt
-                cnt += 1
-
-        mask_windows = window_partition(
-            img_mask, self.window_size
-        )  # nW, window_size, window_size, 1
-        mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
-        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, -100.0).masked_fill(
-            attn_mask == 0, 0.0
-        )
-
-        return attn_mask
+        return calculate_mask(tuple(x_size), self.window_size, self.shift_size, device)
 
     def forward(self, x, x_size):
         H, W = x_size
@@ -369,14 +350,16 @@ class SwinTransformerBlock(nn.Module):
         )  # nW*B, window_size*window_size, C
 
         # W-MSA/SW-MSA (to be compatible for testing on images whose shapes are the multiple of window size
-        if self.input_resolution == x_size:
-            attn_windows = self.attn(
-                x_windows, mask=self.attn_mask
-            )  # nW*B, window_size*window_size, C
-        else:
-            attn_windows = self.attn(
-                x_windows, mask=self.calculate_mask(x_size, x.device)
+        # (a trace never takes the img_size buffer: it would freeze the export to that size)
+        if self.shift_size == 0:
+            mask = None
+        elif self.input_resolution == x_size and not torch.jit.is_tracing():
+            mask = self.attn_mask
+        else:  # one mask per forward on device, shared by all shifted blocks
+            mask = shift_mask(
+                calculate_mask, tuple(x_size), self.window_size, self.shift_size, x.device
             )
+        attn_windows = self.attn(x_windows, mask=mask)  # nW*B, window_size*window_size, C
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
@@ -505,8 +488,11 @@ class RDG(nn.Module):
         gc,
         patch_size,
         img_size,
+        flash_attn=True,
+        use_checkpoint=False,
     ):
         super(RDG, self).__init__()
+        self.use_checkpoint = use_checkpoint
 
         self.swin1 = SwinTransformerBlock(
             dim=dim,
@@ -521,6 +507,7 @@ class RDG(nn.Module):
             attn_drop=attn_drop,
             drop_path=drop_path[0] if isinstance(drop_path, list) else drop_path,
             norm_layer=norm_layer,
+            flash_attn=flash_attn,
         )
         self.adjust1 = nn.Conv2d(dim, gc, 1)
 
@@ -537,6 +524,7 @@ class RDG(nn.Module):
             attn_drop=attn_drop,
             drop_path=drop_path[0] if isinstance(drop_path, list) else drop_path,
             norm_layer=norm_layer,
+            flash_attn=flash_attn,
         )
         self.adjust2 = nn.Conv2d(dim + gc, gc, 1)
 
@@ -553,6 +541,7 @@ class RDG(nn.Module):
             attn_drop=attn_drop,
             drop_path=drop_path[0] if isinstance(drop_path, list) else drop_path,
             norm_layer=norm_layer,
+            flash_attn=flash_attn,
         )
         self.adjust3 = nn.Conv2d(dim + gc * 2, gc, 1)
 
@@ -569,6 +558,7 @@ class RDG(nn.Module):
             attn_drop=attn_drop,
             drop_path=drop_path[0] if isinstance(drop_path, list) else drop_path,
             norm_layer=norm_layer,
+            flash_attn=flash_attn,
         )
         self.adjust4 = nn.Conv2d(dim + gc * 3, gc, 1)
 
@@ -585,6 +575,7 @@ class RDG(nn.Module):
             attn_drop=attn_drop,
             drop_path=drop_path[0] if isinstance(drop_path, list) else drop_path,
             norm_layer=norm_layer,
+            flash_attn=flash_attn,
         )
         self.adjust5 = nn.Conv2d(dim + gc * 4, dim, 1)
 
@@ -606,34 +597,28 @@ class RDG(nn.Module):
             norm_layer=None,
         )
 
-    def forward(self, x, xsize):
-        x1 = self.pe(self.lrelu(self.adjust1(self.pue(self.swin1(x, xsize), xsize))))
-        x2 = self.pe(
-            self.lrelu(
-                self.adjust2(self.pue(self.swin2(torch.cat((x, x1), -1), xsize), xsize))
-            )
-        )
-        x3 = self.pe(
-            self.lrelu(
-                self.adjust3(
-                    self.pue(self.swin3(torch.cat((x, x1, x2), -1), xsize), xsize)
-                )
-            )
-        )
-        x4 = self.pe(
-            self.lrelu(
-                self.adjust4(
-                    self.pue(self.swin4(torch.cat((x, x1, x2, x3), -1), xsize), xsize)
-                )
-            )
-        )
-        x5 = self.pe(
-            self.adjust5(
-                self.pue(self.swin5(torch.cat((x, x1, x2, x3, x4), -1), xsize), xsize)
-            )
-        )
+    def _stage(self, swin, adjust, x, xsize, act):
+        y = adjust(self.pue(swin(x, xsize), xsize))
+        return self.pe(self.lrelu(y) if act else y)
 
-        return x5 * 0.2 + x
+    def forward(self, x, xsize):
+        # per swin block checkpointing while training: the recompute peak is one block
+        ckpt = self.use_checkpoint and self.training
+        feats = [x]
+        for i in range(1, 6):
+            args = (
+                getattr(self, f"swin{i}"),
+                getattr(self, f"adjust{i}"),
+                x if i == 1 else torch.cat(feats, -1),
+                xsize,
+                i < 5,  # no activation after the last adjust
+            )
+            feats.append(
+                checkpoint(self._stage, *args, use_reentrant=False)
+                if ckpt
+                else self._stage(*args)
+            )
+        return feats[-1] * 0.2 + x
 
 
 class PatchMerging(nn.Module):
@@ -783,6 +768,7 @@ class drct(nn.Module):
         resi_connection="1conv",
         gc=32,
         use_checkpoint=False,
+        flash_attn=True,
     ):
         super(drct, self).__init__()
         self.use_checkpoint = use_checkpoint
@@ -868,6 +854,8 @@ class drct(nn.Module):
                 gc=gc,
                 img_size=img_size,
                 patch_size=patch_size,
+                flash_attn=flash_attn,
+                use_checkpoint=use_checkpoint,
             )
 
             self.layers.append(layer)
@@ -907,10 +895,7 @@ class drct(nn.Module):
         x = self.pos_drop(x)
 
         for layer in self.layers:
-            if self.use_checkpoint and self.training:
-                x = checkpoint(layer, x, x_size, use_reentrant=False)
-            else:
-                x = layer(x, x_size)
+            x = layer(x, x_size)
 
         x = self.norm(x)  # b seq_len c
         x = self.patch_unembed(x, x_size)
@@ -922,7 +907,7 @@ class drct(nn.Module):
         _, _, h, w = x.size()
         ws = min(self.window_size, *self.patches_resolution)  # blocks clamp to img_size
         ph, pw = (-h) % ws, (-w) % ws
-        if ph or pw:
+        if ph or pw or torch.jit.is_tracing():  # a trace must keep the pad
             mode = "reflect" if ph < h and pw < w else "replicate"
             x = nn.functional.pad(x, (0, pw, 0, ph), mode)
         return x

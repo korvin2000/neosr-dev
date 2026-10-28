@@ -165,12 +165,11 @@ def window_reverse(windows, window_size, H, W):
     Returns:
         x: (B, H, W, C)
     """
-    B = int(windows.shape[0] * (window_size[0] * window_size[1]) / (H * W))
+    C = windows.shape[-1]
     x = windows.view(
-        B, H // window_size[0], W // window_size[1], window_size[0], window_size[1], -1
+        -1, H // window_size[0], W // window_size[1], window_size[0], window_size[1], C
     )
-    x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
-    return x
+    return x.permute(0, 1, 3, 2, 4, 5).reshape(-1, H, W, C)
 
 
 class DynamicPosBias(nn.Module):
@@ -262,6 +261,26 @@ class SCC(nn.Module):
         self.H_sp, self.W_sp = self.window_size
         self.pos = DynamicPosBias(self.dim // 4, self.num_heads, residual=False)
 
+        # graph-independent position tables, built once (non-persistent: state_dict unchanged)
+        H, W = self.window_size
+        rh, rw = H // self.base_win_size[0], W // self.base_win_size[1]
+        position_bias_h = torch.arange(1 - H, H)
+        position_bias_w = torch.arange(1 - W, W)
+        biases = torch.stack(
+            torch.meshgrid([position_bias_h, position_bias_w], indexing="ij")
+        )
+        self.register_buffer(
+            "rpe_biases", biases.flatten(1).transpose(0, 1).contiguous().float(), persistent=False
+        )
+        # The bias of query (y, x) to base cell (i, j) is the mean of the relative position bias over the
+        # cell's rh x rw keys = the bias map average-pooled with an (rh, rw) kernel, read at row
+        # y - i*rh + H - rh and column x - j*rw + W - rw: O(N * cells) instead of O(N^2), and the
+        # index is separable (rows, cols)
+        rows = torch.arange(H).view(-1, 1) - torch.arange(self.base_win_size[0]).view(1, -1) * rh
+        cols = torch.arange(W).view(-1, 1) - torch.arange(self.base_win_size[1]).view(1, -1) * rw
+        self.register_buffer("pool_rows", rows + H - rh, persistent=False)  # H, base_h
+        self.register_buffer("pool_cols", cols + W - rw, persistent=False)  # W, base_w
+
     def spatial_linear_projection(self, x):
         B, num_h, L, C = x.shape
         H, W = self.window_size
@@ -285,47 +304,17 @@ class SCC(nn.Module):
         # compute correlation map
         corr_map = (q @ v.transpose(-2, -1)) / self.scale
 
-        # add relative position bias
-        # generate mother-set
-        position_bias_h = torch.arange(1 - self.H_sp, self.H_sp, device=v.device)
-        position_bias_w = torch.arange(1 - self.W_sp, self.W_sp, device=v.device)
-        biases = torch.stack(
-            torch.meshgrid([position_bias_h, position_bias_w], indexing="ij")
-        )
-        rpe_biases = biases.flatten(1).transpose(0, 1).contiguous().float()
-        pos = self.pos(rpe_biases)
-
-        # select position bias
-        coords_h = torch.arange(self.H_sp, device=v.device)
-        coords_w = torch.arange(self.W_sp, device=v.device)
-        coords = torch.stack(torch.meshgrid([coords_h, coords_w], indexing="ij"))
-        coords_flatten = torch.flatten(coords, 1)
-        relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]
-        relative_coords = relative_coords.permute(1, 2, 0).contiguous()
-        relative_coords[:, :, 0] += self.H_sp - 1
-        relative_coords[:, :, 1] += self.W_sp - 1
-        relative_coords[:, :, 0] *= 2 * self.W_sp - 1
-        relative_position_index = relative_coords.sum(-1)
-        relative_position_bias = pos[relative_position_index.view(-1)].view(
-            self.window_size[0] * self.window_size[1],
-            self.base_win_size[0],
-            self.window_size[0] // self.base_win_size[0],
-            self.base_win_size[1],
-            self.window_size[1] // self.base_win_size[1],
-            -1,
-        )  # Wh*Ww,Wh*Ww,nH
+        # add relative position bias, averaged over each base cell (pooled form, see __init__)
+        H, W = self.window_size
+        pos = self.pos(self.rpe_biases)  # (2H-1)*(2W-1), nH
+        pos = pos.t().reshape(1, self.num_heads, 2 * H - 1, 2 * W - 1)
+        kernel = (H // self.base_win_size[0], W // self.base_win_size[1])
+        pooled = F.avg_pool2d(pos, kernel, stride=1)[0]  # nH, 2H-rh, 2W-rw
         relative_position_bias = (
-            relative_position_bias.permute(0, 1, 3, 5, 2, 4)
-            .contiguous()
-            .view(
-                self.window_size[0] * self.window_size[1],
-                self.base_win_size[0] * self.base_win_size[1],
-                self.num_heads,
-                -1,
-            )
-            .mean(-1)
-        )
-        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()
+            pooled[:, self.pool_rows][:, :, :, self.pool_cols]  # nH, H, base_h, W, base_w
+            .permute(0, 1, 3, 2, 4)
+            .reshape(self.num_heads, H * W, -1)
+        )  # nH, Wh*Ww, cells
         corr_map = corr_map + relative_position_bias.unsqueeze(0)
 
         # transformation
@@ -631,7 +620,7 @@ class BasicLayer(nn.Module):
     def forward(self, x, x_size):
         i = 0
         for blk in self.blocks:
-            if self.use_checkpoint:
+            if self.use_checkpoint and self.training:
                 x = checkpoint.checkpoint(
                     blk, x, x_size, (self.win_hs[i], self.win_ws[i]), use_reentrant=False
                 )

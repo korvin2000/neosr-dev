@@ -7,7 +7,7 @@ from torch import nn
 from torch.nn.init import trunc_normal_
 from torch.utils import checkpoint
 
-from neosr.archs.arch_util import DropPath, to_2tuple
+from neosr.archs.arch_util import DropPath, shift_mask, to_2tuple, window_sdpa
 
 
 class emptyModule(nn.Module):
@@ -110,12 +110,47 @@ def window_reverse(windows, window_size, h, w):
         x: (b, h, w, c)
 
     """
-    b = int(windows.shape[0] / (h * w / window_size / window_size))
-    x = windows.view(
-        b, h // window_size, w // window_size, window_size, window_size, -1
+    c = windows.shape[-1]
+    x = windows.view(-1, h // window_size, w // window_size, window_size, window_size, c)
+    return x.permute(0, 1, 3, 2, 4, 5).reshape(-1, h, w, c)
+
+
+def calculate_mask(x_size, window_size, shift_size, device=None):
+    # mask between the original windows (queries) and the permuted windows (keys): (nW, ws*ws, ws*ws // 4)
+    permuted_window_size = window_size // 2
+    h, w = x_size
+    img_mask = torch.zeros((1, h, w, 1), device=device)  # 1 h w 1
+    slices = (
+        slice(0, -window_size),
+        slice(-window_size, -shift_size),
+        slice(-shift_size, None),
     )
-    x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(b, h, w, -1)
-    return x
+    cnt = 0
+    for hs in slices:
+        for ws in slices:
+            img_mask[:, hs, ws, :] = cnt
+            cnt += 1
+
+    mask_windows = window_partition(img_mask, window_size)  # nw, window_size, window_size, 1
+    mask_windows = mask_windows.view(-1, window_size * window_size)
+    # calculate mask for permuted windows
+    permuted_window_mask = torch.zeros((1, h // 2, w // 2, 1), device=device)  # 1 h w 1
+    slices = (
+        slice(0, -permuted_window_size),
+        slice(-permuted_window_size, -shift_size // 2),
+        slice(-shift_size // 2, None),
+    )
+    cnt = 0
+    for hs in slices:
+        for ws in slices:
+            permuted_window_mask[:, hs, ws, :] = cnt
+            cnt += 1
+
+    permuted_windows = window_partition(permuted_window_mask, permuted_window_size)
+    permuted_windows = permuted_windows.view(-1, permuted_window_size * permuted_window_size)
+    # calculate attention mask
+    attn_mask = mask_windows.unsqueeze(2) - permuted_windows.unsqueeze(1)
+    return attn_mask.masked_fill(attn_mask != 0, -100.0).masked_fill(attn_mask == 0, 0.0)
 
 
 class PSA(nn.Module):
@@ -143,10 +178,12 @@ class PSA(nn.Module):
         qk_scale=None,
         attn_drop=0.0,
         proj_drop=0.0,
+        flash_attn=True,
     ):
         super().__init__()
         self.dim = dim
         self.window_size = window_size  # Wh, Ww
+        self.flash_attn = flash_attn
         self.permuted_window_size = (window_size[0] // 2, window_size[1] // 2)
         self.num_heads = num_heads
         head_dim = dim // num_heads
@@ -239,9 +276,6 @@ class PSA(nn.Module):
             .reshape(b_, n, 1, self.num_heads, c // self.num_heads)
             .permute(2, 0, 3, 1, 4)[0]
         )
-        q = q * self.scale
-        attn = q @ k.transpose(-2, -1)  # (num_windows*b, num_heads, n, n//4)
-
         relative_position_bias = self.relative_position_bias_table[
             self.aligned_relative_position_index.view(-1)
         ].view(
@@ -252,6 +286,16 @@ class PSA(nn.Module):
         relative_position_bias = relative_position_bias.permute(
             2, 0, 1
         ).contiguous()  # (num_heads, n, n//4)
+        if self.flash_attn:  # exact SDPA: bias + shift mask as one float mask
+            x = window_sdpa(
+                q, k, v, relative_position_bias, mask, scale=self.scale,
+                dropout_p=self.attn_drop.p if self.training else 0.0,
+            )  # fmt: skip
+            x = self.proj(x.transpose(1, 2).reshape(b_, n, c))
+            return self.proj_drop(x)
+
+        q = q * self.scale
+        attn = q @ k.transpose(-2, -1)  # (num_windows*b, num_heads, n, n//4)
         attn = attn + relative_position_bias.unsqueeze(0)
 
         if mask is not None:
@@ -324,6 +368,7 @@ class PSA_Block(nn.Module):
         drop_path=0.0,
         act_layer=nn.GELU,
         norm_layer=nn.LayerNorm,
+        flash_attn=True,
     ):
         super().__init__()
         self.dim = dim
@@ -350,6 +395,7 @@ class PSA_Block(nn.Module):
             qk_scale=qk_scale,
             attn_drop=attn_drop,
             proj_drop=drop,
+            flash_attn=flash_attn,
         )
 
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
@@ -377,62 +423,8 @@ class PSA_Block(nn.Module):
         self.after_mlp = emptyModule()
         self.residual_after_mlp = emptyModule()
 
-    def calculate_mask(self, x_size):
-        # calculate mask for original windows
-        h, w = x_size
-        img_mask = torch.zeros((1, h, w, 1))  # 1 h w 1
-        h_slices = (
-            slice(0, -self.window_size),
-            slice(-self.window_size, -self.shift_size),
-            slice(-self.shift_size, None),
-        )
-        w_slices = (
-            slice(0, -self.window_size),
-            slice(-self.window_size, -self.shift_size),
-            slice(-self.shift_size, None),
-        )
-        cnt = 0
-        for h in h_slices:
-            for w in w_slices:
-                img_mask[:, h, w, :] = cnt
-                cnt += 1
-
-        mask_windows = window_partition(
-            img_mask, self.window_size
-        )  # nw, window_size, window_size, 1
-        mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
-        # calculate mask for permuted windows
-        h, w = x_size
-        permuted_window_mask = torch.zeros((1, h // 2, w // 2, 1))  # 1 h w 1
-        h_slices = (
-            slice(0, -self.permuted_window_size),
-            slice(-self.permuted_window_size, -self.shift_size // 2),
-            slice(-self.shift_size // 2, None),
-        )
-        w_slices = (
-            slice(0, -self.permuted_window_size),
-            slice(-self.permuted_window_size, -self.shift_size // 2),
-            slice(-self.shift_size // 2, None),
-        )
-        cnt = 0
-        for h in h_slices:
-            for w in w_slices:
-                permuted_window_mask[:, h, w, :] = cnt
-                cnt += 1
-
-        permuted_windows = window_partition(
-            permuted_window_mask, self.permuted_window_size
-        )
-        permuted_windows = permuted_windows.view(
-            -1, self.permuted_window_size * self.permuted_window_size
-        )
-        # calculate attention mask
-        attn_mask = mask_windows.unsqueeze(2) - permuted_windows.unsqueeze(1)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, -100.0).masked_fill(
-            attn_mask == 0, 0.0
-        )
-
-        return attn_mask
+    def calculate_mask(self, x_size, device=None):
+        return calculate_mask(tuple(x_size), self.window_size, self.shift_size, device)
 
     def forward(self, x, x_size):
         h, w = x_size
@@ -461,14 +453,16 @@ class PSA_Block(nn.Module):
         )  # nw*b, window_size*window_size, c
 
         # W-MSA/SW-MSA (to be compatible for testing on images whose shapes are the multiple of window size
-        if self.input_resolution == x_size:
-            attn_windows = self.attn(
-                x_windows, mask=self.attn_mask
-            )  # nw*b, window_size*window_size, c
-        else:
-            attn_windows = self.attn(
-                x_windows, mask=self.calculate_mask(x_size).to(x.device)
+        # (a trace never takes the img_size buffer: it would freeze the export to that size)
+        if self.shift_size == 0:
+            mask = None
+        elif self.input_resolution == x_size and not torch.jit.is_tracing():
+            mask = self.attn_mask
+        else:  # one mask per forward, built on device and shared by all shifted blocks
+            mask = shift_mask(
+                calculate_mask, tuple(x_size), self.window_size, self.shift_size, x.device
             )
+        attn_windows = self.attn(x_windows, mask=mask)  # nw*b, window_size*window_size, c
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, c)
@@ -604,6 +598,7 @@ class BasicLayer(nn.Module):
         norm_layer=nn.LayerNorm,
         downsample=None,
         use_checkpoint=False,
+        flash_attn=True,
     ):
         super().__init__()
         self.dim = dim
@@ -626,6 +621,7 @@ class BasicLayer(nn.Module):
                 attn_drop=attn_drop,
                 drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
                 norm_layer=norm_layer,
+                flash_attn=flash_attn,
             )
             for i in range(depth)
         ])
@@ -640,8 +636,8 @@ class BasicLayer(nn.Module):
 
     def forward(self, x, x_size):
         for blk in self.blocks:
-            if self.use_checkpoint:
-                x = checkpoint.checkpoint(blk, x, use_reentrant=False)
+            if self.use_checkpoint and self.training:  # non-reentrant: backward(inputs=) works
+                x = checkpoint.checkpoint(blk, x, x_size, use_reentrant=False)
             else:
                 x = blk(x, x_size)
         if self.downsample is not None:
@@ -811,6 +807,7 @@ class PSA_Group(nn.Module):
         img_size=224,
         patch_size=4,
         resi_connection="1conv",
+        flash_attn=True,
     ):
         super(PSA_Group, self).__init__()
 
@@ -832,6 +829,7 @@ class PSA_Group(nn.Module):
             norm_layer=norm_layer,
             downsample=downsample,
             use_checkpoint=use_checkpoint,
+            flash_attn=flash_attn,
         )
 
         if resi_connection == "1conv":
@@ -1006,17 +1004,17 @@ class srformer(nn.Module):
         img_range=1.0,
         upsampler="pixelshuffledirect",
         resi_connection="1conv",
+        flash_attn=True,
     ):
         super(srformer, self).__init__()
         num_in_ch = in_chans
         num_out_ch = out_chans
         num_feat = 64
         self.img_range = img_range
-        if in_chans == 3:
-            rgb_mean = (0.5, 0.5, 0.5)
-            self.mean = torch.Tensor(rgb_mean).view(1, 3, 1, 1)
-        else:
-            self.mean = torch.zeros(1, 1, 1, 1)
+        mean = (
+            torch.full((1, 3, 1, 1), 0.5) if in_chans == 3 else torch.zeros(1, 1, 1, 1)
+        )
+        self.register_buffer("mean", mean, persistent=False)  # moves with .to(), not in state_dict
         self.upscale = upscale
         self.upsampler = upsampler
         self.window_size = window_size
@@ -1091,6 +1089,7 @@ class srformer(nn.Module):
                 img_size=img_size,
                 patch_size=patch_size,
                 resi_connection=resi_connection,
+                flash_attn=flash_attn,
             )
             self.layers.append(layer)
         self.norm = norm_layer(self.num_features)
@@ -1168,14 +1167,14 @@ class srformer(nn.Module):
         _, _, h, w = x.size()
         mod_pad_h = (self.window_size - h % self.window_size) % self.window_size
         mod_pad_w = (self.window_size - w % self.window_size) % self.window_size
-        x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), "reflect")
-        return x
+        mode = "reflect" if mod_pad_h < h and mod_pad_w < w else "replicate"  # reflect needs pad < size
+        return F.pad(x, (0, mod_pad_w, 0, mod_pad_h), mode)
 
     def forward(self, x):
         H, W = x.shape[2:]
         x = self.check_image_size(x)
-        self.mean = self.mean.type_as(x)
-        x = (x - self.mean) * self.img_range
+        mean = self.mean.to(x)
+        x = (x - mean) * self.img_range
 
         if self.upsampler == "pixelshuffle":
             # for classical SR
@@ -1210,7 +1209,7 @@ class srformer(nn.Module):
             res = self.conv_after_body(self.forward_features(x_first)) + x_first
             x = x + self.conv_last(res)
 
-        x = x / self.img_range + self.mean
+        x = x / self.img_range + mean
 
         return x[:, :, : H * self.upscale, : W * self.upscale]
 

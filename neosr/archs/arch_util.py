@@ -214,3 +214,61 @@ def constant_init(module, val, bias=0):
         nn.init.constant_(module.weight, val)
     if hasattr(module, 'bias') and module.bias is not None:
         nn.init.constant_(module.bias, bias)
+
+
+def window_sdpa(
+    q: Tensor,
+    k: Tensor,
+    v: Tensor,
+    bias: Tensor | None = None,
+    mask: Tensor | None = None,
+    *,
+    scale: float,
+    dropout_p: float = 0.0,
+) -> Tensor:
+    """Exact SDPA form of window attention `softmax(q k^T * scale + bias [+ mask]) v`.
+
+    q: [B*nW, nH, N, d]; k, v: [B*nW, nH, M, d] with the window index fastest in dim 0 (window_partition
+    order); bias: [nH, N, M] (learned, keeps its gradient) or None; mask: [nW, N, M] constant or None.
+    bias + mask is folded once into a contiguous float mask kept at [1, nW*nH, N, M] (batch stride 0, never
+    repeated; GPU kernels need a unit last-dim stride, else SDPA silently takes the math path), and the head
+    dim is zero-padded to a multiple of 8 so 16-bit inputs reach the memory-efficient kernel (q.k and the
+    kept output columns are unchanged; `scale` stays explicit). Returns [B*nW, nH, N, d].
+    """
+    b_, nh, n, d = q.shape
+    pad = -d % 8
+    if pad:
+        q, k, v = (F.pad(t, (0, pad)) for t in (q, k, v))
+    if bias is None and mask is None:  # flash-eligible
+        out = F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p, scale=scale)
+        return out[..., :d] if pad else out
+    nw = 1 if mask is None else mask.shape[0]
+    ab = mask.unsqueeze(1) if bias is None else bias.unsqueeze(0)  # [nW | 1, nH | 1, N, M]
+    if bias is not None and mask is not None:
+        ab = ab + mask.unsqueeze(1).to(bias.dtype)
+    ab = ab.expand(nw, nh, n, k.shape[2]).reshape(1, nw * nh, n, -1)
+    ab = ab.to(q.dtype).contiguous()
+    if nw > 1:  # [B, nW*nH, ., .]: the folded mask broadcasts over the batch only
+        q, k, v = (t.reshape(b_ // nw, nw * nh, *t.shape[2:]) for t in (q, k, v))
+    out = F.scaled_dot_product_attention(q, k, v, attn_mask=ab, dropout_p=dropout_p, scale=scale)
+    out = out.reshape(b_, nh, n, d + pad)
+    return out[..., :d] if pad else out
+
+
+_MEMO: dict = {}
+
+
+def shift_mask(build: Callable, *args):
+    """`build(*args)` behind a one-entry memo per builder, for graph-free constants such as shift masks.
+
+    All blocks of a forward and consecutive training steps share the entry; other arguments (a validation
+    size) replace it, so one result per builder stays alive. The returned tensor is shared: never modify it
+    in place. Bypassed while compiling or tracing, where the build is traced instead.
+    """
+    if torch.compiler.is_compiling() or torch.jit.is_tracing():
+        return build(*args)
+    key = (args, torch.is_inference_mode_enabled())  # an inference tensor never leaks into autograd
+    hit = _MEMO.get(build)
+    if hit is None or hit[0] != key:
+        hit = _MEMO[build] = (key, build(*args))
+    return hit[1]

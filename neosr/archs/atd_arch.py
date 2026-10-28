@@ -6,17 +6,17 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.nn.init import trunc_normal_
+from torch.utils.checkpoint import checkpoint
 
-from neosr.archs.arch_util import to_2tuple
+from neosr.archs.arch_util import to_2tuple, window_sdpa
+from neosr.archs.swinir_arch import calculate_mask
 
 
 # Shuffle operation for Categorization and UnCategorization operations.
 def index_reverse(index):
-    index_r = torch.zeros_like(index)
-    ind = torch.arange(0, index.shape[-1]).to(index.device)
-    for i in range(index.shape[0]):
-        index_r[i, index[i, :]] = ind
-    return index_r
+    # inverse permutation of each row, on device (no host copy, no per-sample loop)
+    ind = torch.arange(index.shape[-1], device=index.device).expand_as(index)
+    return torch.empty_like(index).scatter_(-1, index, ind)
 
 
 def feature_shuffle(x, index):
@@ -118,12 +118,9 @@ def window_reverse(windows, window_size, h, w):
         x: (b, h, w, c)
 
     """
-    b = int(windows.shape[0] / (h * w / window_size / window_size))
-    x = windows.view(
-        b, h // window_size, w // window_size, window_size, window_size, -1
-    )
-    x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(b, h, w, -1)
-    return x
+    c = windows.shape[-1]
+    x = windows.view(-1, h // window_size, w // window_size, window_size, window_size, c)
+    return x.permute(0, 1, 3, 2, 4, 5).reshape(-1, h, w, c)
 
 
 class WindowAttention(nn.Module):
@@ -138,12 +135,13 @@ class WindowAttention(nn.Module):
 
     """
 
-    def __init__(self, dim, window_size, num_heads, qkv_bias=True):
+    def __init__(self, dim, window_size, num_heads, qkv_bias=True, flash_attn=True):
         super().__init__()
         self.dim = dim
         self.window_size = window_size  # Wh, Ww
         self.num_heads = num_heads
         self.qkv_bias = qkv_bias
+        self.flash_attn = flash_attn
         head_dim = dim // num_heads
         self.scale = head_dim**-0.5
 
@@ -176,9 +174,6 @@ class WindowAttention(nn.Module):
             qkv[2],
         )  # make torchscript happy (cannot use tensor as tuple)
 
-        q = q * self.scale
-        attn = q @ k.transpose(-2, -1)
-
         relative_position_bias = self.relative_position_bias_table[rpi.view(-1)].view(
             self.window_size[0] * self.window_size[1],
             self.window_size[0] * self.window_size[1],
@@ -187,6 +182,12 @@ class WindowAttention(nn.Module):
         relative_position_bias = relative_position_bias.permute(
             2, 0, 1
         ).contiguous()  # nH, Wh*Ww, Wh*Ww
+        if self.flash_attn:  # exact SDPA: bias + shift mask as one float mask
+            x = window_sdpa(q, k, v, relative_position_bias, mask, scale=self.scale)
+            return self.proj(x.transpose(1, 2).reshape(b_, n, c))
+
+        q = q * self.scale
+        attn = q @ k.transpose(-2, -1)
         attn = attn + relative_position_bias.unsqueeze(0)
 
         if mask is not None:
@@ -292,6 +293,7 @@ class AC_MSA(nn.Module):
         num_heads=4,
         category_size=128,
         qkv_bias=True,
+        flash_attn=True,
     ):
         super().__init__()
         self.dim = dim
@@ -299,6 +301,7 @@ class AC_MSA(nn.Module):
         self.num_tokens = num_tokens
         self.num_heads = num_heads
         self.category_size = category_size
+        self.flash_attn = flash_attn
 
         # self.wqkv = nn.Linear(dim, 3 * dim, bias=qkv_bias)
         self.proj = nn.Linear(dim, dim, bias=qkv_bias)
@@ -341,19 +344,23 @@ class AC_MSA(nn.Module):
         )  # 3, b, ng, nh, gs, c//nh
         q, k, v = qkv[0], qkv[1], qkv[2]
 
-        # Q @ K^T
-        attn = q @ k.transpose(-2, -1)  # b, ng, nh, gs, gs
+        # a Python bound: no host-to-device copy (same fp32 value as log(1 / 0.01))
+        logit_scale = torch.clamp(self.logit_scale, max=math.log(1.0 / 0.01)).exp()
+        if self.flash_attn:  # exact SDPA (flash-eligible); the learned scale goes into q
+            y = window_sdpa(
+                (q * logit_scale).flatten(0, 1), k.flatten(0, 1), v.flatten(0, 1), scale=1.0
+            ).unflatten(0, (b, ng))
+        else:
+            # Q @ K^T
+            attn = q @ k.transpose(-2, -1)  # b, ng, nh, gs, gs
+            attn = attn * logit_scale
 
-        logit_scale = torch.clamp(
-            self.logit_scale, max=torch.log(torch.tensor(1.0 / 0.01)).to(qkv.device)
-        ).exp()
-        attn = attn * logit_scale
+            # softmax
+            attn = self.softmax(attn)  # b, ng, nh, gs, gs
 
-        # softmax
-        attn = self.softmax(attn)  # b, ng, nh, gs, gs
-
-        # Attn * V
-        y = (attn @ v).permute(0, 1, 3, 2, 4).reshape(b, n + pad_n, c)[:, :n, :]
+            # Attn * V
+            y = attn @ v
+        y = y.permute(0, 1, 3, 2, 4).reshape(b, n + pad_n, c)[:, :n, :]
 
         x = feature_shuffle(y, x_sort_indices_reverse)
         x = self.proj(x)
@@ -401,6 +408,7 @@ class ATDTransformerLayer(nn.Module):
         act_layer=nn.GELU,
         norm_layer=nn.LayerNorm,
         is_last=False,
+        flash_attn=True,
     ):
         super().__init__()
 
@@ -431,6 +439,7 @@ class ATDTransformerLayer(nn.Module):
             window_size=to_2tuple(self.window_size),
             num_heads=num_heads,
             qkv_bias=qkv_bias,
+            flash_attn=flash_attn,
         )
         self.attn_atd = ATD_CA(
             self.dim,
@@ -446,6 +455,7 @@ class ATDTransformerLayer(nn.Module):
             num_heads=num_heads,
             category_size=category_size,
             qkv_bias=qkv_bias,
+            flash_attn=flash_attn,
         )
 
         mlp_hidden_dim = int(dim * mlp_ratio)
@@ -605,12 +615,15 @@ class BasicBlock(nn.Module):
         qkv_bias=True,
         norm_layer=nn.LayerNorm,
         downsample=None,
+        flash_attn=True,
+        use_checkpoint=False,
     ):
         super().__init__()
         self.dim = dim
         self.input_resolution = input_resolution
         self.depth = depth
         self.idx = idx
+        self.use_checkpoint = use_checkpoint
 
         self.layers = nn.ModuleList()
         for i in range(depth):
@@ -630,6 +643,7 @@ class BasicBlock(nn.Module):
                     qkv_bias=qkv_bias,
                     norm_layer=norm_layer,
                     is_last=i == depth - 1,
+                    flash_attn=flash_attn,
                 )
             )
 
@@ -648,7 +662,10 @@ class BasicBlock(nn.Module):
         b, n, c = x.shape
         td = self.td.repeat([b, 1, 1])
         for layer in self.layers:
-            x, td = layer(x, td, x_size, params)
+            if self.use_checkpoint and self.training:  # per layer; non-reentrant for backward(inputs=)
+                x, td = checkpoint(layer, x, td, x_size, params, use_reentrant=False)
+            else:
+                x, td = layer(x, td, x_size, params)
         if self.downsample is not None:
             x = self.downsample(x)
         return x
@@ -774,6 +791,8 @@ class ATDB(nn.Module):
         img_size=224,
         patch_size=4,
         resi_connection="1conv",
+        flash_attn=True,
+        use_checkpoint=False,
     ):
         super(ATDB, self).__init__()
 
@@ -811,6 +830,8 @@ class ATDB(nn.Module):
             qkv_bias=qkv_bias,
             norm_layer=norm_layer,
             downsample=downsample,
+            flash_attn=flash_attn,
+            use_checkpoint=use_checkpoint,
         )
 
         if resi_connection == "1conv":
@@ -906,6 +927,8 @@ class atd(nn.Module):
         img_range: Image range. 1. or 255.
         upsampler: The reconstruction reconstruction module. 'pixelshuffle'/'pixelshuffledirect'/'nearest+conv'/None
         resi_connection: The convolutional block before residual connection. '1conv'/'3conv'
+        flash_attn (bool): Exact SDPA attention (memory-efficient/flash kernels); False = the manual reference path
+        use_checkpoint (bool): Activation checkpointing per transformer layer while training. Default: False
 
     """
 
@@ -941,6 +964,8 @@ class atd(nn.Module):
         upsampler="pixelshuffle",
         resi_connection="1conv",
         norm=False,
+        flash_attn=True,
+        use_checkpoint=False,
     ):
         super().__init__()
         num_in_ch = in_chans
@@ -954,11 +979,10 @@ class atd(nn.Module):
         else:
             self.no_norm = None
 
-        if in_chans == 3:
-            rgb_mean = (0.5, 0.5, 0.5)
-            self.mean = torch.Tensor(rgb_mean).view(1, 3, 1, 1)
-        else:
-            self.mean = torch.zeros(1, 1, 1, 1)
+        mean = (
+            torch.full((1, 3, 1, 1), 0.5) if in_chans == 3 else torch.zeros(1, 1, 1, 1)
+        )
+        self.register_buffer("mean", mean, persistent=False)  # moves with .to(), not in state_dict
 
         self.upscale = upscale
         self.upsampler = upsampler
@@ -1028,6 +1052,8 @@ class atd(nn.Module):
                 img_size=img_size,
                 patch_size=patch_size,
                 resi_connection=resi_connection,
+                flash_attn=flash_attn,
+                use_checkpoint=use_checkpoint,
             )
             self.layers.append(layer)
         self.norm = norm_layer(self.num_features)
@@ -1120,36 +1146,9 @@ class atd(nn.Module):
         relative_position_index = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
         return relative_position_index
 
-    def calculate_mask(self, x_size):
-        # calculate attention mask for SW-MSA
-        h, w = x_size
-        img_mask = torch.zeros((1, h, w, 1))  # 1 h w 1
-        h_slices = (
-            slice(0, -self.window_size),
-            slice(-self.window_size, -(self.window_size // 2)),
-            slice(-(self.window_size // 2), None),
-        )
-        w_slices = (
-            slice(0, -self.window_size),
-            slice(-self.window_size, -(self.window_size // 2)),
-            slice(-(self.window_size // 2), None),
-        )
-        cnt = 0
-        for h in h_slices:
-            for w in w_slices:
-                img_mask[:, h, w, :] = cnt
-                cnt += 1
-
-        mask_windows = window_partition(
-            img_mask, self.window_size
-        )  # nw, window_size, window_size, 1
-        mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
-        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, -100.0).masked_fill(
-            attn_mask == 0, 0.0
-        )
-
-        return attn_mask
+    def calculate_mask(self, x_size, device=None):
+        # attention mask for SW-MSA, built on device (shift = window_size // 2)
+        return calculate_mask(tuple(x_size), self.window_size, self.window_size // 2, device)
 
     @property
     def is_norm(self):
@@ -1162,15 +1161,19 @@ class atd(nn.Module):
         h_pad = ((h_ori + mod - 1) // mod) * mod - h_ori
         w_pad = ((w_ori + mod - 1) // mod) * mod - w_ori
         h, w = h_ori + h_pad, w_ori + w_pad
-        x = torch.cat([x, torch.flip(x, [2])], 2)[:, :, :h, :]
-        x = torch.cat([x, torch.flip(x, [3])], 3)[:, :, :, :w]
+        # mirror padding, repeated while the input is smaller than the pad
+        while x.shape[2] < h:
+            x = torch.cat([x, torch.flip(x, [2])], 2)
+        while x.shape[3] < w:
+            x = torch.cat([x, torch.flip(x, [3])], 3)
+        x = x[:, :, :h, :w]
 
         # rgb norm
+        mean = self.mean.to(x)
         if self.is_norm:
-            self.mean = self.mean.type_as(x)
-            x = (x - self.mean) * self.img_range
+            x = (x - mean) * self.img_range
 
-        attn_mask = self.calculate_mask([h, w]).to(x.device)
+        attn_mask = self.calculate_mask([h, w], x.device)
         params = {"attn_mask": attn_mask, "rpi_sa": self.relative_position_index_SA}
 
         if self.upsampler == "pixelshuffle":
@@ -1203,11 +1206,11 @@ class atd(nn.Module):
         else:
             # for image denoising and JPEG compression artifact reduction
             x_first = self.conv_first(x)
-            res = self.conv_after_body(self.forward_features(x_first)) + x_first
+            res = self.conv_after_body(self.forward_features(x_first, params)) + x_first
             x = x + self.conv_last(res)
 
         if self.is_norm:
-            x = x / self.img_range + self.mean
+            x = x / self.img_range + mean
 
         # unpadding
         x = x[..., : h_ori * self.upscale, : w_ori * self.upscale]

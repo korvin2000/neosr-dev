@@ -7,6 +7,8 @@ from einops import rearrange
 from torch import nn
 from torch.nn.init import trunc_normal_
 
+from neosr.archs.arch_util import window_sdpa
+
 
 def img2windows(img, H_sp, W_sp):
     """Input: Image (B, C, H, W)
@@ -25,11 +27,9 @@ def windows2img(img_splits_hw, H_sp, W_sp, H, W):
     """Input: Window Partition (B', N, C)
     Output: Image (B, H, W, C)
     """
-    B = int(img_splits_hw.shape[0] / (H * W / H_sp / W_sp))
-
-    img = img_splits_hw.view(B, H // H_sp, W // W_sp, H_sp, W_sp, -1)
-    img = img.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
-    return img
+    C = img_splits_hw.shape[-1]
+    img = img_splits_hw.view(-1, H // H_sp, W // W_sp, H_sp, W_sp, C)
+    return img.permute(0, 1, 3, 2, 4, 5).reshape(-1, H, W, C)
 
 
 class Mlp(nn.Module):
@@ -151,6 +151,12 @@ class Attention_regular(nn.Module):
         self.W_sp = W_sp
 
         self.pos = DynamicPosBias(self.dim // 4, self.num_heads, residual=False)
+        # pos_dim 1 (the shipped dims): LayerNorm(1) outputs its bias, so the "bias" is one constant per
+        # head that softmax ignores. Skip it and freeze its params (state_dict unchanged; outputs equal up to
+        # rounding; no grad-None params under DDP).
+        self.dead_pos = self.pos.pos_dim == 1
+        if self.dead_pos:
+            self.pos.requires_grad_(False)
         self.softmax = nn.Softmax(dim=-1)
 
     def im2win(self, x, H, W):
@@ -180,16 +186,8 @@ class Attention_regular(nn.Module):
         k = self.im2win(k, H, W)
         v = self.im2win(v, H, W)
 
-        if self.flash_attn is True:
-            # flash attention
-            x = F.scaled_dot_product_attention(
-                q, k, v, attn_mask=mask, scale=self.scale
-            )
-            x = x.transpose(1, 2).reshape(-1, self.H_sp * self.W_sp, C)
-        else:
-            q = q * self.scale
-            attn = q @ k.transpose(-2, -1)  # B head N C @ B head C N --> B head N N
-
+        relative_position_bias = None
+        if not self.dead_pos:
             # calculate drpe
             pos = self.pos(rpe_biases)
             # select position bias
@@ -199,7 +197,15 @@ class Attention_regular(nn.Module):
             relative_position_bias = relative_position_bias.permute(
                 2, 0, 1
             ).contiguous()
-            attn = attn + relative_position_bias.unsqueeze(0)
+
+        if self.flash_attn:  # exact SDPA (flash-eligible without a live bias)
+            x = window_sdpa(q, k, v, relative_position_bias, mask, scale=self.scale)
+            x = x.transpose(1, 2).reshape(-1, self.H_sp * self.W_sp, C)
+        else:
+            q = q * self.scale
+            attn = q @ k.transpose(-2, -1)  # B head N C @ B head C N --> B head N N
+            if relative_position_bias is not None:
+                attn = attn + relative_position_bias.unsqueeze(0)
 
             N = attn.shape[3]
 
@@ -767,6 +773,9 @@ class craft(nn.Module):
         upscale: Upscale factor. 2/3/4/
         img_range: Image range. 1. or 255.
         resi_connection: The convolutional block before residual connection. '1conv'/'3conv'
+        flash_attn (bool): Exact SDPA attention; False = the manual reference path. Default: True
+        pad_extra_window (bool): The upstream padding, which adds one more window even to aligned inputs
+            (64 -> 80 px); for old checkpoints that must reproduce their border outputs. Default: False
 
     """
 
@@ -790,18 +799,20 @@ class craft(nn.Module):
         split_size_0=4,
         split_size_1=16,
         mlp_ratio=2.0,
-        flash_attn=False,
+        flash_attn=True,
         qkv_bias=True,
         qk_scale=None,
         norm_layer=nn.LayerNorm,
         upscale=4,
         img_range=1.0,
         resi_connection="1conv",
+        pad_extra_window=False,
     ):
         super(craft, self).__init__()
 
         self.split_size = (split_size_0, split_size_1)
         self.window_size = window_size
+        self.pad_extra_window = pad_extra_window
 
         num_in_ch = in_chans
         num_out_ch = in_chans
@@ -809,11 +820,10 @@ class craft(nn.Module):
         self.img_range = img_range
         self.num_feat = num_feat
         self.num_out_ch = num_out_ch
-        if in_chans == 3:
-            rgb_mean = (0.5, 0.5, 0.5)
-            self.mean = torch.Tensor(rgb_mean).view(1, 3, 1, 1)
-        else:
-            self.mean = torch.zeros(1, 1, 1, 1)
+        mean = (
+            torch.full((1, 3, 1, 1), 0.5) if in_chans == 3 else torch.zeros(1, 1, 1, 1)
+        )
+        self.register_buffer("mean", mean, persistent=False)  # moves with .to(), not in state_dict
         self.upscale = upscale
 
         # relative position index
@@ -933,22 +943,28 @@ class craft(nn.Module):
 
     def forward(self, x):
         _, _, h_old, w_old = x.size()
-        h_pad = (h_old // self.window_size + 1) * self.window_size - h_old
-        w_pad = (w_old // self.window_size + 1) * self.window_size - w_old
+        ws = self.window_size
+        if self.pad_extra_window:  # upstream: always one more window, also for aligned inputs
+            h_pad, w_pad = (h_old // ws + 1) * ws - h_old, (w_old // ws + 1) * ws - w_old
+        else:  # to the next window multiple only
+            h_pad, w_pad = -h_old % ws, -w_old % ws
         pad = h_pad != 0 or w_pad != 0
 
-        if pad:
-            x = torch.cat([x, torch.flip(x, [2])], 2)[:, :, : h_old + h_pad, :]
-            x = torch.cat([x, torch.flip(x, [3])], 3)[:, :, :, : w_old + w_pad]
+        if pad:  # mirror padding, repeated while the input is smaller than the pad
+            while x.shape[2] < h_old + h_pad:
+                x = torch.cat([x, torch.flip(x, [2])], 2)
+            while x.shape[3] < w_old + w_pad:
+                x = torch.cat([x, torch.flip(x, [3])], 3)
+            x = x[:, :, : h_old + h_pad, : w_old + w_pad]
 
-        self.mean = self.mean.type_as(x)
-        x = (x - self.mean) * self.img_range
+        mean = self.mean.to(x)
+        x = (x - mean) * self.img_range
 
         x = self.conv_first(x)
         x = self.conv_after_body(self.forward_features(x)) + x
 
         x = self.upsample(x)
-        x = x / self.img_range + self.mean
+        x = x / self.img_range + mean
 
         if pad:
             x = x[..., : h_old * self.upscale, : w_old * self.upscale]
