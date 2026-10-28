@@ -132,6 +132,29 @@ def test_resume_warns_about_global_objective_keys(tmp_path, caplog, monkeypatch)
     assert "wavelet" not in caplog.text  # unset before and after: not a change
 
 
+def test_resume_of_a_state_older_than_a_train_key_does_not_warn(
+    tmp_path, caplog, monkeypatch
+):
+    monkeypatch.setattr(get_root_logger(), "propagate", True)
+    opt = make_opt(tmp_path)
+    opt["train"]["match_lq_colors"] = True
+    m = build(opt)
+    run(m, batches(1))
+    m.save()
+    path = tmp_path / "training_states" / "1.state"
+    state = torch.load(path, map_location="cpu", weights_only=True)
+    del state["run"]["train"]["match_lq_colors"]  # saved before the key was recorded
+    del state["run"]["network_g"]["num_conv"]  # a config sub-key set since: still a change
+    torch.save(state, path)
+    opt = make_opt(tmp_path)
+    opt["path"]["resume_state"] = path
+    opt["train"]["match_lq_colors"] = True
+    with caplog.at_level(logging.WARNING, logger="neosr"):
+        build(opt)
+    assert "match_lq_colors" not in caplog.text
+    assert "network_g.num_conv: None -> 2" in caplog.text
+
+
 # ---------------------------------------------------------------------------- 5 mean/std
 def test_validate_train_rejects_identity_normalisation_like_the_datasets(tmp_path):
     body = BASE.replace(
