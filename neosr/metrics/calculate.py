@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from cv2.typing import MatLike
 from torch import Tensor, nn
+from torch.nn import functional as F
 
 from neosr.metrics.metric_util import reorder_image, to_y_channel
 from neosr.utils.img_util import img2tensor
@@ -162,17 +163,111 @@ def calculate_ssim(
     return float(np.array(ssims).mean())
 
 
-# Building DISTS/TOPIQ costs far more than one forward pass, so each network is
-# built once per (name, device) and reused for one validation pass; the model's
-# validation() calls release_metric_nets() afterwards to free the weights.
-_metric_nets: dict[tuple[str, torch.device], nn.Module] = {}
+# ------------------------------------------------------------------------------------------------
+# On-device twins (`*_pt`) used by validation. They take what `img_util.quantize` returns for sr and
+# gt: float32 RGB NCHW holding the uint8 values 0..255 that tensor2img would write. They reproduce
+# the numpy references above (crop, Y conversion, float64 statistics) to rounding level and return a
+# 0-d tensor on the input device, so validation syncs once per event instead of once per image.
+
+
+def _prep_pt(
+    img: Tensor, img2: Tensor, crop_border: int, input_order: str
+) -> tuple[Tensor, Tensor]:
+    assert img.shape == img2.shape, (
+        f"Image shapes are different: {img.shape}, {img2.shape}."
+    )
+    if input_order not in {"HWC", "CHW"}:  # numpy layouts: tensors are always NCHW
+        msg = f'Wrong input_order {input_order}. Supported input_orders are "HWC" and "CHW"'
+        raise ValueError(msg)
+    if crop_border < 0:
+        msg = f"crop_border must be >= 0, got {crop_border}."
+        raise ValueError(msg)
+    if crop_border:
+        img = img[..., crop_border:-crop_border, crop_border:-crop_border]
+        img2 = img2[..., crop_border:-crop_border, crop_border:-crop_border]
+    return img, img2
+
+
+def _div255(x: Tensor) -> Tensor:
+    # CUDA divides by a Python scalar as a multiply by its reciprocal (not correctly rounded, unlike
+    # numpy and the CPU); a 0-d device divisor gives the true quotient (a fill kernel, no copy)
+    return x / torch.full((), 255.0, dtype=x.dtype, device=x.device)
+
+
+def _y_pt(img: Tensor) -> Tensor:
+    """to_y_channel's dtype sequence: fp32 / 255, fp64 BT.601 dot (BGR weights) + 16, / 255, fp32, x 255."""
+    img = _div255(img.float())
+    if img.shape[1] == 3:
+        r, g, b = img.double().unbind(1)
+        y = b * 24.966 + g * 128.553 + r * 65.481 + 16.0
+        img = _div255(y).float().unsqueeze(1)
+    return img * 255.0
+
+
+def calculate_psnr_pt(
+    img: Tensor,
+    img2: Tensor,
+    crop_border: int = 4,
+    input_order: str = "HWC",
+    test_y_channel: bool = False,
+) -> Tensor:
+    """calculate_psnr on quantised tensors (see above); integer squared errors sum exactly in fp64."""
+    img, img2 = _prep_pt(img, img2, crop_border, input_order)
+    if img.numel() == 0:
+        msg = f"PSNR input is empty after cropping {crop_border} px."
+        raise ValueError(msg)
+    if test_y_channel:
+        img, img2 = _y_pt(img), _y_pt(img2)
+    mse = (img.double() - img2.double()).square().mean()
+    return 10.0 * torch.log10(255.0 * 255.0 / mse)  # mse 0 -> inf, as the reference
+
+
+# float64 (11, 1); the reference filters with its outer product
+_SSIM_KERNEL = cv2.getGaussianKernel(11, 1.5)
+
+
+def calculate_ssim_pt(
+    img: Tensor,
+    img2: Tensor,
+    crop_border: int = 4,
+    input_order: str = "HWC",
+    test_y_channel: bool = False,
+) -> Tensor:
+    """calculate_ssim on quantised tensors (see above): the same Gaussian window applied separably in
+    fp64 to the five statistics at once, valid region only (what the reference keeps of filter2D)."""
+    img, img2 = _prep_pt(img, img2, crop_border, input_order)
+    if min(img.shape[-2:]) < 11:
+        msg = f"SSIM needs at least 11x11 px after cropping {crop_border} px, got {tuple(img.shape[-2:])}."
+        raise ValueError(msg)
+    if test_y_channel:
+        img, img2 = _y_pt(img), _y_pt(img2)
+    n, c, h, w = img.shape
+    k = torch.from_numpy(_SSIM_KERNEL).to(img.device).view(1, 1, 11, 1)
+    c1, c2 = (0.01 * 255) ** 2, (0.03 * 255) ** 2
+    ssims = []
+    for i in range(c):  # one channel at a time: the fp64 statistics are 5x the channel
+        x, y = img[:, i].double(), img2[:, i].double()
+        stats = torch.stack((x, y, x * x, y * y, x * y), 1).view(n * 5, 1, h, w)
+        stats = F.conv2d(F.conv2d(stats, k), k.view(1, 1, 1, 11))
+        mu1, mu2, xx, yy, xy = stats.view(n, 5, h - 10, w - 10).unbind(1)
+        mu1_sq, mu2_sq, mu1_mu2 = mu1**2, mu2**2, mu1 * mu2
+        ssim_map = ((2 * mu1_mu2 + c1) * (2 * (xy - mu1_mu2) + c2)) / (
+            (mu1_sq + mu2_sq + c1) * ((xx - mu1_sq) + (yy - mu2_sq) + c2)
+        )
+        ssims.append(ssim_map.mean((-2, -1)))
+    return torch.stack(ssims, -1).mean()  # per channel, then over channels
+
+
+# Building DISTS/TOPIQ costs far more than moving it (0.3-0.6 s and a 0.3-1 GiB host spike per
+# build), so each network is built once per process and kept here by name. release_metric_nets(),
+# called by the model's validation() after each event, parks the nets on the CPU: the VRAM is freed
+# between events and the next event moves them back (~200 MB) instead of rebuilding them.
+_metric_nets: dict[str, nn.Module] = {}
 
 
 # the nets pull in torchvision models and weights: imported on first use
 def _dists() -> nn.Module:
-    from neosr.losses.dists_loss import dists_loss  # noqa: PLC0415
-
-    return dists_loss(as_loss=False)
+    return _streaming_dists()
 
 
 def _topiq() -> nn.Module:
@@ -181,19 +276,98 @@ def _topiq() -> nn.Module:
     return topiq()
 
 
+class _streaming_dists(nn.Module):
+    """dists_loss (as_loss=False) evaluated one VGG stage at a time for both images: the same ops in
+    the same order as dists_loss.forward (bit-identical value), but the two six-level pyramids are
+    never held at once (MT-13: -28 % peak at 1080p). The weights are dists_loss's own (`net.`)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        from neosr.losses.dists_loss import dists_loss  # noqa: PLC0415
+
+        self.net = dists_loss(as_loss=False)
+
+    def forward(self, x: Tensor, y: Tensor) -> Tensor:
+        net, c1, c2 = self.net, 1e-6, 1e-6
+        w_sum = net.alpha.sum() + net.beta.sum()
+        alpha = torch.split(net.alpha / w_sum, net.chns, dim=1)
+        beta = torch.split(net.beta / w_sum, net.chns, dim=1)
+        stages = (net.stage1, net.stage2, net.stage3, net.stage4, net.stage5)
+        hx, hy = (x - net.mean) / net.std, (y - net.mean) / net.std
+        fx, fy = x, y  # level 0 is the raw input
+        dist1 = dist2 = 0
+        for k in range(len(net.chns)):
+            if k:
+                hx, hy = stages[k - 1](hx), stages[k - 1](hy)
+                fx, fy = hx, hy
+            x_mean = fx.mean([2, 3], keepdim=True)
+            y_mean = fy.mean([2, 3], keepdim=True)
+            S1 = (2 * x_mean * y_mean + c1) / (x_mean**2 + y_mean**2 + c1)
+            dist1 = dist1 + (alpha[k] * S1).sum(1, keepdim=True)
+            x_var = ((fx - x_mean) ** 2).mean([2, 3], keepdim=True)
+            y_var = ((fy - y_mean) ** 2).mean([2, 3], keepdim=True)
+            xy_cov = (fx * fy).mean([2, 3], keepdim=True) - x_mean * y_mean
+            S2 = (2 * xy_cov + c2) / (x_var + y_var + c2)
+            dist2 = dist2 + (beta[k] * S2).sum(1, keepdim=True)
+        return 1 - (dist1 + dist2).squeeze()  # type: ignore[operator]
+
+
 _metric_builders = {"dists": _dists, "topiq": _topiq}
 
 
 def release_metric_nets() -> None:
-    _metric_nets.clear()
+    for net in _metric_nets.values():
+        net.to("cpu")
 
 
 def _metric_net(name: str, device: torch.device) -> nn.Module:
-    net = _metric_nets.get((name, device))
+    net = _metric_nets.get(name)
     if net is None:
-        net = _metric_builders[name]().to(device).eval().requires_grad_(False)
-        _metric_nets[name, device] = net
+        net = _metric_builders[name]().eval().requires_grad_(False)
+        _metric_nets[name] = net
+    if next(net.parameters()).device != device:
+        net.to(device)
     return net
+
+
+def _metric_device(device: torch.device | str | None) -> torch.device:
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device(device)
+    if device.type == "cuda" and device.index is None:
+        # "cuda" and "cuda:N" are the same placement: follow the current device
+        device = torch.device("cuda", torch.cuda.current_device())
+    return device
+
+
+def _net_metric_pt(
+    name: str, img: Tensor, img2: Tensor, device: torch.device | str | None
+) -> Tensor:
+    assert img.shape == img2.shape, (
+        f"Image shapes are different: {img.shape}, {img2.shape}."
+    )
+    device = _metric_device(device)
+    net = _metric_net(name, device)
+    if img.shape[1] == 1:  # grayscale: both networks expect 3 channels
+        img, img2 = img.expand(-1, 3, -1, -1), img2.expand(-1, 3, -1, -1)
+    # quantised / 255: exactly the uint8 / 255 input of the reference
+    x, y = _div255(img.to(device)), _div255(img2.to(device))
+    with torch.inference_mode():
+        return net(x, y)
+
+
+def calculate_dists_pt(
+    img: Tensor, img2: Tensor, device: torch.device | str | None = None
+) -> Tensor:
+    """DISTS (lower is better) on quantised tensors (see above)."""
+    return _net_metric_pt("dists", img, img2, device)
+
+
+def calculate_topiq_pt(
+    img: Tensor, img2: Tensor, device: torch.device | str | None = None
+) -> Tensor:
+    """Full-reference TOPIQ (higher is better) on quantised tensors (see above)."""
+    return _net_metric_pt("topiq", img, img2, device)
 
 
 def _calculate_net_metric(
@@ -202,22 +376,11 @@ def _calculate_net_metric(
     assert img.shape == img2.shape, (
         f"Image shapes are different: {img.shape}, {img2.shape}."
     )
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    device = torch.device(device)
-    if device.type == "cuda" and device.index is None:
-        # "cuda" and "cuda:N" must share one cache entry and follow the current device
-        device = torch.device("cuda", torch.cuda.current_device())
-    if img.ndim == 2:  # grayscale: both networks expect 3 channels
-        img, img2 = (np.repeat(i[..., None], 3, axis=2) for i in (img, img2))
-    net = _metric_net(name, device)
-    # BGR uint8 HWC -> RGB [0, 1] NCHW
-    x, y = (
-        cast("Tensor", t).div(255).unsqueeze(0).to(device)
-        for t in img2tensor([img, img2])
-    )
-    with torch.inference_mode():
-        return net(x, y).item()
+    if img.ndim == 2:
+        img, img2 = img[..., None], img2[..., None]
+    # BGR uint8 HWC -> the quantised RGB NCHW tensors of the _pt functions
+    x, y = (cast("Tensor", t).unsqueeze(0) for t in img2tensor([img, img2]))
+    return _net_metric_pt(name, x, y, device).item()
 
 
 def calculate_dists(

@@ -61,6 +61,13 @@ def img2tensor(
     return _totensor(imgs, bgr2rgb, float32, color)
 
 
+def quantize(t: Tensor) -> Tensor:
+    """The uint8 grid of `tensor2img` as float32 0..255 values, on `t`'s device: clamp(0, 1) * 255,
+    rounded half to even. Bit-identical to tensor2img (every step is a correctly rounded fp32 op);
+    one new fp32 tensor, the rest in place. `t` itself is never modified."""
+    return t.detach().float().clamp(0, 1).mul_(255.0).round_()
+
+
 def tensor2img(
     tensor: Tensor | list[Tensor],
     rgb2bgr: bool = True,
@@ -101,36 +108,31 @@ def tensor2img(
     for tensor_ in tensor:
         if tensor_.dim() == 4:
             tensor_ = tensor_.squeeze(0)
-        # out-of-place clamp: .float()/.cpu() alias an fp32 CPU input
+        # the out-of-place clamp is the only full fp32 copy (.float()/.cpu() alias an fp32 CPU
+        # input); the remaining steps run in place: 1x instead of ~4x the image in temporaries
         n_tensor = tensor_.detach().float().cpu().clamp(*min_max)
-        n_tensor = (n_tensor - min_max[0]) / (min_max[1] - min_max[0])
+        if tuple(min_max) != (0, 1):  # (x - 0) / 1 is exact: skipped
+            n_tensor.sub_(min_max[0]).div_(min_max[1] - min_max[0])
 
         n_dim = n_tensor.dim()
         if n_dim == 4:
-            img_np = make_grid(
+            n_tensor = make_grid(
                 n_tensor, nrow=int(math.sqrt(n_tensor.size(0))), normalize=False
-            ).numpy()
-            img_np = img_np.transpose(1, 2, 0)
-            if rgb2bgr:
-                img_np = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
-        elif n_dim == 3:
-            img_np = n_tensor.numpy()
-            img_np = img_np.transpose(1, 2, 0)
-            if img_np.shape[2] == 1:  # gray image
-                img_np = np.squeeze(img_np, axis=2)
-            else:
-                if rgb2bgr:
-                    img_np = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
-        elif n_dim == 2:
-            img_np = n_tensor.numpy()
-        else:
+            )
+        elif n_dim not in {2, 3}:
             msg = f"Only support 4D, 3D or 2D tensor. But received with dimension: {n_dim}"
             raise TypeError(msg)
-        if out_type == np.uint8:
+        if out_type == np.uint8:  # quantised first: the layout copies move 1 byte/value
             # Unlike MATLAB, numpy.unit8() WILL NOT round by default.
-            img_np = (img_np * 255.0).round()
-        img_np = img_np.astype(out_type)
-        result.append(img_np)
+            n_tensor = n_tensor.mul_(255.0).round_().to(torch.uint8)
+        if n_tensor.dim() == 3:
+            n_tensor = n_tensor.permute(1, 2, 0)
+            if n_dim == 3 and n_tensor.shape[2] == 1:  # gray image
+                n_tensor = n_tensor.squeeze(2)
+            elif rgb2bgr:  # cv2.COLOR_RGB2BGR, which also drops an alpha channel
+                n_tensor = n_tensor[..., :3].flip(2)
+        img_np = n_tensor.contiguous().numpy()
+        result.append(img_np if out_type == np.uint8 else img_np.astype(out_type))
     if len(result) == 1:
         result = result[0]
     return result

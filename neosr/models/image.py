@@ -1,10 +1,13 @@
 """Single-image super-resolution trainer (design T2 §3, §6, §8.4; T1 §4.5)."""
 
+from collections import deque
 from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 from torch import Tensor, nn
 from torch.ao.quantization import FakeQuantizeBase
@@ -21,6 +24,7 @@ from neosr.models.phase import Ema, LossMeter, Phase, no_sync, trainable
 from neosr.models.tiling import infer_tiled
 from neosr.runtime import Runtime
 from neosr.utils import get_root_logger, imwrite, tc, tensor2img
+from neosr.utils.img_util import quantize
 
 
 @contextmanager
@@ -35,6 +39,26 @@ def observers_frozen(net: nn.Module) -> Generator[None]:
     finally:
         for m, f in zip(fqs, flags, strict=True):
             m.observer_enabled.copy_(f)
+
+
+@contextmanager
+def no_cudnn_autotune() -> Generator[None]:
+    """benchmark off, nothing else: cudnn.flags() would also reset benchmark_limit and fp32_precision."""
+    was = torch.backends.cudnn.benchmark
+    torch.backends.cudnn.benchmark = False
+    try:
+        yield
+    finally:
+        torch.backends.cudnn.benchmark = was
+
+
+def image_id(lq_path: str, root: str | None) -> Path:
+    """The path of an image below its dataroot without suffix; the stem for LMDB keys or outside it."""
+    p = Path(lq_path)
+    try:
+        return p.relative_to(root).with_suffix("") if root else Path(p.stem)
+    except ValueError:
+        return Path(p.stem)
 
 
 class image(base):
@@ -319,72 +343,136 @@ class image(base):
                 for g, f in zip(phase.opt.param_groups, flags, strict=True):  # type: ignore[union-attr,arg-type]
                     g["train_mode"] = f
 
+    def _infer(self, net: nn.Module, lq: Tensor, warned: list[bool]) -> Tensor:
+        """Full image, or tiled when val.tile > 0. A CUDA OOM retries the image once tiled (val.tile or
+        256): the caching allocator is emptied first; a second OOM propagates (T-03)."""
+        try:
+            if self.tile <= 0:
+                return net(lq)
+            return infer_tiled(net, lq, self.scale, self.tile, self.tile_overlap)
+        except torch.OutOfMemoryError:
+            pass  # retried outside the handler: the traceback no longer pins the failed activations
+        torch.cuda.empty_cache()
+        tile = self.tile if self.tile > 0 else 256
+        if not warned[0]:
+            warned[0] = True
+            get_root_logger().warning(
+                f"validation ran out of memory on a {tuple(lq.shape[-2:])} input: retrying tiled "
+                f"(tile {tile}, tile_overlap {self.tile_overlap}); tiled metrics can differ "
+                "slightly from full-image ones. Set val.tile to avoid this."
+            )
+        return infer_tiled(net, lq, self.scale, tile, self.tile_overlap)
+
     def validate(self, loader, current_iter, tb_logger, save_img: bool) -> None:
-        """Output contract of the old nondist_validation (T2 §6.3); rank 0, called by validation()."""
+        """Output contract of the old nondist_validation (T2 §6.3); rank 0, called by validation().
+        Metrics run on the device on the quantised images (the values tensor2img writes, MT-04); a
+        uint8 host copy is made only for an image that is saved or logged, PNGs are written by one
+        background thread. Inference (test.py) honours use_amp/bfloat16; training validation stays
+        fp32 (GP-13). cuDNN autotuning is off: every val shape would be timed anew (MT-11)."""
         ds, val = loader.dataset.opt, self.opt.get("val") or {}
         name, vis = ds["name"], Path(self.opt["path"]["visualization"])
+        root = ds.get("dataroot_lq")
         metrics = {} if ds["type"] == "single" else self.metrics
-        sums, n = dict.fromkeys(metrics, 0.0), 0
+        values: dict[str, list[Tensor]] = {k: [] for k in metrics}
         pbar = (
             tqdm(total=len(loader), unit="image", colour="green", ascii=" >=")
             if val.get("pbar", True)
             else None
         )
-        save_tb = self.is_train and (self.opt.get("logger") or {}).get(
-            "save_tb_img", False
+        save_tb = (
+            self.is_train
+            and tb_logger is not None
+            and (self.opt.get("logger") or {}).get("save_tb_img", False)
         )
+        save_lq = save_img and val.get("save_lq", True)
+        amp = not self.is_train and bool(self.opt.get("use_amp"))
+        autocast = torch.autocast(
+            self.device.type,
+            dtype=torch.bfloat16 if self.opt.get("bfloat16") else torch.float16,
+            enabled=amp and self.device.type == "cuda",
+        )
+        warned = [False]
+        writer, pending = (
+            ThreadPoolExecutor(1, thread_name_prefix="val_imwrite"),
+            deque(),
+        )
+
+        def write(img, path: Path) -> None:
+            pending.append(writer.submit(imwrite, img, str(path)))
+            while len(pending) > 2:  # bounded: at most two images wait in memory
+                pending.popleft().result()
+
         # one swap per validation; QAT ranges stay put
-        with self.eval_weights() as net, observers_frozen(net):
-            for data in loader:
-                img = Path(data["lq_path"][0]).stem
-                if pbar is not None:  # the image being inferred, not the last one done
-                    pbar.set_description(f"{tc.light_green}Inferring on {img}{tc.end}")
-                with torch.inference_mode():
-                    lq = data["lq"].to(self.device, non_blocking=True)
-                    sr = (
-                        net(lq)
-                        if self.tile <= 0
-                        else infer_tiled(
-                            net, lq, self.scale, self.tile, self.tile_overlap
+        try:
+            with self.eval_weights() as net, observers_frozen(net), no_cudnn_autotune():
+                for data in loader:
+                    rel = image_id(data["lq_path"][0], root)
+                    if pbar is not None:  # the image being inferred, not the last one
+                        pbar.set_description(
+                            f"{tc.light_green}Inferring on {rel}{tc.end}"
                         )
-                    )
-                sr_img = tensor2img([sr])  # one host copy
-                if save_img:
-                    imwrite(sr_img, str(self._img_path(vis, name, img, current_iter)))
-                    lq_path = vis / img / f"{img}_lq.png"
-                    if val.get("save_lq", True) and not lq_path.exists():
-                        imwrite(tensor2img([data["lq"]]), str(lq_path))
-                if save_tb and tb_logger is not None:
-                    tb_logger.add_image(
-                        f"{img}/{current_iter}",
-                        tensor2img([sr], rgb2bgr=False),
-                        global_step=current_iter,
-                        dataformats="HWC",
-                    )
-                if metrics:
-                    gt_img = tensor2img([data["gt"]])
-                    for (
-                        k,
-                        f,
-                    ) in metrics.items():  # float(): numpy scalars fail weights_only
-                        sums[k] += float(f(sr_img, gt_img))
-                n += 1
-                if pbar is not None:
-                    pbar.update(1)
-        if pbar is not None:
-            pbar.close()
+                    with torch.inference_mode():
+                        lq = data["lq"].to(self.device, non_blocking=True)
+                        with autocast:
+                            sr = self._infer(net, lq, warned)
+                        if metrics or save_img or save_tb:  # else nothing consumes sr
+                            q = quantize(sr)  # where sr is (tiled: the CPU)
+                            del sr
+                        if metrics:
+                            q_dev = (  # tiled: upload the integers as uint8 (exact, 1/4 the bytes)
+                                q
+                                if q.device == self.device
+                                else q.to(torch.uint8).to(self.device).float()
+                            )
+                            gt = quantize(data["gt"].to(self.device, non_blocking=True))
+                            for k, f in metrics.items():
+                                values[k].append(f(q_dev, gt))
+                    if save_img or save_tb:  # the one host copy: uint8 HWC RGB
+                        rgb = q[0].to(torch.uint8).permute(1, 2, 0).cpu().numpy()
+                        if save_img:  # tensor2img's layout: BGR, or HW for gray
+                            bgr = rgb[..., 0] if rgb.shape[-1] == 1 else rgb[..., ::-1]
+                            path = self._img_path(vis, name, rel, current_iter)
+                            write(np.ascontiguousarray(bgr), path)
+                            lq_path = self._img_path(vis, name, rel, "lq")
+                            if save_lq and not lq_path.exists():
+                                write(tensor2img([data["lq"]]), lq_path)
+                        if save_tb:
+                            tb_logger.add_image(
+                                f"{name}/{rel.as_posix()}",
+                                rgb,
+                                global_step=current_iter,
+                                dataformats="HWC",
+                            )
+                    if pbar is not None:
+                        pbar.update(1)
+        finally:
+            writer.shutdown(wait=True)
+            if pbar is not None:
+                pbar.close()
+        for f in pending:  # a failed write raises here
+            f.result()
         if metrics:
-            results = {k: s / n for k, s in sums.items()}
+            # one sync for the event; summed in Python in image order, as before
+            results = {
+                k: sum(torch.stack(v).double().tolist()) / len(v)
+                for k, v in values.items()
+            }
             for k, v in results.items():
                 self.update_best(name, k, v, current_iter)
             self.log_metrics(name, results, current_iter, tb_logger)
 
-    def _img_path(self, vis: Path, dataset: str, img: str, current_iter) -> Path:
+    def _img_path(self, vis: Path, dataset: str, rel: Path, tag) -> Path:
+        """`rel`: the image's path below its dataroot without suffix (image_id); dataset and
+        subfolders keep same-named images apart (F21). Training: one folder per image,
+        vis/<dataset>/<rel>/<stem>_<iter>.png and <stem>_lq.png. Test: the outputs alone in
+        vis/<dataset>/<rel parent>/<stem>_<suffix>.png, the LQ copies in vis/lq/<dataset>/<rel>.png."""
         if self.is_train:
-            return vis / img / f"{img}_{current_iter}.png"
+            return vis / dataset / rel / f"{rel.name}_{tag}.png"
+        if tag == "lq":
+            return vis / "lq" / dataset / f"{rel}.png"
         suffix = (self.opt.get("val") or {}).get("suffix")
         suffix = self.opt["name"] if suffix is None else suffix
-        return vis / dataset / f"{img}_{suffix}.png"
+        return vis / dataset / rel.parent / f"{rel.name}_{suffix}.png"
 
     # ---------------------------------------------------------------- checkpoint payloads
     def export_state_dicts(self) -> dict[str, dict[str, Tensor]]:

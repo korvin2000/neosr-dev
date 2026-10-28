@@ -185,7 +185,7 @@ def test_inference_path_writes_test_layout(tmp_path, model_type):
         "img0_tiny.png",
         "img1_tiny.png",
     ]
-    assert (vis / "img0" / "img0_lq.png").is_file()
+    assert (vis / "lq" / "valset" / "img0.png").is_file()
     assert set(m.best_metric_results["valset"]) == {"psnr"}
     m.opt["val"]["suffix"] = "sfx"  # single: no gt, no metrics
     m.validation(
@@ -376,7 +376,8 @@ def test_sf_export_and_validation_restore_exactly(tmp_path):
     seen = []
     m.metrics = {
         "probe": lambda *_: (
-            seen.append(sd_equal(net.state_dict(), x) and not net.training) or 0.0
+            seen.append(sd_equal(net.state_dict(), x) and not net.training)
+            or torch.zeros(())
         )
     }
     m.opt["val"]["metrics"] = {"probe": {"better": "lower"}}
