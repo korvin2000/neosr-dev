@@ -1,0 +1,42 @@
+<div class="chips" role="tablist" aria-label="Phase">
+  <button type="button" class="chip" [class.chip--active]="store.activePhaseId() === null" (click)="activate(null)" appTooltip="Values every phase inherits">Shared</button>
+  @for (p of phases(); track p.id; let i = $index) {
+    <button type="button" class="chip" [class.chip--active]="p.id === store.activePhaseId()" (click)="activate(p.id)" [appTooltip]="k(p.iters) + ' updates · ' + p.init">{{ i + 1 }} · {{ p.name }}</button>
+  }
+  @if (active()) {
+    <button type="button" class="btn btn--ghost btn--sm btn--icon edit" (click)="editing.set(!editing())" appTooltip="Edit this phase" aria-label="Edit phase" [attr.aria-expanded]="editing()"><app-icon name="edit" [size]="13" /></button>
+  }
+</div>
+
+@if (editing() && active(); as e) {
+  <div class="backdrop" (pointerdown)="editing.set(false)"></div>
+  <div class="popover" role="dialog" aria-label="Edit phase">
+    <label class="popover__row">
+      <span>Name</span>
+      <input class="input" type="text" [value]="e.name" (change)="update(e.id, { name: $any($event.target).value })" />
+    </label>
+    <label class="popover__row">
+      <span>Updates</span>
+      <input class="input mono" type="number" min="1" step="1000" [value]="e.iters" (change)="setIters(e.id, $any($event.target).value)" />
+    </label>
+    @if (activeIndex() > 0) {
+      <label class="popover__row">
+        <span>Transition</span>
+        <select class="select" [value]="e.init" (change)="update(e.id, { init: $any($event.target).value })">
+          @for (o of initOptions; track o.value) {
+            <option [value]="o.value" [selected]="o.value === e.init">{{ o.label }}</option>
+          }
+        </select>
+      </label>
+    }
+    <label class="popover__row">
+      <span>Note</span>
+      <input class="input" type="text" [value]="e.note" placeholder="e.g. add GAN" (change)="update(e.id, { note: $any($event.target).value })" />
+    </label>
+    <div class="popover__foot">
+      <button type="button" class="btn btn--ghost btn--sm btn--danger" [disabled]="phases().length <= 1" (click)="remove(e)"><app-icon name="trash" [size]="12" /> Delete phase</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn btn--sm" (click)="editing.set(false)">Done</button>
+    </div>
+  </div>
+}

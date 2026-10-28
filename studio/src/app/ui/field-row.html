@@ -1,0 +1,49 @@
+<div class="label">
+  <label class="label__text" [for]="controlId">{{ field().label }}</label>
+  <app-help [field]="field()" />
+  @if (showKey() && field().tomlKey) {
+    <code class="label__key">{{ field().tomlKey }}</code>
+  }
+</div>
+
+<div class="control">
+  <app-field-widget
+    [field]="field()"
+    [controlId]="controlId"
+    [value]="value()"
+    [readout]="readout()"
+    [disabled]="disabled() || phaseInherits()"
+    [overridden]="phaseOverridden()"
+    [showSuggestions]="false"
+    (valueChange)="valueChange.emit($event)"
+    (patch)="patch.emit($event)"
+  />
+
+  @if (changed() && !phase()) {
+    <button type="button" class="reset" (click)="reset.emit()" [appTooltip]="'Preset: ' + baselineText()" aria-label="Reset to preset">
+      <app-icon name="undo" [size]="13" />
+    </button>
+  }
+
+  @if (phaseInherits()) {
+    <button type="button" class="link" (click)="overrideToggle.emit(true)">Override for {{ phase()!.phaseName }}</button>
+  }
+  @if (phaseOverridden()) {
+    <button type="button" class="reset" (click)="overrideToggle.emit(false)" appTooltip="Use the shared value in this phase" aria-label="Use shared value">
+      <app-icon name="undo" [size]="13" />
+    </button>
+  }
+</div>
+
+@for (p of inlineProblems(); track p.id) {
+  <p class="problem" [class.problem--warning]="p.severity === 'warning'">
+    <app-icon name="alert-triangle" [size]="13" />
+    <span>{{ p.message }}</span>
+  </p>
+}
+
+@if (suggestion(); as s) {
+  <button type="button" class="suggest" (click)="valueChange.emit(s.value)">
+    Use {{ s.label }}@if (s.why) { <span class="faint"> — {{ s.why }}</span> }
+  </button>
+}

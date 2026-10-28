@@ -1,0 +1,490 @@
+@use 'tokens';
+@use '@foblex/flow/styles/index' as flow-theme;
+
+// Global styles: reset, typography, shared primitives (buttons, inputs, chips, badges) and the
+// Foblex rules that must live outside component encapsulation (connections render in their own
+// layer). Everything else is component-scoped.
+
+// --- Flow theme, composed domain by domain ---------------------------------
+// `theme-all()` would style `.f-node` as a light 120px card and outrank component styles; the
+// node look belongs to the node component, so the node/connector domains are left out.
+@include flow-theme.theme-tokens();
+@include flow-theme.flow-canvas();
+@include flow-theme.drag-handle();
+@include flow-theme.connection();
+@include flow-theme.connection-markers();
+@include flow-theme.external-item-all();
+@include flow-theme.plugins();
+
+:root {
+  --ff-flow-background-color: var(--canvas);
+  --ff-canvas-background-color: transparent;
+  --ff-flow-text-color: var(--text);
+  --ff-flow-font-family: inherit;
+  --ff-flow-font-size: 13px;
+  --ff-color-accent: var(--accent);
+  --ff-connection-color: #9aa4b8;
+  --ff-connection-color-selected: var(--selection);
+  --ff-selection-area-background-color: var(--accent-soft);
+  --ff-selection-area-border-color: var(--selection);
+  --ff-connection-hit-width: 16;
+}
+
+// --- Reset ---------------------------------------------------------------------
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--ground);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--fs);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+h1 {
+  font-size: var(--fs-xl);
+}
+
+h2 {
+  font-size: var(--fs-lg);
+}
+
+h3 {
+  font-size: var(--fs-md);
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--accent-text);
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+code,
+pre,
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+// Scrollbars match the panels instead of the OS.
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3a4352 transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #3a4352;
+  border: 3px solid transparent;
+  border-radius: 8px;
+  background-clip: padding-box;
+}
+
+// --- Controls -----------------------------------------------------------------
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: 0;
+  background: none;
+  padding: 0;
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--control-h);
+  padding: 0 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  background: var(--panel-raised);
+  color: var(--text);
+  font-size: var(--fs);
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    background var(--tempo) var(--ease),
+    border-color var(--tempo) var(--ease);
+
+  &:hover:not(:disabled) {
+    background: #2d3544;
+    border-color: var(--node-border-hover);
+  }
+
+  &--primary {
+    background: var(--accent);
+    border-color: transparent;
+    color: #fff;
+
+    &:hover:not(:disabled) {
+      background: var(--accent-hover);
+      border-color: transparent;
+    }
+  }
+
+  &--danger {
+    color: var(--danger);
+
+    &:hover:not(:disabled) {
+      background: var(--danger-soft);
+    }
+  }
+
+  &--ghost {
+    background: transparent;
+    border-color: transparent;
+    color: var(--text-muted);
+
+    &:hover:not(:disabled) {
+      background: var(--panel-raised);
+      color: var(--text);
+    }
+  }
+
+  &--sm {
+    height: 24px;
+    padding: 0 8px;
+    font-size: var(--fs-sm);
+  }
+
+  &--icon {
+    width: var(--control-h);
+    padding: 0;
+    justify-content: center;
+  }
+}
+
+.input,
+.select,
+.textarea {
+  width: 100%;
+  height: var(--control-h);
+  padding: 0 9px;
+  border-radius: var(--radius);
+  border: 1px solid var(--node-border);
+  background: var(--panel-sunken);
+  color: var(--text);
+  font-size: var(--fs);
+  transition: border-color var(--tempo) var(--ease);
+
+  &::placeholder {
+    color: var(--text-faint);
+  }
+
+  &:hover {
+    border-color: var(--node-border-hover);
+  }
+
+  &:focus {
+    border-color: var(--accent);
+    box-shadow: none;
+  }
+
+  &--invalid {
+    border-color: var(--danger);
+  }
+}
+
+.textarea {
+  height: auto;
+  min-height: 72px;
+  padding: 7px 9px;
+  resize: vertical;
+}
+
+.select {
+  appearance: none;
+  padding-right: 26px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a9b2c1' stroke-width='1.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+
+  option {
+    background: var(--panel);
+  }
+}
+
+// --- Badges and chips ------------------------------------------------------------
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  background: var(--panel-raised);
+  color: var(--text-muted);
+  white-space: nowrap;
+
+  &--ok {
+    background: var(--ok-soft);
+    color: var(--ok);
+  }
+
+  &--warn {
+    background: var(--warn-soft);
+    color: var(--warn);
+  }
+
+  &--danger {
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
+
+  &--running {
+    background: var(--running-soft);
+    color: var(--running);
+  }
+
+  &--accent {
+    background: var(--accent-soft);
+    color: var(--accent-text);
+  }
+
+  // Support-level badges: what NeoSR does natively vs what Studio orchestrates around it.
+  &--native {
+    border: 1px solid var(--border-strong);
+    background: transparent;
+  }
+
+  &--orchestrated {
+    border: 1px solid var(--running);
+    background: transparent;
+    color: var(--running);
+  }
+
+  &--estimate {
+    border: 1px dashed var(--text-faint);
+    background: transparent;
+  }
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel-sunken);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition:
+    border-color var(--tempo) var(--ease),
+    color var(--tempo) var(--ease);
+
+  &:hover {
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
+  &--active {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent-text);
+  }
+}
+
+// --- Layout helpers -------------------------------------------------------------------
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.faint {
+  color: var(--text-faint);
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+}
+
+.kbd {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+// --- Foblex connections (outside component encapsulation) ----------------------------------
+f-flow .f-connection,
+.f-flow .f-connection {
+  .f-connection-drag-handle {
+    fill: transparent;
+    stroke: none;
+  }
+
+  .f-connection-path {
+    stroke: var(--port-colour, #9aa4b8);
+    stroke-width: 2;
+    fill: none;
+    transition:
+      stroke var(--tempo) var(--ease),
+      stroke-width var(--tempo) var(--ease),
+      opacity var(--tempo) var(--ease);
+  }
+
+  &:hover .f-connection-path {
+    stroke: color-mix(in srgb, #fff 35%, var(--port-colour, #9aa4b8));
+    stroke-width: 3;
+  }
+
+  &.f-selected .f-connection-path {
+    stroke: var(--selection);
+    stroke-width: 3;
+  }
+
+  &.edge-invalid .f-connection-path {
+    stroke: var(--danger);
+    stroke-dasharray: 6 4;
+  }
+
+  &.edge-muted .f-connection-path {
+    opacity: 0.3;
+    stroke-dasharray: 3 5;
+  }
+
+  &.edge-dimmed .f-connection-path {
+    opacity: 0.35;
+  }
+}
+
+f-flow .f-connection-for-create,
+.f-flow .f-connection-for-create {
+  .f-connection-path {
+    stroke: var(--selection);
+    stroke-width: 2;
+    stroke-dasharray: 6 4;
+    fill: none;
+  }
+
+  .f-connection-drag-handle {
+    fill: transparent;
+    stroke: none;
+  }
+}
+
+.f-canvas-background {
+  background: var(--canvas);
+}
+
+.f-selection-area {
+  border-radius: 3px;
+}
+
+.f-external-item-preview {
+  opacity: 0.85;
+}
+
+// While a wire is being dragged, only compatible sockets light up.
+f-flow.f-connections-dragging .port {
+  opacity: 0.35;
+
+  &.f-connector-connectable {
+    opacity: 1;
+    box-shadow: 0 0 0 4px var(--accent-soft);
+  }
+}
+
+// --- Tooltip (one shared element, positioned by the Tooltip directive) --------------------------
+.app-tooltip {
+  position: fixed;
+  z-index: 200;
+  max-width: 320px;
+  padding: 6px 9px;
+  border-radius: var(--radius);
+  background: #0f1319;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  box-shadow: var(--shadow-panel);
+  border: 1px solid var(--border-strong);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--tempo) var(--ease);
+
+  &--visible {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 720px) {
+  .input,
+  .select,
+  .textarea {
+    font-size: 16px;
+  }
+}

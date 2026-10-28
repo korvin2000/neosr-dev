@@ -1,0 +1,97 @@
+<div class="toolbar">
+  @if (phases().length > 1) {
+    <div class="tabs" role="tablist" aria-label="Compiled phases">
+      @for (p of phases(); track p.phase.id) {
+        <button type="button" role="tab" class="tab" [class.tab--active]="p.index === activeIndex()" [attr.aria-selected]="p.index === activeIndex()" (click)="select(p.index)" [appTooltip]="p.fileName + ' · ' + p.phase.init + ' · native ' + p.nativeStart + '..' + p.nativeEnd">
+          {{ p.index + 1 }} · {{ p.phase.name }}
+        </button>
+      }
+    </div>
+  }
+  <span class="spacer"></span>
+  <button type="button" class="btn btn--ghost btn--sm" (click)="copyToml()" [disabled]="!active()"><app-icon name="copy" [size]="13" /> Copy</button>
+  <app-menu [items]="downloadMenu()" (picked)="onDownload($event)" icon="download" label="Download" text="Download" />
+  <button type="button" class="btn btn--ghost btn--sm" (click)="copyCommand()" [disabled]="!active()"><app-icon name="terminal" [size]="13" /> Copy command</button>
+  @if (problems().length) {
+    <span class="issues-anchor">
+      <button type="button" class="btn btn--ghost btn--sm issues" (click)="issuesOpen.set(!issuesOpen())" [attr.aria-expanded]="issuesOpen()">
+        <app-icon name="alert-triangle" [size]="13" /> Issues {{ problems().length }}
+      </button>
+      @if (issuesOpen()) {
+        <div class="backdrop" (click)="issuesOpen.set(false)"></div>
+        <div class="issues__pop" role="dialog" aria-label="Issues">
+          @for (p of problems(); track p.id) {
+            <button type="button" class="issue" [class.issue--blocker]="p.severity === 'blocker'" [disabled]="!p.nodeId" (click)="focusProblem(p)">
+              <app-icon name="alert-triangle" [size]="14" />
+              <span class="issue__body">
+                <span>{{ p.message }}</span>
+                @if (p.hint) {
+                  <span class="issue__hint">{{ p.hint }}</span>
+                }
+              </span>
+            </button>
+          }
+        </div>
+      }
+    </span>
+  }
+  <app-menu [items]="moreMenu()" (picked)="onMore($event)" />
+</div>
+
+@if (active(); as phase) {
+  <div class="code">
+    <app-toml-code [lines]="phase.lines" [highlightNodeId]="highlight()" [editable]="true" (originHover)="hover.set($event)" (originClick)="onOriginClick($event)" />
+  </div>
+} @else {
+  <p class="empty">Nothing to compile yet: the recipe has no enabled Training Plan. Add one in the Graph, or start from a template.</p>
+}
+
+<app-drawer [open]="editNode() !== null" [title]="editLabel()" [width]="420" (closed)="editNode.set(null)">
+  <app-section-editor [nodeId]="editNode()" />
+</app-drawer>
+
+<app-drawer [open]="panel() === 'import'" title="Import TOML" [width]="440" (closed)="panel.set(null)">
+  <app-toml-import applyLabel="Replace recipe" [rows]="10" (apply)="replace($event)" />
+</app-drawer>
+
+<app-drawer [open]="panel() === 'diff'" title="Diff" [width]="520" (closed)="panel.set(null)">
+  @if (snapshot(); as snap) {
+    <p class="muted small">vs {{ snap.source === 'saved' ? 'last saved' : 'pinned' }} at {{ time(snap.at) }}</p>
+    @if (diff(); as d) {
+      @if (d.newPhase) {
+        <p class="muted">This phase did not exist in the snapshot.</p>
+      } @else if (d.rows.length === 0) {
+        <p class="muted">No changes.</p>
+      } @else {
+        <p class="small"><span class="add">+{{ d.added }}</span> <span class="del">−{{ d.removed }}</span> <span class="chg">~{{ d.changed }}</span></p>
+        <ul class="diff mono">
+          @for (r of d.rows; track $index) {
+            <li [class]="'diff__' + r.kind" [appTooltip]="r.old ? 'was: ' + r.old : ''">
+              <span class="diff__ln">{{ r.line }}</span>{{ r.kind === 'add' ? '+' : r.kind === 'del' ? '−' : '~' }} {{ r.text }}
+            </li>
+          }
+          @if (d.hidden) {
+            <li class="faint">… {{ d.hidden }} more</li>
+          }
+        </ul>
+      }
+    }
+  }
+</app-drawer>
+
+<app-drawer [open]="panel() === 'extras'" title="Unmapped settings" [width]="440" (closed)="panel.set(null)">
+  @if (extras().length === 0) {
+    <p class="muted">None. TOML keys the Studio does not model are kept here on import and written back verbatim.</p>
+  } @else {
+    <ul class="extras">
+      @for (e of extras(); track e.key) {
+        <li>
+          <span class="mono extras__kv"><span class="extras__k">{{ e.key }}</span> = {{ e.text }}</span>
+          <button type="button" class="btn btn--ghost btn--sm btn--icon btn--danger" (click)="removeExtra(e.path)" [appTooltip]="'Remove ' + e.key" aria-label="Remove setting">
+            <app-icon name="close" [size]="12" />
+          </button>
+        </li>
+      }
+    </ul>
+  }
+</app-drawer>

@@ -1,0 +1,172 @@
+<app-page-header heading="Library">
+  <nav tabs class="tabs" aria-label="Library sections">
+    @for (t of tabs; track t.id) {
+      <a class="tabs__item" [class.tabs__item--active]="tab() === t.id" [routerLink]="['/library', t.id]" [attr.aria-current]="tab() === t.id ? 'page' : null">{{ t.label }}</a>
+    }
+  </nav>
+</app-page-header>
+
+<div class="body">
+  <div class="toolbar">
+    <label class="search">
+      <app-icon name="search" [size]="14" />
+      <input class="input" type="search" placeholder="Search" [value]="query()" (input)="query.set($any($event.target).value)" aria-label="Search" />
+    </label>
+    @if (tab() === 'templates') {
+      <select class="select facet" [value]="scale()" (change)="scale.set($any($event.target).value)" aria-label="Scale">
+        <option value="">Scale</option>
+        @for (s of scales; track s) {
+          <option [value]="s">×{{ s }}</option>
+        }
+      </select>
+      <select class="select facet" [value]="look()" (change)="look.set($any($event.target).value)" aria-label="Look">
+        <option value="">Look</option>
+        @for (l of looks; track l.id) {
+          <option [value]="l.label">{{ l.label }}</option>
+        }
+      </select>
+      <select class="select facet" [value]="speed()" (change)="speed.set($any($event.target).value)" aria-label="Speed">
+        <option value="">Speed</option>
+        @for (s of speeds; track s) {
+          <option [value]="s">{{ s }}</option>
+        }
+      </select>
+      @if (filterCount()) {
+        <button type="button" class="chip chip--active" (click)="clearFilters()" aria-label="Clear filters">{{ filterCount() }} filter{{ filterCount() === 1 ? '' : 's' }} <app-icon name="close" [size]="12" /></button>
+      }
+    }
+    @if (tab() === 'recipes') {
+      <span class="spacer"></span>
+      <label class="btn btn--ghost btn--sm">
+        <app-icon name="upload" [size]="13" /> Import JSON
+        <input type="file" accept=".json,application/json" hidden (change)="importJson($event)" />
+      </label>
+    }
+    @if (tab() === 'models' || tab() === 'datasets') {
+      <span class="spacer"></span>
+      <button type="button" class="btn btn--ghost btn--sm" (click)="tab() === 'models' ? models.load() : datasets.load()"><app-icon name="refresh" [size]="13" /> Refresh</button>
+    }
+  </div>
+
+  @switch (tab()) {
+    @case ('templates') {
+      @if (templates().length === 0) {
+        <p class="state faint">No template matches.</p>
+      }
+      <div class="cards">
+        @for (c of templates(); track c.info.id) {
+          <article class="card tpl">
+            <div class="row">
+              <h3 class="tpl__title">{{ c.info.label }}</h3>
+              <span class="spacer"></span>
+              <app-menu [items]="c.menu" (picked)="onTemplateMenu(c, $event)" />
+            </div>
+            <p class="muted line">{{ c.info.description }}</p>
+            @if (detailsOpen().has(c.info.id)) {
+              <dl class="details">
+                <dt>Model</dt><dd>{{ c.info.arch }} · ×{{ c.info.scale }}</dd>
+                <dt>Look</dt><dd>{{ c.look }} · {{ c.speed }}</dd>
+                <dt>Length</dt><dd>{{ fmtUpdates(c.info.totalIter) }} updates · {{ c.info.phases }} phase{{ c.info.phases === 1 ? '' : 's' }}</dd>
+                <dt>Numbers from</dt><dd>{{ c.info.provenance }}</dd>
+                <dt>Tags</dt><dd>{{ c.info.tags.join(', ') }}</dd>
+              </dl>
+            }
+            <div class="row actions">
+              <button type="button" class="btn btn--sm" (click)="useTemplate(c.info)">Use</button>
+            </div>
+          </article>
+        }
+      </div>
+    }
+
+    @case ('recipes') {
+      @if (recipes.error(); as err) {
+        <p class="state state--offline"><app-icon name="power" [size]="14" /> {{ err }}</p>
+      } @else if (!recipes.loaded()) {
+        <p class="state faint">Loading…</p>
+      } @else if (recipeRows().length === 0) {
+        <p class="state faint">{{ recipes.data().length ? 'No recipe matches.' : 'No saved recipes yet. Save one from Review or Build.' }}</p>
+      } @else {
+        <ul class="list">
+          @for (r of recipeRows(); track r.id) {
+            <li class="item" [class.item--busy]="busy() === r.id">
+              <span class="item__body">
+                <span class="item__title">{{ r.name }}</span>
+                <span class="item__line">{{ r.arch || 'no model' }} · ×{{ r.scale }} · {{ r.phases }} phase{{ r.phases === 1 ? '' : 's' }} · {{ relativeTime(r.updatedAt) }}@if (r.description) { · {{ r.description }} }</span>
+              </span>
+              <button type="button" class="btn btn--sm" (click)="openRecipe(r)" [disabled]="busy() === r.id">Open</button>
+              <app-menu [items]="recipeMenu" (picked)="onRecipeMenu(r, $event)" />
+            </li>
+          }
+        </ul>
+      }
+    }
+
+    @case ('models') {
+      @if (models.error(); as err) {
+        <p class="state state--offline"><app-icon name="power" [size]="14" /> {{ err }}</p>
+      } @else if (!models.loaded()) {
+        <p class="state faint">Loading…</p>
+      } @else if (modelRows().length === 0) {
+        <p class="state faint">{{ models.data().length ? 'No checkpoint matches.' : 'No checkpoints found.' }}</p>
+      } @else {
+        <div class="card tbl-wrap">
+          <table class="tbl">
+            <thead>
+              <tr><th>File</th><th>Model</th><th class="num">Update</th><th class="num">Size</th><th>Run</th><th>Kind</th><th>Updated</th><th></th></tr>
+            </thead>
+            <tbody>
+              @for (m of modelRows(); track m.path) {
+                <tr>
+                  <td class="mono ellipsis">{{ m.file }}</td>
+                  <td>{{ m.arch }} · ×{{ m.scale }}</td>
+                  <td class="num">{{ m.iter | number }}</td>
+                  <td class="num">{{ m.sizeMb | number: '1.0-0' }} MB</td>
+                  <td class="ellipsis">{{ m.runName }}</td>
+                  <td>{{ m.variant === 'state' ? 'state' : m.variant === 'ema' ? 'EMA weights' : 'weights' }}</td>
+                  <td class="faint">{{ relativeTime(m.updatedAt) }}</td>
+                  <td class="acts"><app-menu [items]="modelMenu(m)" (picked)="useModel(m)" /></td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+        <p class="faint state">Simulated checkpoints under the experiments root.</p>
+      }
+    }
+
+    @case ('datasets') {
+      @if (datasets.error(); as err) {
+        <p class="state state--offline"><app-icon name="power" [size]="14" /> {{ err }}</p>
+      } @else if (!datasets.loaded()) {
+        <p class="state faint">Loading…</p>
+      } @else if (datasetRows().length === 0) {
+        <p class="state faint">{{ datasets.data().length ? 'No dataset matches.' : 'No datasets registered.' }}</p>
+      } @else {
+        <div class="cards">
+          @for (d of datasetRows(); track d.id) {
+            <article class="card tpl">
+              <div class="row">
+                <h3 class="tpl__title">{{ d.name }}</h3>
+                <span class="spacer"></span>
+                <app-menu [items]="datasetMenu" (picked)="onDatasetMenu(d, $event)" />
+              </div>
+              <p class="muted line">{{ d.lqPath ? 'Paired' : 'High-res only' }}@if (d.scale) { · ×{{ d.scale }} } · {{ d.images | number }} images · min {{ d.minWidth }}×{{ d.minHeight }} · {{ d.format }}</p>
+              <p class="faint line mono ellipsis">{{ d.gtPath }}</p>
+              @if (d.note) {
+                <p class="faint line">{{ d.note }}</p>
+              }
+              @if (scanLine(d); as sc) {
+                <p class="line">{{ sc.text }}</p>
+                @for (i of sc.issues; track i.text) {
+                  <p class="line issue" [class.issue--blocker]="i.severity === 'blocker'">{{ i.text }}</p>
+                }
+              }
+            </article>
+          }
+        </div>
+        <p class="faint state">Simulated dataset roots.</p>
+      }
+    }
+  }
+</div>

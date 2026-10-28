@@ -1,0 +1,100 @@
+@if (point(); as p) {
+  <div class="scrub">
+    <button type="button" class="btn btn--ghost btn--icon" (click)="select(index() - 1)" [disabled]="index() <= 0" appTooltip="Previous validation" aria-label="Previous validation"><app-icon name="chevron-left" [size]="16" /></button>
+    <input class="scrub__range" type="range" min="0" [max]="points().length - 1" step="1" [value]="index()" (input)="onSlider($event)" aria-label="Validation" />
+    <button type="button" class="btn btn--ghost btn--icon" (click)="select(index() + 1)" [disabled]="index() >= points().length - 1" appTooltip="Next validation" aria-label="Next validation"><app-icon name="chevron-right" [size]="16" /></button>
+    <button type="button" class="btn btn--sm" [class.btn--primary]="following()" (click)="selectedIterChange.emit(null)" [appTooltip]="live() ? 'Follow the newest validation' : 'Jump to the last validation'">Latest</button>
+  </div>
+
+  <div class="where">
+    <span class="where__iter">{{ formatInt(p.iter) }} updates</span>
+    @if (clock(); as c) {
+      <span class="faint">{{ phaseText() }}@if (c.native !== p.iter) { · native {{ formatInt(c.native) }} }</span>
+    }
+    @if (datasets().length > 1) {
+      <select class="select select--sm" [value]="activeDataset()" (change)="setDataset($event)" aria-label="Validation dataset">
+        @for (d of datasets(); track d) {
+          <option [value]="d">{{ d }}</option>
+        }
+      </select>
+    } @else if (activeDataset()) {
+      <span class="faint">· {{ activeDataset() }}</span>
+    }
+    <span class="spacer"></span>
+    <span class="faint">{{ index() + 1 }} / {{ points().length }}</span>
+  </div>
+
+  <div class="badges">
+    <span class="badge" [class.badge--ok]="saved().images" appTooltip="Validation images written (save_img)"><app-icon [name]="saved().images ? 'check' : 'minus'" [size]="10" [weight]="2.6" /> images</span>
+    <span class="badge" [class.badge--ok]="saved().weights" [appTooltip]="saved().weights ? 'Generator saved here: ' + saved().files : 'No generator checkpoint at this update'"><app-icon [name]="saved().weights ? 'check' : 'minus'" [size]="10" [weight]="2.6" /> weights</span>
+    <span class="badge" [class.badge--ok]="saved().state" [appTooltip]="saved().state ? 'Training .state saved: resumable from here' : 'No .state at this update'"><app-icon [name]="saved().state ? 'check' : 'minus'" [size]="10" [weight]="2.6" /> state</span>
+    <span class="spacer"></span>
+    @for (m of summary(); track m.key) {
+      <span class="kv"><span class="faint">{{ m.label }} {{ m.arrow }}</span> <span class="mono">{{ m.value }}</span></span>
+    }
+  </div>
+
+  <div class="strip" role="listbox" aria-label="Validation images">
+    @for (img of p.images; track img.id) {
+      <button type="button" class="thumb" [class.thumb--active]="img.id === image()?.id" (click)="imageId.set(img.id)" [appTooltip]="img.name" role="option" [attr.aria-selected]="img.id === image()?.id">
+        <img [src]="img.srUrl" [alt]="img.name" draggable="false" />
+        <span class="thumb__name">{{ img.id }}</span>
+      </button>
+    }
+  </div>
+
+  @if (image(); as img) {
+    <div class="tools">
+      <div class="seg" role="group" aria-label="Compare mode">
+        @for (m of modes; track m.id) {
+          <button type="button" class="seg__btn" [class.seg__btn--active]="mode() === m.id" (click)="mode.set(m.id)" [appTooltip]="m.title" [attr.aria-pressed]="mode() === m.id">{{ m.label }}</button>
+        }
+      </div>
+      <span class="spacer"></span>
+      <div class="seg" role="group" aria-label="Zoom">
+        @for (z of zooms; track z) {
+          <button type="button" class="seg__btn" [class.seg__btn--active]="zoom() === z" (click)="setZoom(z)" [attr.aria-pressed]="zoom() === z" [attr.aria-label]="'Zoom ' + z + '×'">{{ z }}×</button>
+        }
+      </div>
+    </div>
+
+    <div class="view" [class.view--single]="mode() !== 'side'">
+      @switch (mode()) {
+        @case ('side') {
+          <div class="side">
+            <app-zoom-view [src]="reference().lq" label="LQ" [zoom]="zoom()" [crop]="crop()" (center)="crop.set($event)" />
+            <app-zoom-view [src]="img.srUrl" label="SR" [zoom]="zoom()" [crop]="crop()" (center)="crop.set($event)" />
+            @if (reference().gt; as gt) {
+              <app-zoom-view [src]="gt" label="GT" [zoom]="zoom()" [crop]="crop()" (center)="crop.set($event)" />
+            } @else {
+              <div class="no-gt faint">no GT</div>
+            }
+          </div>
+        }
+        @case ('swipe') {
+          <app-zoom-view mode="swipe" [src]="reference().gt ?? reference().lq" [overlay]="img.srUrl" [label]="reference().gt ? 'GT' : 'LQ'" overlayLabel="SR" [zoom]="zoom()" [crop]="crop()" (center)="crop.set($event)" />
+        }
+        @case ('blink') {
+          <app-zoom-view mode="blink" [src]="img.srUrl" [overlay]="reference().gt ?? reference().lq" label="SR" [overlayLabel]="reference().gt ? 'GT' : 'LQ'" [zoom]="zoom()" [crop]="crop()" (center)="crop.set($event)" />
+        }
+      }
+    </div>
+
+    <div class="metrics">
+      <span class="metrics__name">{{ img.name }}</span>
+      @for (m of imageMetrics(); track m.key) {
+        <span class="metric">
+          <span class="faint">{{ m.label }} {{ m.arrow }}</span>
+          <span class="mono">{{ m.value }}</span>
+          @if (m.delta) {
+            <span class="mono delta" [class.delta--up]="m.improved === true" [class.delta--down]="m.improved === false" appTooltip="Change since the previous validation">{{ m.delta }}</span>
+          }
+        </span>
+      } @empty {
+        <span class="faint">visual only</span>
+      }
+    </div>
+  }
+} @else {
+  <p class="empty faint">{{ live() ? 'No validation yet.' : 'This run has no validation images.' }}</p>
+}

@@ -1,0 +1,30 @@
+<div class="page">
+  @if (paletteDocked()) {
+    <aside class="palette" aria-label="Palette">
+      <app-node-palette />
+    </aside>
+  }
+
+  <div class="main">
+    @if (mode.isPhone() && !ui.canvasOnPhone()) {
+      <app-graph-outline />
+    } @else {
+      @if (mode.isPhone()) {
+        <div class="phone-bar">
+          <button type="button" class="btn btn--ghost btn--sm" (click)="ui.canvasOnPhone.set(false)"><app-icon name="chevron-left" [size]="14" /> Outline</button>
+          <span class="faint">read-only · pan and zoom</span>
+        </div>
+      }
+      @if (multiPhase()) {
+        <app-phase-strip />
+      }
+      <app-graph-canvas [readonly]="mode.isPhone()" />
+    }
+  </div>
+
+  <app-node-drawer [nodeId]="selectedId()" [focusField]="focusField()" [docked]="docked()" (closed)="closeDrawer()" />
+</div>
+
+<app-drawer [open]="ui.addOpen()" title="Add" [width]="360" (closed)="ui.addOpen.set(false)">
+  <app-node-palette (added)="ui.addOpen.set(false)" />
+</app-drawer>

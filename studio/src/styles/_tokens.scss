@@ -1,0 +1,152 @@
+@use 'sass:color';
+
+// Design tokens. Custom properties so node accents and port colours can be bound at runtime;
+// Sass does the build-time work (accent and port maps).
+//
+// Greys are the chaiNNer-sampled set used by the reference node UI, which is why the canvas reads
+// right next to ComfyUI/chaiNNer rather than merely "dark".
+
+:root {
+  color-scheme: dark;
+
+  // --- Ground -------------------------------------------------------------
+  --ground: #171d27;
+  --canvas: #1f252f;
+  --canvas-dot: #2e3646;
+  --panel: #1a202b;
+  --panel-raised: #262d3b;
+  --panel-sunken: #151a23;
+  --overlay: rgba(10, 13, 18, 0.72);
+
+  // --- Node surfaces ------------------------------------------------------
+  --node-body: #303948;
+  --node-sunken: #282f3c;
+  --node-border: #4b525f;
+  --node-border-hover: #6b7385;
+
+  // --- Lines and text -----------------------------------------------------
+  --border: #2a323f;
+  --border-soft: #232a36;
+  --border-strong: #3a4352;
+  --text: #eaeded;
+  --text-muted: #a9b2c1;
+  --text-faint: #7b8494;
+  --text-inverse: #0f1319;
+
+  // --- Interaction --------------------------------------------------------
+  --accent: #3f8cff;
+  --accent-hover: #5b9dff;
+  --accent-soft: rgba(63, 140, 255, 0.18);
+  --accent-text: #8fbdff;
+  --selection: #63a4ff;
+  --focus-ring: 0 0 0 2px rgba(99, 164, 255, 0.55);
+
+  // --- Status -------------------------------------------------------------
+  --ok: #48bb78;
+  --ok-soft: rgba(72, 187, 120, 0.16);
+  --warn: #ecc94b;
+  --warn-soft: rgba(236, 201, 75, 0.16);
+  --danger: #f56565;
+  --danger-soft: rgba(245, 101, 101, 0.16);
+  --running: #4299e1;
+  --running-soft: rgba(66, 153, 225, 0.16);
+  --info: #9aa4b8;
+
+  // --- Geometry -----------------------------------------------------------
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 10px;
+  --node-width: 268px;
+  --node-pad: 12px;
+  --port-size: 14px;
+  --port-ring: 2.5px;
+  --control-h: 32px;
+  --topbar-h: 48px;
+  --statusbar-h: 34px;
+  --nav-w: 200px;
+  --palette-w: 268px;
+  --inspector-w: 360px;
+
+  // --- Type ---------------------------------------------------------------
+  --font: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', Consolas, 'Courier New', monospace;
+  --fs-xs: 11px;
+  --fs-sm: 12.5px;
+  --fs: 14px;
+  --fs-md: 15px;
+  --fs-lg: 17px;
+  --fs-xl: 22px;
+
+  // --- Motion -------------------------------------------------------------
+  --tempo: 140ms;
+  --tempo-slow: 300ms;
+  --ease: cubic-bezier(0.3, 0.8, 0.4, 1);
+
+  --shadow-node: 0 5px 18px rgba(0, 0, 0, 0.5);
+  --shadow-node-selected: 0 8px 26px rgba(0, 0, 0, 0.6);
+  --shadow-panel: 0 8px 30px rgba(0, 0, 0, 0.5);
+  --shadow-dialog: 0 24px 70px rgba(0, 0, 0, 0.65);
+
+  font-synthesis-weight: none;
+}
+
+// Node family accents. The catalog names the accent; the stylesheet owns what it looks like.
+$node-header-base: #3a4152;
+
+$accents: (
+  'rose': #d05463,
+  'amber': #d98b45,
+  'sky': #4a8fd6,
+  'violet': #8b6ce0,
+  'emerald': #3faa72,
+  'teal': #38a89d,
+  'slate': #7b8494,
+);
+
+@each $name, $colour in $accents {
+  .accent-#{$name} {
+    --accent-node: #{$colour};
+    --accent-node-dim: #{rgba($colour, 0.18)};
+    --accent-node-glow: #{rgba($colour, 0.45)};
+    --accent-node-header: #{color.mix($colour, $node-header-base, 17%)};
+  }
+}
+
+:root {
+  --accent-node: #7b8494;
+  --accent-node-dim: rgba(123, 132, 148, 0.18);
+  --accent-node-glow: rgba(123, 132, 148, 0.45);
+  --accent-node-header: #3f4655;
+}
+
+// Port colours by type: the same type is the same colour everywhere, and a connection is only
+// legal between equal types, so colour is also the rule.
+$port-types: (
+  'TrainData': #3faa72,
+  'Degradation': #2f8f85,
+  'ValSpec': #6cc5a0,
+  'Model': #8b6ce0,
+  'DModel': #b08cf0,
+  'Init': #c9a6ff,
+  'Objective': #d05463,
+  'OptimG': #d98b45,
+  'OptimD': #e3a86d,
+  'Schedule': #c9b458,
+  'Runtime': #4a8fd6,
+);
+
+@each $name, $colour in $port-types {
+  .port-#{$name} {
+    --port-colour: #{$colour};
+  }
+}
+
+// Phones: larger text, 16 px inputs so iOS does not zoom, bigger targets.
+@media (max-width: 720px) {
+  :root {
+    --fs: 15px;
+    --fs-sm: 13px;
+    --control-h: 40px;
+    --topbar-h: 44px;
+  }
+}

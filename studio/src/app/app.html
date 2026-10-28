@@ -1,0 +1,83 @@
+<header class="topbar">
+  <a class="brand" routerLink="/">
+    <span class="brand__mark"><app-icon name="zap" [size]="14" [weight]="2.2" /></span>
+    <span class="brand__name">NeoSR Studio</span>
+  </a>
+
+  <span class="spacer"></span>
+
+  <span class="sim" appTooltip="Training is simulated in this prototype; configs and TOML are real">Simulated</span>
+
+  @if (activeRuns() > 0) {
+    <a class="pill pill--live" routerLink="/runs" [appTooltip]="activeRuns() + ' run(s) in progress'">
+      <span class="pill__dot"></span>
+      {{ activeRuns() }}
+    </a>
+  }
+
+  <div class="env">
+    <button type="button" class="pill" [class.pill--offline]="env.offline()" (click)="envOpen.set(!envOpen())" [attr.aria-expanded]="envOpen()" aria-label="Training machine">
+      <app-icon name="gpu" [size]="14" />
+      <span class="env__label">{{ gpuLabel() }}</span>
+    </button>
+    @if (envOpen()) {
+      <div class="backdrop" (click)="envOpen.set(false)"></div>
+      <div class="env__pop">
+        @if (env.info(); as info) {
+          <dl>
+            <dt>GPU</dt><dd>{{ info.gpus[0]?.name ?? '—' }} · {{ info.gpus[0]?.vramGb ?? 0 }} GB</dd>
+            <dt>NeoSR</dt><dd class="mono">{{ info.neosrPath }} <span class="faint">({{ info.neosrVersion }})</span></dd>
+            <dt>Experiments</dt><dd class="mono">{{ info.experimentsRoot }}</dd>
+            <dt>Free disk</dt><dd>{{ info.freeDiskGb }} GB</dd>
+            <dt>Platform</dt><dd>{{ info.platform }}</dd>
+          </dl>
+        } @else {
+          <p class="faint">{{ env.offline() ? 'Start the backend with npm run api.' : 'Loading…' }}</p>
+        }
+        <a routerLink="/settings" (click)="envOpen.set(false)">Settings ›</a>
+      </div>
+    }
+  </div>
+
+  <a class="gear" routerLink="/settings" routerLinkActive="gear--active" appTooltip="Settings" aria-label="Settings"><app-icon name="settings" [size]="17" /></a>
+</header>
+
+<div class="body">
+  @if (!mode.isPhone()) {
+    <nav class="rail" aria-label="Main">
+      @for (item of nav; track item.path) {
+        <a class="rail__item" [routerLink]="item.path" routerLinkActive="rail__item--active" [routerLinkActiveOptions]="{ exact: item.exact }">
+          <app-icon [name]="item.icon" [size]="20" [weight]="1.7" />
+          <span>{{ item.label }}</span>
+        </a>
+      }
+    </nav>
+  }
+
+  <main class="content">
+    <router-outlet />
+  </main>
+</div>
+
+@if (mode.isPhone()) {
+  <nav class="tabbar" aria-label="Main">
+    @for (item of nav; track item.path) {
+      <a class="tabbar__item" [routerLink]="item.path" routerLinkActive="tabbar__item--active" [routerLinkActiveOptions]="{ exact: item.exact }">
+        <app-icon [name]="item.icon" [size]="22" [weight]="1.7" />
+        <span>{{ item.label }}</span>
+      </a>
+    }
+  </nav>
+}
+
+<div class="toasts" aria-live="polite">
+  @for (toast of toasts.toasts(); track toast.id) {
+    <div class="toast" [class]="'toast toast--' + toast.kind">
+      <span>{{ toast.text }}</span>
+      @if (toast.action) {
+        <button type="button" class="toast__action" (click)="toast.action.run(); toasts.dismiss(toast.id)">{{ toast.action.label }}</button>
+      }
+      <button type="button" class="toast__close" (click)="toasts.dismiss(toast.id)" aria-label="Dismiss"><app-icon name="close" [size]="12" /></button>
+    </div>
+  }
+</div>

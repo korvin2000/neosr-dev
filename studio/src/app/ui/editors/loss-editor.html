@@ -1,0 +1,168 @@
+@if (!compact()) {
+  <div class="presets">
+    <span class="faint">Presets</span>
+    @for (o of objectives; track o.id) {
+      <button type="button" class="chip" [disabled]="disabled()" [attr.title]="o.description" (click)="preset(o.id)">{{ o.label }}</button>
+    }
+    <span class="spacer"></span>
+    <span class="faint">{{ totalActive() }} active</span>
+  </div>
+}
+
+<div class="table-wrap">
+<table class="table" [class.table--compact]="compact()">
+  <thead>
+    <tr>
+      <th class="col-on" title="Enabled in every phase without an override"></th>
+      <th class="col-loss">Loss</th>
+      <th class="col-w">Weight</th>
+      @if (multiPhase()) {
+        @for (phase of phases(); track phase.id) {
+          <th class="col-phase" [class.col-phase--active]="phase.id === activePhaseId()" [attr.title]="phase.iters.toLocaleString() + ' updates · ' + phase.init">
+            <span class="phase-name">{{ phase.name }}</span>
+            <span class="phase-iters mono">{{ phase.iters / 1000 }}k</span>
+          </th>
+        }
+      }
+      <th class="col-actions"></th>
+    </tr>
+  </thead>
+  <tbody>
+    @for (v of views(); track v.row.id) {
+      <tr class="row" [class.row--off]="!v.row.enabled" [class.row--warn]="v.needsD">
+        <td class="col-on">
+          <input type="checkbox" [checked]="v.row.enabled" [disabled]="disabled()" (change)="toggleEnabled(v.row.id, $any($event.target).checked)" [attr.aria-label]="'Enable ' + v.row.type" />
+        </td>
+        <td class="col-loss">
+          <div class="loss">
+            <select class="select select--inline" [value]="v.row.type" [disabled]="disabled()" (change)="setType(v.row.id, $any($event.target).value)" [attr.title]="v.info?.description ?? ''">
+              @for (group of catalogByCategory(); track group.category) {
+                <optgroup [label]="categoryLabel[group.category]">
+                  @for (l of group.losses; track l.type) {
+                    <option [value]="l.type" [selected]="l.type === v.row.type">{{ l.label }}</option>
+                  }
+                </optgroup>
+              }
+            </select>
+            @if (v.info && showKeys()) {
+              <span class="slot mono" [appTooltip]="'TOML section'">[train.{{ v.row.params['slot'] ?? v.info.slot }}_opt]</span>
+            }
+            @if (v.needsD) {
+              <span class="badge badge--danger" title="gan_loss needs a Discriminator and an Optimizer D connected to the Training Plan">needs D</span>
+            }
+            @if (v.info?.cost === 'high') {
+              <span class="badge" title="Runs a backbone network per step; slower and downloads weights on first use">slow</span>
+            }
+          </div>
+        </td>
+        <td class="col-w">
+          <input class="input input--inline mono" type="number" min="0" step="0.05" [value]="v.row.weight" [disabled]="disabled()" (change)="setWeight(v.row.id, $any($event.target).value)" aria-label="Shared weight" />
+        </td>
+        @if (multiPhase()) {
+          @for (c of v.cells; track c.phase.id) {
+            <td class="col-phase cell" [class.cell--active-phase]="c.phase.id === activePhaseId()" [class.cell--overridden]="c.overridden" [class.cell--off]="!c.active">
+              <label class="cell__on" [attr.title]="c.active ? 'Active in ' + c.phase.name : 'Inactive in ' + c.phase.name">
+                <input type="checkbox" [checked]="c.active" [disabled]="disabled()" (change)="setCell(v.row.id, c.phase.id, { active: $any($event.target).checked })" />
+              </label>
+              <input
+                class="input input--inline mono cell__w"
+                type="number"
+                min="0"
+                step="0.05"
+                [value]="c.weight"
+                [disabled]="disabled() || !c.active"
+                [attr.title]="c.overridden ? 'Phase override (click × to inherit the shared weight)' : 'Inherits the shared weight'"
+                (change)="setCellWeight(v.row.id, c.phase.id, $any($event.target).value)"
+                aria-label="Phase weight"
+              />
+              @if (c.overridden) {
+                <button type="button" class="cell__clear" (click)="clearCell(v.row.id, c.phase.id)" title="Inherit the shared value" aria-label="Clear override"><app-icon name="close" [size]="10" /></button>
+              }
+            </td>
+          }
+        }
+        <td class="col-actions">
+          <div class="actions">
+            @if (!compact() && (v.params.length || v.info?.supportsTargetLq)) {
+              <button type="button" class="btn btn--ghost btn--sm btn--icon" [class.is-open]="v.expanded" (click)="toggleExpanded(v.row.id)" [attr.aria-expanded]="v.expanded" title="Parameters">
+                <app-icon name="sliders" [size]="13" />
+              </button>
+            }
+            <button type="button" class="btn btn--ghost btn--sm btn--icon" [disabled]="disabled()" (click)="move(v.row.id, -1)" title="Move up"><app-icon name="chevron" [size]="12" style="transform: rotate(180deg)" /></button>
+            <button type="button" class="btn btn--ghost btn--sm btn--icon" [disabled]="disabled()" (click)="move(v.row.id, 1)" title="Move down"><app-icon name="chevron" [size]="12" /></button>
+            <button type="button" class="btn btn--ghost btn--sm btn--icon btn--danger" [disabled]="disabled()" (click)="remove(v.row.id)" title="Remove"><app-icon name="trash" [size]="13" /></button>
+          </div>
+        </td>
+      </tr>
+      @if (v.expanded && !compact()) {
+        <tr class="params">
+          <td [attr.colspan]="3 + (multiPhase() ? phases().length : 0) + 1">
+            <div class="params__grid">
+              @if (v.info?.supportsTargetLq) {
+                <label class="param">
+                  <span class="param__k">target</span>
+                  <select class="select select--inline" [value]="v.row.params['target'] === 'lq' ? 'lq' : 'gt'" (change)="setTarget(v.row.id, $any($event.target).value)">
+                    <option value="gt">gt (default)</option>
+                    <option value="lq">lq — colour reference from the input</option>
+                  </select>
+                </label>
+              }
+              @for (p of v.params; track p.key) {
+                <label class="param" [attr.title]="p.help ?? ''">
+                  <span class="param__k mono">{{ p.key }}</span>
+                  @if (p.options?.length) {
+                    <select class="select select--inline" [value]="paramValue(v.row, p)" (change)="setParam(v.row.id, p.key, $any($event.target).value, p)">
+                      @for (o of p.options; track o) {
+                        <option [value]="o" [selected]="o === paramValue(v.row, p)">{{ o }}</option>
+                      }
+                    </select>
+                  } @else if (p.type === 'bool') {
+                    <select class="select select--inline" [value]="paramValue(v.row, p)" (change)="setParam(v.row.id, p.key, $any($event.target).value, p)">
+                      <option value="true" [selected]="paramValue(v.row, p) === 'true'">true</option>
+                      <option value="false" [selected]="paramValue(v.row, p) === 'false'">false</option>
+                    </select>
+                  } @else {
+                    <input class="input input--inline mono" type="text" [value]="paramValue(v.row, p)" [placeholder]="'' + (p.default ?? '')" (change)="setParam(v.row.id, p.key, $any($event.target).value, p)" />
+                  }
+                  @if (v.row.params[p.key] !== undefined) {
+                    <span class="badge badge--accent" title="Differs from the NeoSR default">set</span>
+                  }
+                </label>
+              }
+            </div>
+            @if (v.info?.description; as desc) {
+              <p class="params__desc muted">{{ desc }}</p>
+            }
+          </td>
+        </tr>
+      }
+    }
+    @if (views().length === 0) {
+      <tr>
+        <td [attr.colspan]="3 + (multiPhase() ? phases().length : 0) + 1" class="empty">No loss terms. NeoSR needs at least one generator loss with a non-zero weight — add one or pick a preset.</td>
+      </tr>
+    }
+  </tbody>
+</table>
+</div>
+
+<div class="add">
+  @if (adding()) {
+    <select class="select select--inline" (change)="add($any($event.target).value)" autofocus>
+      <option value="" disabled selected>Choose a loss…</option>
+      @for (group of catalogByCategory(); track group.category) {
+        <optgroup [label]="categoryLabel[group.category]">
+          @for (l of group.losses; track l.type) {
+            <option [value]="l.type">{{ l.label }} — {{ l.description }}</option>
+          }
+        </optgroup>
+      }
+    </select>
+    <button type="button" class="btn btn--ghost btn--sm" (click)="adding.set(false)">Cancel</button>
+  } @else {
+    <button type="button" class="btn btn--sm" [disabled]="disabled()" (click)="adding.set(true)"><app-icon name="plus" [size]="12" /> Add loss</button>
+  }
+  @if (multiPhase() && !compact()) {
+    <span class="faint legend"><span class="legend__swatch legend__swatch--override"></span> phase override · faded = inherited</span>
+  }
+</div>

@@ -1,0 +1,113 @@
+<div class="bar">
+  <div class="chips" role="group" aria-label="Charts">
+    @for (c of charts; track c.id) {
+      <button type="button" class="chip" [class.chip--active]="shown().has(c.id)" (click)="toggleChart(c.id)" [attr.aria-pressed]="shown().has(c.id)">{{ c.label }}</button>
+    }
+  </div>
+  <span class="spacer"></span>
+  @if (xRange()) {
+    <button type="button" class="btn btn--ghost btn--sm" (click)="xRange.set(null)">Reset zoom</button>
+  }
+  <div class="options">
+    <button type="button" class="btn btn--ghost btn--icon" [class.options__trigger--open]="optionsOpen()" (click)="optionsOpen.set(!optionsOpen())" [attr.aria-expanded]="optionsOpen()" appTooltip="Chart options" aria-label="Chart options"><app-icon name="more" [size]="16" /></button>
+    @if (optionsOpen()) {
+      <div class="options__pop" role="dialog" aria-label="Chart options">
+        <label class="opt">
+          <span>Smoothing</span>
+          <input type="range" min="0" max="0.95" step="0.05" [value]="smoothing()" (input)="onSmoothing($event)" aria-label="Smoothing" />
+          <span class="mono opt__v">{{ smoothing().toFixed(2) }}</span>
+        </label>
+        <label class="opt">
+          <input type="checkbox" [checked]="lossLog()" (change)="lossLog.set(!lossLog())" />
+          <span>Log scale for losses</span>
+        </label>
+        @if (!mode.isPhone()) {
+          <p class="opt__note faint">Ctrl + wheel zooms, drag pans.</p>
+        }
+      </div>
+    }
+  </div>
+</div>
+
+<div class="grid">
+  @if (shown().has('losses')) {
+    <section class="card chart chart--wide">
+      <div class="chart__head">
+        <h3>Losses</h3>
+        <div class="legend">
+          @for (l of losses().legend; track l.key) {
+            <button type="button" class="legend__item" [class.legend__item--off]="hiddenLosses().has(l.key)" (click)="toggleLoss(l.key)" [attr.aria-pressed]="!hiddenLosses().has(l.key)"><span class="legend__swatch" [style.background]="l.color"></span>{{ l.label }}</button>
+          }
+        </div>
+      </div>
+      <app-scalar-chart [series]="losses().series" [selected]="losses().visible" [labels]="losses().labels" [smoothing]="smoothing()" [logScale]="lossLog()" [bands]="bands()" [xDomain]="xDomain()" [xRange]="xRange()" (xRangeChange)="xRange.set($event)" [zoomable]="!mode.isPhone()" [height]="260" />
+    </section>
+  }
+
+  @if (shown().has('validation')) {
+    @for (v of validation(); track v.metric) {
+      <section class="card chart">
+        <div class="chart__head">
+          <h3>{{ v.title }}</h3>
+          <span class="faint">{{ v.unit }}</span>
+        </div>
+        <app-scalar-chart [series]="v.series" [direction]="v.direction" [showSymbols]="v.sparse" [bands]="bands()" [xDomain]="xDomain()" [xRange]="xRange()" (xRangeChange)="xRange.set($event)" [zoomable]="!mode.isPhone()" [height]="180" />
+      </section>
+    } @empty {
+      <section class="card chart">
+        <div class="chart__head"><h3>Validation</h3></div>
+        <p class="faint empty">No validation metrics.</p>
+      </section>
+    }
+  }
+
+  @if (shown().has('lr')) {
+    <section class="card chart">
+      <div class="chart__head">
+        <h3>Learning rate</h3>
+        @if (lr().legend.length > 1) {
+          <div class="legend">
+            @for (l of lr().legend; track l.key) {
+              <span class="legend__item legend__item--static"><span class="legend__swatch" [style.background]="l.color"></span>{{ l.label }}</span>
+            }
+          </div>
+        }
+      </div>
+      <app-scalar-chart [series]="lr().series" [labels]="labels" [bands]="bands()" [xDomain]="xDomain()" [xRange]="xRange()" (xRangeChange)="xRange.set($event)" [zoomable]="!mode.isPhone()" [height]="180" />
+    </section>
+  }
+
+  @if (shown().has('grad')) {
+    <section class="card chart">
+      <div class="chart__head">
+        <h3>Gradient norm</h3>
+        @if (grad().skipped) {
+          <span class="skipped"><span class="skipped__tick"></span>skipped ×{{ grad().skipped }}</span>
+        }
+      </div>
+      <app-scalar-chart [series]="grad().series" [labels]="labels" [smoothing]="smoothing()" [markers]="grad().markers" [bands]="bands()" [xDomain]="xDomain()" [xRange]="xRange()" (xRangeChange)="xRange.set($event)" [zoomable]="!mode.isPhone()" [height]="180" />
+    </section>
+  }
+
+  @if (shown().has('system')) {
+    <section class="card chart">
+      <div class="chart__head">
+        <h3>GPU · data wait</h3>
+        <span class="faint">%</span>
+        <div class="legend">
+          @for (l of system().legend; track l.key) {
+            <span class="legend__item legend__item--static"><span class="legend__swatch" [style.background]="l.color"></span>{{ l.label }}</span>
+          }
+        </div>
+      </div>
+      <app-scalar-chart [series]="system().pct" [labels]="labels" [smoothing]="smoothing()" [bands]="bands()" [xDomain]="xDomain()" [xRange]="xRange()" (xRangeChange)="xRange.set($event)" [zoomable]="!mode.isPhone()" [height]="180" />
+    </section>
+    <section class="card chart">
+      <div class="chart__head">
+        <h3>VRAM</h3>
+        <span class="faint">GB{{ system().vramTotal ? ' of ' + system().vramTotal : '' }}</span>
+      </div>
+      <app-scalar-chart [series]="system().vram" [labels]="labels" [smoothing]="smoothing()" [bands]="bands()" [xDomain]="xDomain()" [xRange]="xRange()" (xRangeChange)="xRange.set($event)" [zoomable]="!mode.isPhone()" [height]="180" />
+    </section>
+  }
+</div>

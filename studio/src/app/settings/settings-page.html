@@ -1,0 +1,72 @@
+<app-page-header heading="Settings">
+  <ng-container actions>
+    <app-menu [items]="menu" (picked)="onMenu($event)" />
+  </ng-container>
+</app-page-header>
+
+<div class="body">
+  <app-disclosure title="Environment" [summary]="envSummary()" [open]="isOpen('environment')" (openChange)="setOpen('environment', $event)">
+    <div class="fields">
+      <div class="field">
+        <span class="field__label">GPU</span>
+        <span class="field__control muted">{{ gpu() }}</span>
+      </div>
+      <div class="field">
+        <span class="field__label">Platform</span>
+        <div class="seg field__control" role="radiogroup" aria-label="Platform">
+          @for (p of platforms; track p) {
+            <button type="button" role="radio" class="seg__item" [class.seg__item--on]="s().platform === p" [attr.aria-checked]="s().platform === p" (click)="patch({ platform: p })">{{ p }}</button>
+          }
+        </div>
+      </div>
+      @for (p of paths; track p.key) {
+        <label class="field">
+          <span class="field__label">{{ p.label }}</span>
+          <input class="input mono field__control" type="text" spellcheck="false" [value]="s()[p.key]" (change)="setPath(p.key, $event)" />
+          <span class="field__help">{{ p.help }}</span>
+        </label>
+      }
+    </div>
+  </app-disclosure>
+
+  <app-disclosure title="Preferences" [summary]="prefSummary()" [open]="isOpen('preferences')" (openChange)="setOpen('preferences', $event)">
+    <div class="fields">
+      @for (p of prefs; track p.key) {
+        <label class="check">
+          <input type="checkbox" [checked]="s()[p.key]" (change)="setPref(p.key, $event)" />
+          <span class="check__body">
+            <span>{{ p.label }}</span>
+            <span class="field__help">{{ p.help }}</span>
+          </span>
+        </label>
+      }
+    </div>
+  </app-disclosure>
+
+  <app-disclosure title="Prototype" [summary]="protoSummary()" [open]="isOpen('prototype')" (openChange)="setOpen('prototype', $event)">
+    <div class="fields">
+      <p class="notice"><app-icon name="info" [size]="14" /> This prototype simulates training. Recipes and TOML are real; runs, metrics, images, checkpoints and dataset checks are not.</p>
+      <label class="field">
+        <span class="field__label">Simulation speed</span>
+        <span class="field__control row">
+          <input class="input speed" type="number" [min]="simMin" [max]="simMax" step="50" [value]="s().simSpeed" (change)="setSpeed($event)" />
+          <span class="muted">updates / second</span>
+        </span>
+      </label>
+      <div class="field">
+        <span class="field__label">Local data</span>
+        <span class="field__control">
+          <button type="button" class="btn btn--sm btn--danger" (click)="clearLocal()"><app-icon name="trash" [size]="13" /> Clear local draft and presets</button>
+        </span>
+        <span class="field__help">Saved recipes on the backend are kept.</span>
+      </div>
+      <p class="field__help catalog">Catalog extracted from this repository's neosr package: {{ archCount }} generator architectures, {{ lossCount }} losses.</p>
+    </div>
+  </app-disclosure>
+
+  <app-disclosure title="About" summary="NeoSR Studio, a UI prototype for the NeoSR trainer" [open]="isOpen('about')" (openChange)="setOpen('about', $event)">
+    <p class="about">
+      NeoSR Studio turns a few choices into a plain NeoSR TOML and shows what training does with it. The compiler, the validator and the TOML import are real; the backend simulates runs, checkpoints, the model and dataset lists and the dataset check. Nothing is ever written into the NeoSR repository; a download is the only way a file leaves Studio.
+    </p>
+  </app-disclosure>
+</div>

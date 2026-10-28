@@ -1,0 +1,38 @@
+<app-live-flow [live]="live()" [now]="now()" (openTab)="openTab($event)" />
+
+@if (warnings()) {
+  <button type="button" class="warnings" (click)="showWarnings.emit()">
+    <app-icon name="alert-triangle" [size]="15" />
+    <span class="warnings__text">{{ warnings() }}</span>
+    <app-icon class="warnings__go" name="chevron-right" [size]="15" />
+  </button>
+}
+
+<div class="grid">
+  <div class="charts">
+    <section class="card chart">
+      <h3 class="chart__title">{{ metricChart().title }}</h3>
+      <app-scalar-chart [series]="metricChart().series" [labels]="metricChart().labels" [direction]="metricChart().direction" [showSymbols]="metricChart().sparse" [bands]="bands()" [xDomain]="xDomain()" [height]="210" [emptyText]="dataset() ? 'Visual only: no metrics' : 'No validation yet'" />
+    </section>
+    <section class="card chart">
+      <div class="chart__head">
+        <h3 class="chart__title">Generator losses</h3>
+        <div class="legend">
+          @for (l of lossChart().legend; track l.key) {
+            <span class="legend__item"><span class="legend__swatch" [style.background]="l.color"></span>{{ l.label }}</span>
+          }
+        </div>
+      </div>
+      <app-scalar-chart [series]="lossChart().series" [labels]="lossChart().labels" [smoothing]="0.6" [logScale]="true" [bands]="bands()" [xDomain]="xDomain()" [height]="210" />
+    </section>
+  </div>
+
+  <section class="card image">
+    @if (image(); as img) {
+      <app-zoom-view [mode]="img.best ? 'blink' : 'plain'" [src]="img.latest" [overlay]="img.best" [label]="img.latestLabel" [overlayLabel]="img.bestLabel" />
+      <p class="image__caption"><span class="image__name">{{ img.name }}</span> · {{ img.caption }}</p>
+    } @else {
+      <p class="image__none faint">{{ active() ? 'No validation image yet.' : 'No validation images.' }}</p>
+    }
+  </section>
+</div>

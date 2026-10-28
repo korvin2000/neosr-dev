@@ -1,0 +1,146 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.body {
+  width: 100%;
+  max-width: 688px;
+  margin: 0 auto;
+  padding: 12px 24px 40px;
+}
+
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 6px;
+}
+
+.field {
+  display: grid;
+  grid-template-columns: minmax(120px, 160px) minmax(0, 1fr);
+  gap: 4px 14px;
+  align-items: center;
+
+  &__label {
+    color: var(--text);
+  }
+
+  &__control {
+    grid-column: 2;
+    max-width: 420px;
+  }
+
+  &__help {
+    grid-column: 2;
+    color: var(--text-faint);
+    font-size: var(--fs-sm);
+  }
+}
+
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 36px;
+  cursor: pointer;
+
+  input {
+    margin-top: 4px;
+    accent-color: var(--accent);
+  }
+
+  &__body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    .field__help {
+      grid-column: auto;
+    }
+  }
+}
+
+.seg {
+  display: inline-flex;
+  width: fit-content;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius);
+  background: var(--panel-sunken);
+  border: 1px solid var(--border-soft);
+
+  &__item {
+    min-width: 64px;
+    height: 28px;
+    padding: 0 10px;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: var(--fs-sm);
+    font-weight: 500;
+    text-transform: capitalize;
+
+    &:hover {
+      color: var(--text);
+    }
+
+    &--on {
+      background: var(--panel-raised);
+      color: var(--text);
+    }
+  }
+}
+
+.speed {
+  width: 120px;
+}
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  border: 1px dashed var(--border-strong);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+
+  app-icon {
+    margin-top: 2px;
+    flex: none;
+  }
+}
+
+.catalog {
+  grid-column: auto;
+}
+
+.about {
+  padding-top: 4px;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+@media (max-width: 720px) {
+  .body {
+    padding: 8px 16px 32px;
+  }
+
+  .field {
+    grid-template-columns: 1fr;
+
+    &__control,
+    &__help {
+      grid-column: 1;
+      max-width: none;
+    }
+  }
+
+  .seg__item {
+    height: 36px;
+  }
+}
