@@ -1,0 +1,137 @@
+@switch (widget().kind) {
+  @case ('text') {
+    <input
+      class="input"
+      type="text"
+      [id]="inputId()"
+      [value]="textValue()"
+      [disabled]="disabled()"
+      [attr.placeholder]="$any(widget()).placeholder ?? ''"
+      [class.mono]="$any(widget()).monospace"
+      (change)="onText($event)"
+    />
+  }
+  @case ('number') {
+    <div class="number">
+      <input
+        class="input"
+        type="number"
+        [id]="inputId()"
+        [value]="textValue()"
+        [disabled]="disabled()"
+        [attr.min]="$any(widget()).min"
+        [attr.max]="$any(widget()).max"
+        [attr.step]="$any(widget()).step ?? 'any'"
+        [attr.placeholder]="$any(widget()).optional ? 'auto' : ''"
+        (change)="onNumber($event)"
+      />
+      @if ($any(widget()).unit) {
+        <span class="unit">{{ $any(widget()).unit }}</span>
+      }
+    </div>
+  }
+  @case ('slider') {
+    <div class="slider">
+      <input
+        type="range"
+        [id]="inputId()"
+        [value]="textValue()"
+        [disabled]="disabled()"
+        [min]="$any(widget()).min"
+        [max]="$any(widget()).max"
+        [step]="$any(widget()).step"
+        (input)="onNumber($event)"
+      />
+      <span class="slider__value mono">{{ textValue() }}{{ $any(widget()).unit ?? '' }}</span>
+    </div>
+  }
+  @case ('toggle') {
+    <label class="toggle" [class.toggle--on]="value() === true">
+      <input type="checkbox" [id]="inputId()" [checked]="value() === true" [disabled]="disabled()" (change)="onToggle($event)" />
+      <span class="toggle__track"><span class="toggle__thumb"></span></span>
+      <span class="toggle__label">{{ value() === true ? 'on' : 'off' }}</span>
+    </label>
+  }
+  @case ('select') {
+    <div class="select-wrap">
+      <select class="select" [id]="inputId()" [value]="textValue()" [disabled]="disabled()" (change)="onSelect($event)">
+        @for (opt of $any(widget()).options; track opt.value) {
+          <option [value]="opt.value" [selected]="opt.value === textValue()">{{ opt.label }}</option>
+        }
+      </select>
+    </div>
+  }
+  @case ('multiselect') {
+    <div class="chips">
+      @for (opt of $any(widget()).options; track opt.value) {
+        <button
+          type="button"
+          class="chip"
+          [class.chip--active]="selectedSet().has(opt.value)"
+          [disabled]="disabled()"
+          [attr.title]="opt.hint ?? ''"
+          (click)="toggleMulti(opt.value)"
+        >
+          {{ opt.label }}
+        </button>
+      }
+    </div>
+  }
+  @case ('path') {
+    <div class="path">
+      <input
+        class="input mono"
+        type="text"
+        [id]="inputId()"
+        [value]="textValue()"
+        [disabled]="disabled()"
+        [attr.placeholder]="$any(widget()).mode === 'directory' ? 'C:\\datasets\\…' : 'file…'"
+        (change)="onText($event)"
+      />
+      <span class="path__icon" [attr.title]="$any(widget()).mode === 'directory' ? 'Folder on the training machine' : 'File on the training machine'">
+        <app-icon [name]="$any(widget()).mode === 'directory' ? 'folder' : 'file'" [size]="14" />
+      </span>
+    </div>
+  }
+  @case ('numberlist') {
+    <input class="input mono" type="text" [id]="inputId()" [value]="numberListText()" [disabled]="disabled()" placeholder="0.98, 0.92, 0.99" (change)="onNumberList($event)" />
+  }
+  @case ('keyvalue') {
+    <div class="kv">
+      @for (row of keyValueRows(); track $index) {
+        <div class="kv__row">
+          <input class="input mono" type="text" [value]="row[0]" placeholder="key" (change)="setKeyValue($index, $any($event.target).value, '' + row[1])" />
+          <input class="input mono" type="text" [value]="row[1]" placeholder="value" (change)="setKeyValue($index, row[0], $any($event.target).value)" />
+          <button type="button" class="btn btn--ghost btn--sm btn--icon" (click)="removeKeyValue($index)" aria-label="Remove">
+            <app-icon name="close" [size]="12" />
+          </button>
+        </div>
+      }
+      <button type="button" class="btn btn--ghost btn--sm" [disabled]="disabled()" (click)="addKeyValue()">
+        <app-icon name="plus" [size]="12" />
+        Add
+      </button>
+    </div>
+  }
+  @case ('readout') {
+    <div class="readout mono" [attr.title]="field().help">
+      {{ readout() }}
+      @if ($any(widget()).unit) {
+        <span class="unit">{{ $any(widget()).unit }}</span>
+      }
+    </div>
+  }
+  @default {
+    <span class="faint">custom editor</span>
+  }
+}
+
+@if (!compact() && showSuggestions() && field().suggestions?.length) {
+  <div class="suggestions">
+    @for (s of field().suggestions; track s.label) {
+      <button type="button" class="chip" [class.chip--active]="suggestionActive(s.value)" [attr.title]="s.why ?? ''" [disabled]="disabled()" (click)="applySuggestion(s.value)">
+        {{ s.label }}
+      </button>
+    }
+  </div>
+}

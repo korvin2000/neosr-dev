@@ -1,0 +1,61 @@
+<div class="card" fDragHandle>
+  <div class="head">
+    <app-icon class="head__icon" [name]="spec().icon" [size]="13" />
+    <span class="head__title">{{ title() }}</span>
+    @if (node().disabled) {
+      <span class="head__off">off</span>
+    }
+    @if (status(); as s) {
+      <app-icon class="head__status" [class.head__status--warn]="s === 'warning'" name="alert-triangle" [size]="14" [appTooltip]="statusText()" />
+    }
+  </div>
+
+  @if (inputs().length) {
+    <div class="ports">
+      @for (p of inputs(); track p.id) {
+        <div class="pin" [class]="'pin ' + p.colourClass">
+          <div
+            class="port port--in"
+            fConnector
+            fConnectorType="target"
+            fConnectorConnectableSide="left"
+            [fConnectorId]="p.id"
+            [fConnectorCategory]="p.port.type"
+            [fConnectorSelfConnectable]="false"
+            [fConnectorDisabled]="readonly()"
+            [appTooltip]="p.port.label + (p.port.required ? ' · required' : '')"
+          ></div>
+          <span class="pin__label">{{ p.port.label }}</span>
+        </div>
+      }
+    </div>
+  }
+
+  <div class="lines">
+    @for (line of lines(); track $index) {
+      <p class="line">{{ line }}</p>
+    }
+  </div>
+
+  @if (outputs().length) {
+    <div class="ports ports--out">
+      @for (p of outputs(); track p.id) {
+        <div class="pin pin--out" [class]="'pin pin--out ' + p.colourClass">
+          <span class="pin__label">{{ p.port.label }}</span>
+          <div
+            class="port port--out"
+            fConnector
+            fConnectorType="source"
+            fConnectorConnectableSide="right"
+            [fConnectorId]="p.id"
+            [fConnectorCategory]="p.port.type"
+            [fCanBeConnectedTo]="[p.port.type]"
+            [fConnectorSelfConnectable]="false"
+            [fConnectorDisabled]="readonly()"
+            [appTooltip]="p.port.label"
+          ></div>
+        </div>
+      }
+    </div>
+  }
+</div>

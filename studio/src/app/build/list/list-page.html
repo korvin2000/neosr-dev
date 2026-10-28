@@ -1,0 +1,29 @@
+<div class="list">
+  <div class="find">
+    <app-icon class="find__icon" name="search" [size]="15" />
+    <input class="find__input" type="search" placeholder="Find setting" [value]="query()" (input)="query.set($any($event.target).value)" (keydown)="onKey($event)" aria-label="Find setting" autocomplete="off" />
+    @if (query().trim()) {
+      <ul class="find__hits" role="listbox" aria-label="Matching settings">
+        @for (h of hits(); track h.section.id + ':' + h.part.nodeType + ':' + h.field.key) {
+          <li>
+            <button type="button" role="option" class="hit" (click)="pick(h)">
+              <span class="hit__label">{{ h.field.label }}</span>
+              <span class="hit__section">· {{ h.section.title }}</span>
+              @if (showKeys() && h.field.tomlKey) {
+                <code class="hit__key">{{ h.field.tomlKey }}</code>
+              }
+            </button>
+          </li>
+        } @empty {
+          <li class="find__none">No setting matches “{{ query().trim() }}”.</li>
+        }
+      </ul>
+    }
+  </div>
+
+  @for (row of rows(); track row.section.id) {
+    <app-disclosure [title]="row.section.title" [summary]="row.summary" [badge]="row.badge" [badgeKind]="row.badgeKind" [open]="isOpen(row.section.id)" (openChange)="setOpen(row.section.id, $event)">
+      <app-section-editor [section]="row.section" [focusField]="focusFor(row.section.id)" />
+    </app-disclosure>
+  }
+</div>

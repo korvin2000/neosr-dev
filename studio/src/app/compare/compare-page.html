@@ -1,0 +1,177 @@
+<app-page-header heading="Compare" back="/runs">
+  <div tabs class="sub">
+    <p class="context">{{ context() }}</p>
+    <div class="chips">
+      @for (c of chips(); track c.id) {
+        <span class="run-chip" [class.run-chip--failed]="c.state === 'failed'">
+          <span class="run-chip__swatch" [style.background]="c.color"></span>
+          <span class="run-chip__name">{{ c.name }}</span>
+          @if (c.state === 'loading') {
+            <span class="faint">…</span>
+          } @else if (c.state === 'failed') {
+            <span>not available</span>
+          }
+          <button type="button" class="run-chip__remove" (click)="remove(c.id)" [appTooltip]="'Remove ' + c.name" [attr.aria-label]="'Remove ' + c.name"><app-icon name="close" [size]="12" /></button>
+        </span>
+      }
+      @if (selected().length < maxRuns) {
+        <div class="add">
+          <button type="button" class="btn btn--ghost btn--sm add__btn" (click)="pickerOpen.set(!pickerOpen())" [attr.aria-expanded]="pickerOpen()"><app-icon name="plus" [size]="14" /> Add</button>
+          @if (pickerOpen()) {
+            <div class="add__pop" role="dialog" aria-label="Add a run">
+              @for (r of addable(); track r.id) {
+                <button type="button" class="add__item" (click)="add(r.id)">
+                  <span class="add__name">{{ r.name }}</span>
+                  <span class="faint">{{ formatCompact(r.iter) }} / {{ formatCompact(r.totalIter) }}</span>
+                </button>
+              } @empty {
+                <p class="faint add__empty">No other runs.</p>
+              }
+            </div>
+          }
+        </div>
+      }
+    </div>
+    @if (views().length > 1) {
+      <nav class="tabs" role="tablist" aria-label="Compare">
+        @for (t of tabs; track t.id) {
+          <button type="button" class="tabs__tab" role="tab" [class.tabs__tab--active]="tab() === t.id" [attr.aria-selected]="tab() === t.id" (click)="tab.set(t.id)">{{ t.label }}</button>
+        }
+      </nav>
+    }
+  </div>
+</app-page-header>
+
+<div class="body">
+  @if (views().length < 2) {
+    <p class="muted">{{ selected().length < 2 ? 'Add two or three runs to compare.' : 'Loading runs…' }}</p>
+  } @else {
+    @switch (tab()) {
+      @case ('metrics') {
+        <div class="grid">
+          @for (c of metricCharts(); track c.metric) {
+            <section class="card chart">
+              <div class="chart__head">
+                <h3>{{ c.title }}</h3>
+                <span class="faint">{{ c.unit }}</span>
+              </div>
+              <app-scalar-chart [series]="c.series" [labels]="labels()" [colors]="colors()" [xDomain]="xDomain()" [xRange]="xRange()" (xRangeChange)="xRange.set($event)" [zoomable]="!mode.isPhone()" [height]="220" />
+            </section>
+          }
+          <section class="card chart">
+            <div class="chart__head">
+              <h3>Generator loss</h3>
+              <span class="faint">total</span>
+              <span class="spacer"></span>
+              @if (xRange()) {
+                <button type="button" class="btn btn--ghost btn--sm" (click)="xRange.set(null)">Reset zoom</button>
+              }
+            </div>
+            <app-scalar-chart [series]="lossSeries()" [labels]="labels()" [colors]="colors()" [smoothing]="0.6" [logScale]="true" [xDomain]="xDomain()" [xRange]="xRange()" (xRangeChange)="xRange.set($event)" [zoomable]="!mode.isPhone()" [height]="220" />
+          </section>
+        </div>
+      }
+
+      @case ('config') {
+        <section class="config">
+          <h2 class="config__title">Config differences ({{ configRows().length }})</h2>
+          @if (configRows().length) {
+            <div class="table-scroll">
+              <table class="diff-table">
+                <thead>
+                  <tr>
+                    <th>Setting</th>
+                    @for (v of views(); track v.id) {
+                      <th><span class="swatch" [style.background]="v.color"></span>{{ v.name }}</th>
+                    }
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (row of configRows(); track row.group + row.key) {
+                    <tr>
+                      <td class="setting" [appTooltip]="row.group === 'Phases' ? row.title : row.key"><span class="setting__group">{{ row.group }}</span> {{ row.group === 'Phases' ? row.key : row.title }}</td>
+                      @for (val of row.values; track $index) {
+                        <td class="val">{{ val }}</td>
+                      }
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          } @else {
+            <p class="muted">The recipes are identical.</p>
+          }
+
+          @if (tomlDiff(); as d) {
+            <app-disclosure class="toml" title="TOML · first phase" [summary]="d.changed + ' differing lines'">
+              <div class="toml__tools">
+                @if (views().length > 2) {
+                  <span class="faint">{{ views()[0]?.name }} vs</span>
+                  @for (v of views().slice(1); track v.id) {
+                    <button type="button" class="chip" [class.chip--active]="diffPair()?.other?.id === v.id" (click)="diffOther.set(v.id)">{{ v.name }}</button>
+                  }
+                }
+                <span class="spacer"></span>
+                <button type="button" class="chip" [class.chip--active]="changesOnly()" (click)="changesOnly.set(!changesOnly())" [attr.aria-pressed]="changesOnly()">Changes only</button>
+              </div>
+              <div class="tdiff">
+                <div class="tdiff__head mono">{{ d.aName }}</div>
+                <div class="tdiff__head mono">{{ d.bName }}</div>
+                @for (l of d.lines; track $index) {
+                  <div [class]="'tdiff__cell mono tdiff__cell--' + l.kind + ' tdiff__cell--a'"><span class="ln">{{ l.aNo ?? '' }}</span>{{ l.a ?? '' }}</div>
+                  <div [class]="'tdiff__cell mono tdiff__cell--' + l.kind + ' tdiff__cell--b'"><span class="ln">{{ l.bNo ?? '' }}</span>{{ l.b ?? '' }}</div>
+                }
+              </div>
+            </app-disclosure>
+          }
+        </section>
+      }
+
+      @case ('images') {
+        @if (imageIters().length) {
+          <div class="img-tools">
+            <label class="img-at">
+              <span>at {{ formatCompact(imageAt() ?? 0) }}</span>
+              <input class="img-range" type="range" min="0" [max]="imageIters().length - 1" [value]="imageIndex()" (input)="onImageSlider($event)" aria-label="Validation update" />
+            </label>
+            <div class="img-ids">
+              @for (id of imageIds(); track id) {
+                <button type="button" class="chip" [class.chip--active]="id === activeImageId()" (click)="imageId.set(id)" [attr.aria-pressed]="id === activeImageId()">{{ id }}</button>
+              }
+            </div>
+            <div class="seg" role="group" aria-label="Zoom">
+              @for (z of zooms; track z) {
+                <button type="button" class="seg__btn" [class.seg__btn--active]="zoom() === z" (click)="setZoom(z)" [attr.aria-pressed]="zoom() === z" [attr.aria-label]="'Zoom ' + z + '×'">{{ z }}×</button>
+              }
+            </div>
+          </div>
+          <div class="img-grid">
+            @for (col of imageColumns(); track col.id) {
+              <figure class="fig">
+                @if (col.image; as img) {
+                  <app-zoom-view [src]="img.srUrl" [label]="formatCompact(col.iter ?? 0)" [zoom]="zoom()" [crop]="crop()" (center)="crop.set($event)" />
+                } @else {
+                  <div class="fig__none faint">no validation yet</div>
+                }
+                <figcaption>
+                  <span class="fig__name"><span class="swatch" [style.background]="col.color"></span>{{ col.name }}</span>
+                  @for (m of col.metrics; track m.key) {
+                    <span class="faint">{{ m.text }}</span>
+                  }
+                </figcaption>
+              </figure>
+            }
+            @if (gtUrl(); as gt) {
+              <figure class="fig">
+                <app-zoom-view [src]="gt" label="GT" [zoom]="zoom()" [crop]="crop()" (center)="crop.set($event)" />
+                <figcaption class="faint">ground truth</figcaption>
+              </figure>
+            }
+          </div>
+        } @else {
+          <p class="muted">None of these runs has validation images.</p>
+        }
+      }
+    }
+  }
+</div>

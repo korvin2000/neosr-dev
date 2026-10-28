@@ -1,0 +1,75 @@
+<f-flow
+  fDraggable
+  (fCreateConnection)="onCreateConnection($event)"
+  (fReassignConnection)="onReassignConnection($event)"
+  (fMoveNodes)="onMoveNodes($event)"
+  (fCreateNode)="onCreateNode($event)"
+  (fSelectionChange)="onSelectionChange($event)"
+  (fDeleteSelected)="onDeleteSelected($event)"
+  (fNodesRendered)="onNodesRendered()"
+>
+  <f-background>
+    <f-circle-pattern [radius]="1.1" color="var(--canvas-dot)" />
+  </f-background>
+
+  @if (!readonly()) {
+    <f-selection-area />
+  }
+
+  <f-canvas [fZoom]="true" [fZoomMinimum]="MIN_ZOOM" [fZoomMaximum]="MAX_ZOOM" [fZoomStep]="0.06" [fZoomDblClickStep]="0" (fCanvasChange)="onCanvasChange()">
+    <f-connection-for-create fBehavior="fixed_center" fType="bezier" />
+
+    <!-- Nodes and connections live inside @for blocks, so they need ngProjectAs wrappers (FF1004). -->
+    <ng-container ngProjectAs="[fNodes]">
+      @for (entry of placed(); track entry.node.id) {
+        <app-graph-node
+          fNode
+          [fNodeId]="entry.node.id"
+          [fNodePosition]="entry.node.position"
+          [fNodeDraggingDisabled]="readonly()"
+          [fNodeSelectionDisabled]="readonly()"
+          [node]="entry.node"
+          [spec]="entry.spec"
+          [problems]="problemsOf(entry.node)"
+          [phaseId]="store.activePhaseId()"
+          [readonly]="readonly()"
+        />
+      }
+    </ng-container>
+
+    <ng-container ngProjectAs="[fConnections]">
+      @for (item of edges(); track item.edge.id) {
+        <f-connection
+          [fConnectionId]="item.edge.id"
+          [fSourceId]="item.source"
+          [fTargetId]="item.target"
+          [class]="item.colourClass"
+          [class.edge-invalid]="item.invalid"
+          [class.edge-muted]="item.muted"
+          [class.edge-dimmed]="item.dimmed"
+          fBehavior="fixed_center"
+          fType="bezier"
+        />
+      }
+    </ng-container>
+  </f-canvas>
+
+  @if (minimap()) {
+    <f-minimap [fMinSize]="1400" />
+  }
+</f-flow>
+
+@if (isEmpty()) {
+  <p class="empty">No nodes yet — add one with +, or start from a template.</p>
+}
+
+@if (!readonly()) {
+  <div class="toolbar">
+    <button type="button" class="btn btn--ghost btn--sm btn--icon" (click)="fit()" [disabled]="isEmpty()" appTooltip="Fit to screen" aria-label="Fit to screen"><app-icon name="fit" [size]="15" /></button>
+    <app-menu [items]="menu()" (picked)="onMenu($event)" label="Display options" />
+  </div>
+
+  <button type="button" class="add" (click)="ui.addOpen.set(true)" appTooltip="Add a node, preset or template" aria-label="Add">
+    <app-icon name="plus" [size]="20" [weight]="2.2" />
+  </button>
+}

@@ -1,0 +1,76 @@
+:host {
+  position: relative;
+  display: block;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--canvas);
+  overflow: hidden;
+}
+
+f-flow {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+// The minimap is themed through Foblex's own custom properties (its internals render outside
+// this component's encapsulation), all mapped onto Studio tokens.
+f-minimap {
+  right: 12px;
+  bottom: 12px;
+  width: 180px;
+  height: 110px;
+  --ff-minimap-background-color: color-mix(in srgb, var(--panel) 88%, transparent);
+  --ff-minimap-border-color: var(--border);
+  --ff-minimap-border-radius: var(--radius);
+  --ff-minimap-shadow: var(--shadow-panel);
+  --ff-minimap-node-color: var(--text-faint);
+  --ff-minimap-node-selected-color: var(--selection);
+  --ff-minimap-view-color: var(--accent-soft);
+  --ff-minimap-view-border-color: var(--selection);
+  backdrop-filter: blur(8px);
+}
+
+.empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: var(--text-muted);
+  text-align: center;
+  pointer-events: none;
+}
+
+.toolbar {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: color-mix(in srgb, var(--panel) 90%, transparent);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.add {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  box-shadow: var(--shadow-panel);
+
+  &:hover {
+    background: var(--accent-hover);
+  }
+}

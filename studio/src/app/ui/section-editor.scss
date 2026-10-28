@@ -1,0 +1,77 @@
+:host {
+  display: block;
+}
+
+.phases {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.part {
+  & + & {
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-soft);
+  }
+
+  &__title {
+    margin: 0 0 4px;
+    font-size: var(--fs);
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+}
+
+.add {
+  margin: 6px 0;
+}
+
+.node-problem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+  color: var(--danger);
+  font-size: var(--fs-sm);
+
+  &--warn {
+    color: var(--warn);
+  }
+}
+
+.gan {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 12px;
+  cursor: pointer;
+
+  &__text {
+    font-weight: 500;
+  }
+
+  &__hint {
+    font-size: var(--fs-sm);
+  }
+}
+
+app-disclosure {
+  margin-top: 6px;
+  border-bottom: 0;
+}
+
+:host ::ng-deep app-field-row.flash {
+  animation: flash 1.6s var(--ease);
+}
+
+@keyframes flash {
+  0% {
+    background: var(--accent-soft);
+  }
+
+  100% {
+    background: transparent;
+  }
+}

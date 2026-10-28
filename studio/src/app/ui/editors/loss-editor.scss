@@ -1,0 +1,243 @@
+:host {
+  display: block;
+}
+
+.presets {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.table {
+  // Content-sized: columns stay as wide as their controls instead of stretching to the panel.
+  width: auto;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+
+  // The global `.row` flex helper must not reach table rows: columns are the whole point here.
+  tr {
+    display: table-row;
+    gap: 0;
+  }
+
+  th,
+  td {
+    display: table-cell;
+  }
+
+  th {
+    padding: 4px 6px;
+    text-align: left;
+    color: var(--text-faint);
+    font-weight: 500;
+    font-size: var(--fs-xs);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border-soft);
+    vertical-align: middle;
+  }
+
+  &--compact {
+    th,
+    td {
+      padding: 2px 4px;
+    }
+  }
+}
+
+.col-on {
+  width: 26px;
+}
+
+.col-w {
+  width: 76px;
+
+  .input--inline {
+    width: 76px;
+    min-width: 0;
+  }
+}
+
+.col-phase {
+  width: 98px;
+
+  &--active {
+    color: var(--accent-text);
+  }
+}
+
+.col-actions {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.phase-name {
+  display: block;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-muted);
+}
+
+.phase-iters {
+  text-transform: none;
+}
+
+.row--off {
+  opacity: 0.55;
+}
+
+.row--warn .loss {
+  color: var(--danger);
+}
+
+.loss {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.slot {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
+
+.select--inline,
+.input--inline {
+  height: 26px;
+  width: auto;
+  min-width: 70px;
+  font-size: var(--fs-sm);
+}
+
+.select--inline {
+  min-width: 136px;
+}
+
+.cell {
+  position: relative;
+  display: table-cell;
+
+  &__on {
+    position: absolute;
+    left: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+  }
+
+  &__w {
+    width: 100%;
+    padding-left: 24px;
+    color: var(--text-faint);
+    border-style: dashed;
+  }
+
+  &--overridden &__w {
+    color: var(--text);
+    border-style: solid;
+    border-color: var(--running);
+  }
+
+  &--off &__w {
+    opacity: 0.4;
+  }
+
+  &--active-phase {
+    background: var(--accent-soft);
+  }
+
+  &__clear {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-faint);
+    display: inline-flex;
+
+    &:hover {
+      color: var(--text);
+    }
+  }
+}
+
+.actions {
+  display: inline-flex;
+  gap: 2px;
+
+  .is-open {
+    color: var(--accent-text);
+  }
+}
+
+.params td {
+  background: var(--panel-sunken);
+  padding: 8px 10px;
+}
+
+.params__grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.params__desc {
+  margin-top: 6px;
+  font-size: var(--fs-xs);
+}
+
+.param {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+
+  &__k {
+    color: var(--text-muted);
+  }
+
+  .input--inline {
+    min-width: 90px;
+    max-width: 180px;
+  }
+}
+
+.empty {
+  color: var(--text-muted);
+  padding: 12px 8px;
+}
+
+.add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+
+  .select--inline {
+    min-width: 320px;
+  }
+}
+
+.legend {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+
+  &__swatch {
+    width: 14px;
+    height: 10px;
+    border-radius: 2px;
+    border: 1px solid var(--running);
+  }
+}

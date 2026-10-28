@@ -1,0 +1,33 @@
+<div class="bar">
+  <div class="chips" role="group" aria-label="Show">
+    @for (f of filters; track f.id) {
+      <button type="button" class="chip" [class.chip--active]="filter() === f.id" (click)="setFilter(f.id)" [attr.aria-pressed]="filter() === f.id">
+        {{ f.label }} <span class="chip__n">{{ counts()[f.id] ?? 0 }}</span>
+      </button>
+    }
+  </div>
+  <label class="search">
+    <app-icon name="search" [size]="14" />
+    <input class="input" type="search" placeholder="Search" [value]="query()" (input)="query.set($any($event.target).value)" aria-label="Search activity" />
+  </label>
+</div>
+
+<div class="list" role="list">
+  @for (r of rows(); track r) {
+    <div [class]="'row row--' + r.tone" [class.row--log]="r.kind === 'log'" role="listitem">
+      <app-icon class="row__icon" [name]="r.icon" [size]="14" />
+      <span class="row__iter mono">{{ r.iter }}</span>
+      @if (r.kind === 'log') {
+        <span class="row__line mono">{{ r.detail }}</span>
+      } @else {
+        <span class="row__text"><span class="row__title">{{ r.title }}</span> <span class="row__detail">{{ r.detail }}</span></span>
+      }
+      <span class="row__time mono">{{ r.time }}</span>
+    </div>
+  } @empty {
+    <p class="empty faint">{{ query() ? 'Nothing matches the search.' : 'Nothing here yet.' }}</p>
+  }
+  @if (hidden() > 0) {
+    <button type="button" class="btn btn--ghost more" (click)="more()">Show older ({{ hidden() }})</button>
+  }
+</div>

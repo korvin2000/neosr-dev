@@ -1,0 +1,46 @@
+<div class="page">
+  <h1 class="heading">What should the model do?</h1>
+
+  <div class="cards">
+    @for (c of cards; track c.look.id) {
+      <button type="button" class="outcome" (click)="pick(c)">
+        <span class="outcome__name">{{ c.look.label }}</span>
+        <span class="outcome__line">{{ c.look.line }}</span>
+        <span class="outcome__meta">{{ c.meta }}</span>
+      </button>
+    }
+  </div>
+
+  <div class="rows">
+    @if (draft(); as d) {
+      <a class="row-link" routerLink="/build">
+        <app-icon name="layers" [size]="18" />
+        <span class="row-link__body">
+          <span class="row-link__title">Continue "{{ d.name }}"</span>
+          <span class="row-link__sub">{{ d.nodes }} nodes · {{ d.preset }}@if (d.edited) { · edited {{ d.edited }} }</span>
+        </span>
+        <app-icon name="chevron-right" [size]="16" class="row-link__chev" />
+      </a>
+    }
+    @for (r of active(); track r.id) {
+      <a class="row-link" [routerLink]="['/runs', r.id]">
+        <app-icon name="activity" [size]="18" />
+        <span class="row-link__body">
+          <span class="row-link__title">Running "{{ r.name }}"</span>
+          <span class="row-link__sub">{{ r.status }}@if (r.phase) { · {{ r.phase }} }</span>
+          <span class="bar"><span class="bar__fill" [style.width.%]="r.pct"></span></span>
+        </span>
+        <app-icon name="chevron-right" [size]="16" class="row-link__chev" />
+      </a>
+    }
+  </div>
+
+  <nav class="links" aria-label="More ways to start">
+    <a routerLink="/library/templates">All templates ›</a>
+    <button type="button" class="link" (click)="importOpen.set(true)">Import TOML ›</button>
+  </nav>
+</div>
+
+@if (importOpen()) {
+  <app-import-sheet (closed)="importOpen.set(false)" />
+}

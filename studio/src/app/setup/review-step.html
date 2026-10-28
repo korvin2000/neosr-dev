@@ -1,0 +1,133 @@
+<input class="title" type="text" [value]="store.recipe().name" (change)="rename($any($event.target).value)" aria-label="Recipe name" spellcheck="false" />
+
+<div class="sentence">
+  Train
+  <app-popover title="Model" #archPop [width]="300">
+    <button trigger type="button" class="token">{{ archLabel() }}</button>
+    @for (a of archChoices; track a.type) {
+      <button type="button" class="opt" [class.opt--on]="a.type === archType()" (click)="setArch(a); archPop.close()">
+        <span class="opt__label">{{ a.label }}</span>
+        <span class="opt__line">{{ a.sizeClass }} · {{ a.speed }}@if (a.windowSize) { · window {{ a.windowSize }} }</span>
+      </button>
+    }
+    <button type="button" class="opt opt--more" (click)="more('model')">More ›</button>
+  </app-popover>
+  at ×{{ derived().scale }} on {{ pairsText() }} with
+  <app-popover title="Look" #lookPop [width]="340">
+    <button trigger type="button" class="token">{{ lookText() }}</button>
+    @for (l of looks; track l.id) {
+      <button type="button" class="opt" [class.opt--on]="look()?.id === l.id" (click)="setLook(l.id); lookPop.close()">
+        <span class="opt__label">{{ l.label }}</span>
+        <span class="opt__line">{{ l.line }}</span>
+      </button>
+    }
+    <button type="button" class="opt opt--more" (click)="more('losses')">More ›</button>
+  </app-popover>
+  for
+  <app-popover title="Length" #lenPop [width]="260">
+    <button trigger type="button" class="token">{{ fmtUpdates(total()) }} updates</button>
+    @for (n of lengths; track n) {
+      <button type="button" class="opt" [class.opt--on]="total() === n" (click)="setLength(n); lenPop.close()">
+        <span class="opt__label">{{ fmtUpdates(n) }}</span>
+      </button>
+    }
+    <form class="custom" (submit)="$event.preventDefault(); setCustomLength(); lenPop.close()">
+      <input class="input" type="text" inputmode="numeric" placeholder="custom, e.g. 120k" [value]="customLength()" (input)="customLength.set($any($event.target).value)" aria-label="Custom length" />
+      <button type="submit" class="btn btn--sm" [disabled]="!customLength().trim()">Set</button>
+    </form>
+    <button type="button" class="opt opt--more" (click)="more('plan')">More ›</button>
+  </app-popover>,
+  <app-popover title="Start" #startPop [width]="340">
+    <button trigger type="button" class="token">{{ startText() }}</button>
+    @for (s of starts; track s.id) {
+      <button type="button" class="opt" [class.opt--on]="startMode() === s.id" (click)="setStart(s.id)">
+        <span class="opt__label">{{ s.label }}</span>
+        <span class="opt__line">{{ s.line }}</span>
+      </button>
+    }
+    @if (startMode() !== 'scratch') {
+      <input class="input mono custom__path" type="text" [value]="startPath()" (change)="setStartPath($any($event.target).value)" [placeholder]="startMode() === 'resume' ? '…training_states/10000.state' : '…net_g_latest.pth'" [attr.aria-label]="startMode() === 'resume' ? 'Training state' : 'Generator weights'" spellcheck="false" />
+    }
+    <button type="button" class="opt opt--more" (click)="more('model')">More ›</button>
+  </app-popover>,
+  <app-popover title="Validation" #valPop [width]="240">
+    <button trigger type="button" class="token">{{ valText() }}</button>
+    @if (valFreq()) {
+      @for (n of valFreqs; track n) {
+        <button type="button" class="opt" [class.opt--on]="valFreq() === n" (click)="setValFreq(n); valPop.close()">
+          <span class="opt__label">every {{ fmtUpdates(n) }}</span>
+        </button>
+      }
+    } @else {
+      <a class="opt" routerLink="/setup/data"><span class="opt__label">Choose in Data ›</span></a>
+    }
+    <button type="button" class="opt opt--more" (click)="more('validation')">More ›</button>
+  </app-popover>;
+  checkpoints every {{ ckpt() }}.
+</div>
+
+<div class="fits">
+  <span class="muted">Fits this GPU ≈ {{ derived().patch }} px patches · batch {{ derived().effectiveBatch }} — suggested, not measured</span>
+  <button type="button" class="link" (click)="fitsOpen.set(!fitsOpen())" [attr.aria-expanded]="fitsOpen()">change</button>
+</div>
+@if (fitsOpen()) {
+  <div class="fits__fields">
+    <label>Patch <input class="input" type="number" min="8" step="8" [value]="derived().patch" (change)="setDataValue('patch_size', $any($event.target).value)" /> px</label>
+    <label>Batch <input class="input" type="number" min="1" step="1" [value]="derived().batch" (change)="setDataValue('batch_size', $any($event.target).value)" /></label>
+  </div>
+}
+
+@if (runsText()) {
+  <p class="muted note">{{ runsText() }}</p>
+}
+
+@if (changes().length) {
+  <section class="fold">
+    <button type="button" class="fold__head" (click)="changesOpen.set(!changesOpen())" [attr.aria-expanded]="changesOpen()">
+      <app-icon name="chevron-right" [size]="14" class="fold__chev" [class.fold__chev--open]="changesOpen()" />
+      Changed from preset ({{ changes().length }})
+    </button>
+    @if (changesOpen()) {
+      <ul class="list">
+        @for (c of changes(); track c.nodeId + c.key) {
+          <li class="change">
+            <span class="change__label">{{ c.label }}</span>
+            <span class="change__diff"><span class="faint">{{ fmtValue(c.from) }}</span> → {{ fmtValue(c.to) }}</span>
+            <button type="button" class="btn btn--ghost btn--sm btn--icon" (click)="revert(c)" appTooltip="Back to the preset value" aria-label="Back to the preset value"><app-icon name="undo" [size]="13" /></button>
+          </li>
+        }
+      </ul>
+    }
+  </section>
+}
+
+@if (toCheck().length) {
+  <section class="fold">
+    <button type="button" class="fold__head" [class.fold__head--danger]="blockers().length > 0" (click)="checkOpen.set(!checkOpen())" [attr.aria-expanded]="checkOpen()">
+      <app-icon name="chevron-right" [size]="14" class="fold__chev" [class.fold__chev--open]="checkOpen()" />
+      {{ toCheck().length }} to check
+    </button>
+    @if (checkOpen()) {
+      <ul class="list">
+        @for (p of toCheck(); track p.id) {
+          <li>
+            <button type="button" class="issue" [class.issue--blocker]="p.severity === 'blocker'" (click)="focusProblem(p)">
+              <app-icon [name]="p.severity === 'blocker' ? 'alert-triangle' : 'info'" [size]="13" />
+              <span>{{ p.message }}@if (p.hint) { <span class="faint">— {{ p.hint }}</span> }</span>
+            </button>
+          </li>
+        }
+      </ul>
+    }
+  </section>
+}
+
+<div class="actions">
+  <a class="btn" routerLink="/build/list">Open full recipe</a>
+  <app-menu [items]="menu" (picked)="onMenu($event)" />
+  <span class="spacer"></span>
+  <button type="button" class="btn btn--primary" [class.btn--fix]="blockers().length > 0" [disabled]="launching()" (click)="launch()">
+    <app-icon [name]="blockers().length ? 'alert-triangle' : 'play'" [size]="14" />
+    {{ launchLabel() }}
+  </button>
+</div>

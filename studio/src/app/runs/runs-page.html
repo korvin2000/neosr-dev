@@ -1,0 +1,55 @@
+<app-page-header heading="Runs">
+  <ng-container actions>
+    @if (selecting()) {
+      <button type="button" class="btn btn--ghost" (click)="cancelSelect()">Cancel</button>
+      <button type="button" class="btn btn--primary" [disabled]="!canCompare()" (click)="compare()">Compare ({{ selected().length }})</button>
+    } @else {
+      <a class="btn btn--primary" routerLink="/setup/data">New run</a>
+      <app-menu [items]="headerMenu" (picked)="onHeaderMenu($event)" />
+    }
+  </ng-container>
+</app-page-header>
+
+<div class="body">
+  @if (offline()) {
+    <p class="offline">Backend not reachable.</p>
+  }
+
+  @if (rows().length) {
+    <div class="list" role="list">
+      @for (row of rows(); track row.run.id) {
+        <div class="row" role="listitem" [class.row--selected]="selecting() && selected().includes(row.run.id)">
+          <ng-template #cells>
+            <app-run-status class="cell-status" [status]="row.run.status" />
+            <span class="cell-name">{{ row.run.name }}</span>
+            <span class="cell-phase">
+              <span class="cell-phase__name">{{ row.phase }}</span>
+              <span class="bar" [attr.aria-label]="row.progressText"><span class="bar__fill" [style.width.%]="row.progress"></span></span>
+            </span>
+            <span class="cell-activity">{{ row.activity }}</span>
+            <span class="cell-eta">{{ row.eta }}</span>
+          </ng-template>
+
+          @if (selecting()) {
+            <label class="row__main">
+              <input type="checkbox" class="row__check" [checked]="selected().includes(row.run.id)" [disabled]="!selected().includes(row.run.id) && selected().length >= maxCompare" (change)="toggle(row.run.id)" [attr.aria-label]="'Select ' + row.run.name" />
+              <ng-container [ngTemplateOutlet]="cells" />
+            </label>
+          } @else {
+            <a class="row__main" [routerLink]="['/runs', row.run.id]">
+              <ng-container [ngTemplateOutlet]="cells" />
+            </a>
+          }
+          <app-menu class="row__menu" [items]="row.menu" (picked)="onRowMenu(row.run, $event)" [label]="'Actions for ' + row.run.name" />
+        </div>
+      }
+    </div>
+  } @else if (loaded() && !offline()) {
+    <p class="empty">No runs yet — <a routerLink="/setup/data">set one up</a>.</p>
+  }
+</div>
+
+@if (confirming(); as c) {
+  @let t = confirmText(c);
+  <app-confirm-dialog [heading]="t.heading" [body]="t.body" [confirmLabel]="t.label" [danger]="true" (confirmed)="confirmed()" (cancelled)="confirming.set(null)" />
+}

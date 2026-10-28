@@ -1,0 +1,72 @@
+<app-page-header>
+  <div title class="name">
+    <input class="name__input" type="text" [value]="store.recipe().name" (change)="rename($any($event.target).value.trim())" aria-label="Recipe name" />
+    <p class="name__sub">
+      {{ presetLabel() }}
+      @if (changes().length) {
+        <span>· {{ changes().length }} changed</span>
+      }
+      @if (runsLabel()) {
+        <span>· {{ runsLabel() }}</span>
+      }
+      @if (store.dirty()) {
+        <span class="name__dirty" appTooltip="Unsaved changes">· unsaved</span>
+      }
+    </p>
+  </div>
+
+  <button status type="button" class="ready" [class.ready--ok]="counts().blocker === 0 && counts().warning === 0" [class.ready--warn]="counts().blocker === 0 && counts().warning > 0" [class.ready--bad]="counts().blocker > 0" (click)="issuesOpen.set(!issuesOpen())" [attr.aria-expanded]="issuesOpen()">
+    @if (counts().blocker > 0) {
+      <app-icon name="alert-triangle" [size]="13" /> {{ counts().blocker }} to fix
+    } @else if (counts().warning > 0) {
+      <app-icon name="info" [size]="13" /> ready · {{ counts().warning }} note{{ counts().warning === 1 ? '' : 's' }}
+    } @else {
+      <app-icon name="check" [size]="13" /> ready
+    }
+  </button>
+
+  <ng-container actions>
+    <button type="button" class="btn btn--primary" [class.btn--fix]="counts().blocker > 0" [disabled]="launching()" (click)="launch()">
+      <app-icon [name]="counts().blocker > 0 ? 'alert-triangle' : 'play'" [size]="14" />
+      {{ launchLabel() }}
+    </button>
+    <app-menu [items]="menu()" (picked)="onMenu($event)" />
+  </ng-container>
+
+  <nav tabs class="views" aria-label="View">
+    <a routerLink="/build/list" class="views__item" [class.views__item--active]="view() === 'list'">List</a>
+    <a routerLink="/build/graph" class="views__item" [class.views__item--active]="view() === 'graph'">Graph</a>
+    <a routerLink="/build/toml" class="views__item" [class.views__item--active]="view() === 'toml'">TOML</a>
+  </nav>
+</app-page-header>
+
+<div class="view">
+  <router-outlet />
+</div>
+
+@if (issuesOpen()) {
+  <div class="backdrop" (click)="issuesOpen.set(false)"></div>
+  <section class="issues" role="dialog" aria-label="Readiness">
+    <p class="issues__numbers">
+      <span class="mono">{{ derived().patch }} → {{ derived().gtCrop }} px</span> · batch <span class="mono">{{ derived().effectiveBatch }}</span> · <span class="mono">{{ derived().totalIter | number }}</span> updates
+      @if (derived().phases > 1) {
+        · {{ derived().phases }} runs
+      }
+      · VRAM ≈ {{ derived().vramClass }}
+    </p>
+    @if (problems().length === 0) {
+      <p class="issues__ok"><app-icon name="check" [size]="14" /> Compiles to a valid NeoSR config.</p>
+    }
+    @for (p of problems(); track p.id) {
+      <button type="button" class="issue" [class]="'issue issue--' + p.severity" (click)="focusProblem(p)">
+        <app-icon [name]="p.severity === 'info' ? 'info' : 'alert-triangle'" [size]="14" />
+        <span class="issue__body">
+          <span>{{ p.message }}</span>
+          @if (p.hint) {
+            <span class="issue__hint">{{ p.hint }}</span>
+          }
+        </span>
+      </button>
+    }
+  </section>
+}

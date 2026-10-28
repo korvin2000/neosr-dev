@@ -1,0 +1,78 @@
+<div class="tabs" role="tablist">
+  <button type="button" role="tab" class="tabs__tab" [class.tabs__tab--active]="tab() === 'nodes'" [attr.aria-selected]="tab() === 'nodes'" (click)="tab.set('nodes')">Nodes</button>
+  <button type="button" role="tab" class="tabs__tab" [class.tabs__tab--active]="tab() === 'presets'" [attr.aria-selected]="tab() === 'presets'" (click)="tab.set('presets')">Presets</button>
+  <button type="button" role="tab" class="tabs__tab" [class.tabs__tab--active]="tab() === 'templates'" [attr.aria-selected]="tab() === 'templates'" (click)="tab.set('templates')">Templates</button>
+</div>
+
+<div class="search">
+  <app-icon class="search__icon" name="search" [size]="13" />
+  <input class="search__input" type="search" [value]="query()" (input)="onQuery($event)" placeholder="Search…" aria-label="Search" />
+</div>
+
+<div class="list">
+  @switch (tab()) {
+    @case ('nodes') {
+      @for (group of nodeGroups(); track group.family) {
+        <section class="group" [class]="'group accent-' + group.accent">
+          <div class="group__label">{{ group.label }}</div>
+          @for (entry of group.entries; track entry.spec.id) {
+            <button
+              type="button"
+              class="entry"
+              fExternalItem
+              [fData]="entry.spec.id"
+              [fDisabled]="entry.disabled"
+              [disabled]="entry.disabled"
+              [appTooltip]="entry.disabled ? 'Already on the canvas (one per recipe)' : entry.spec.description"
+              (click)="addNode(entry)"
+            >
+              <span class="entry__bar"></span>
+              <app-icon class="entry__icon" [name]="entry.spec.icon" [size]="13" />
+              <span class="entry__label">{{ entry.spec.label }}</span>
+              @if (entry.disabled) {
+                <span class="entry__sub">added</span>
+              }
+            </button>
+          }
+        </section>
+      } @empty {
+        <p class="none">No node matches “{{ query() }}”.</p>
+      }
+    }
+    @case ('presets') {
+      @for (group of presetGroups(); track group.label) {
+        <section class="group" [class]="'group accent-' + group.accent">
+          <div class="group__label">{{ group.label }}</div>
+          @for (preset of group.entries; track preset.id) {
+            <div class="entry-row">
+              <button type="button" class="entry entry--preset" fExternalItem [fData]="presetPrefix + preset.id" [appTooltip]="describePreset(preset)" (click)="addPreset(preset)">
+                <span class="entry__bar"></span>
+                <app-icon class="entry__icon" name="bookmark" [size]="13" />
+                <span class="entry__label">{{ preset.name }}<small class="entry__desc">{{ preset.description || preset.nodeLabel }}</small></span>
+              </button>
+              @if (!isBuiltIn(preset)) {
+                <button type="button" class="entry-row__delete" appTooltip="Delete this preset" aria-label="Delete preset" (click)="deletePreset(preset)"><app-icon name="trash" [size]="12" /></button>
+              }
+            </div>
+          }
+        </section>
+      } @empty {
+        <p class="none">No presets yet. Select a node, then ⋯ › Save as preset.</p>
+      }
+    }
+    @case ('templates') {
+      @for (t of filteredTemplates(); track t.id) {
+        <button type="button" class="template" (click)="loadTemplate(t)">
+          <span class="template__head">
+            <span class="template__label">{{ t.label }}</span>
+            <span class="template__source">{{ t.provenance }}</span>
+          </span>
+          <span class="template__desc">{{ t.description }}</span>
+          <span class="template__meta">{{ templateMeta(t) }}</span>
+        </button>
+      } @empty {
+        <p class="none">No template matches “{{ query() }}”.</p>
+      }
+    }
+  }
+</div>

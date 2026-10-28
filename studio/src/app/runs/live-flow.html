@@ -1,0 +1,133 @@
+<div class="grid" [class.grid--gan]="hasGanAny()">
+  <svg class="edges" aria-hidden="true">
+    @for (e of edges(); track e.id) {
+      <path class="edge" [class]="'edge accent-' + e.family" [class.edge--off]="e.off" [attr.d]="e.d" />
+    }
+  </svg>
+
+  <!-- Run -->
+  <article class="node node--run accent-sky" data-node="run" [appTooltip]="tips.run">
+    <p class="node__status" [class.node__status--running]="motion()" [class.node__status--warn]="reconnecting()">{{ statusWord() }}</p>
+    <svg class="ring" viewBox="0 0 84 84" aria-hidden="true">
+      <circle class="ring__track" cx="42" cy="42" [attr.r]="ringR" />
+      @for (s of ring(); track s.id) {
+        <g [attr.transform]="'rotate(' + s.rotate + ' 42 42)'">
+          <circle class="ring__seg" [class.ring__seg--done]="s.done" cx="42" cy="42" [attr.r]="ringR" [attr.stroke-dasharray]="s.dash" />
+          @if (s.active) {
+            <circle class="ring__fill" cx="42" cy="42" [attr.r]="ringR" [attr.stroke-dasharray]="s.fillDash" />
+          }
+        </g>
+      }
+      <text class="ring__pct" x="42" y="42">{{ pct() }}%</text>
+    </svg>
+    <p class="node__big">{{ runBig() }}</p>
+    <p class="node__line">{{ runLine() }}</p>
+    @if (reconnecting()) {
+      <p class="node__line node__line--warn">reconnecting…</p>
+    }
+  </article>
+
+  <!-- Data -->
+  <article class="node node--beat accent-emerald" data-node="data" style="--beat: 0" [appTooltip]="tips.data">
+    <h3 class="node__title"><app-icon name="database" [size]="14" />Data</h3>
+    <p class="node__big">{{ dataBig() }}</p>
+    <p class="node__line">{{ dataRate() || dataLine() }}</p>
+    @if (dataRate()) {
+      <p class="node__line">{{ dataLine() }}</p>
+    }
+    <div class="wait" [class.wait--high]="(dataWait() ?? 0) > 15">
+      <span class="wait__label">wait {{ dataWait() === null ? '—' : dataWait()!.toFixed(0) + ' %' }}</span>
+      <span class="wait__track"><span class="wait__fill" [style.width.%]="dataWait() ?? 0"></span></span>
+    </div>
+  </article>
+
+  <!-- Generator -->
+  <article class="node node--beat accent-violet" data-node="gen" style="--beat: 1" [appTooltip]="tips.gen">
+    <h3 class="node__title"><app-icon name="cpu" [size]="14" />Generator</h3>
+    <p class="node__big">{{ genBig() }}</p>
+    <p class="node__line">{{ genLine() }}</p>
+    <svg class="spark" viewBox="0 0 60 20" preserveAspectRatio="none" aria-hidden="true">
+      @if (itpsSpark()) {
+        <polyline [attr.points]="itpsSpark()" />
+      }
+    </svg>
+  </article>
+
+  <!-- Losses -->
+  <button type="button" class="node node--beat node--link accent-rose" data-node="losses" style="--beat: 2" [appTooltip]="tips.losses" (click)="open('diagnostics')">
+    <h3 class="node__title"><app-icon name="target" [size]="14" />Losses</h3>
+    <p class="node__big">{{ lossTotal() }}</p>
+    <div class="bars">
+      @for (b of lossBars(); track b.key) {
+        <div class="bar">
+          <span class="bar__label">{{ b.label }}</span>
+          <span class="bar__track"><span class="bar__fill" [style.width.%]="b.pct" [style.background]="b.color"></span></span>
+          <span class="bar__value">{{ b.value }}</span>
+        </div>
+      }
+    </div>
+    <p class="node__line">{{ lossLine() }}</p>
+  </button>
+
+  <!-- Discriminator -->
+  @if (hasGanAny()) {
+    <article class="node node--beat accent-violet" data-node="disc" style="--beat: 3" [class.node--off]="!ganNow()" [appTooltip]="tips.disc">
+      <h3 class="node__title"><app-icon name="shield" [size]="14" />Discriminator</h3>
+      <p class="node__big">{{ discBig() }}</p>
+      <p class="node__line">{{ discLine() }}</p>
+    </article>
+  }
+
+  <!-- Optimizer -->
+  <button type="button" class="node node--beat node--link accent-amber" data-node="optim" [style.--beat]="ganNow() ? 4 : 3" [appTooltip]="tips.optim" (click)="open('diagnostics')">
+    <h3 class="node__title"><app-icon name="sliders" [size]="14" />Optimizer</h3>
+    <p class="node__big">{{ lrBig() }}</p>
+    <p class="node__line">{{ optimLine() }}</p>
+    <div class="row">
+      <svg class="spark spark--grad" viewBox="0 0 60 20" preserveAspectRatio="none" aria-hidden="true">
+        @if (gradSpark()) {
+          <polyline [attr.points]="gradSpark()" />
+        }
+      </svg>
+      <span class="node__line" [class.node__line--warn]="skipped() > 0">{{ skipped() > 0 ? 'skipped ×' + skipped() : 'grad norm' }}</span>
+    </div>
+  </button>
+
+  <!-- Checkpoint -->
+  <article class="node accent-sky" data-node="ckpt" [class.node--flash]="ckptFlash()" [appTooltip]="tips.ckpt">
+    <h3 class="node__title"><app-icon name="save" [size]="14" />Checkpoint</h3>
+    <p class="node__big" [class.node__big--empty]="!ckptLine()">{{ ckptBig() }}</p>
+    <p class="node__line">{{ ckptLine() }}</p>
+  </article>
+
+  <!-- Validation -->
+  <button type="button" class="node node--link accent-emerald" data-node="val" [class.node--flash]="valFlash()" [appTooltip]="tips.val" (click)="open('images')">
+    <h3 class="node__title"><app-icon name="check-image" [size]="14" />Validation</h3>
+    <p class="node__big" [class.node__big--empty]="valView().empty">
+      {{ valView().big }}
+      @if (valView().trend; as t) {
+        <span class="trend" [class]="'trend trend--' + t.tone">{{ t.arrow }} {{ t.text }}</span>
+      }
+    </p>
+    <p class="node__line">{{ valLine() }}</p>
+  </button>
+
+  <!-- GPU -->
+  <article class="node node--gpu accent-slate" data-node="gpu" [appTooltip]="tips.gpu">
+    <h3 class="node__title"><app-icon name="gpu" [size]="14" />GPU</h3>
+    <div class="gauges">
+      <svg class="util" viewBox="0 0 52 52" aria-hidden="true">
+        <circle class="util__track" cx="26" cy="26" r="22" />
+        @if (gpuUtil() !== null) {
+          <circle class="util__fill" cx="26" cy="26" r="22" [attr.stroke-dasharray]="gpuUtilDash()" transform="rotate(-90 26 26)" />
+        }
+        <text class="util__text" x="26" y="26">{{ gpuUtil() === null ? '—' : gpuUtil()!.toFixed(0) + ' %' }}</text>
+      </svg>
+      <div class="vram" [class.vram--high]="vram()?.high">
+        <span class="node__big node__big--sm">{{ vram()?.text ?? '—' }}</span>
+        <span class="vram__track"><span class="vram__fill" [style.width.%]="vram()?.pct ?? 0"></span></span>
+      </div>
+    </div>
+    <p class="node__line">{{ gpuName() }}</p>
+  </article>
+</div>

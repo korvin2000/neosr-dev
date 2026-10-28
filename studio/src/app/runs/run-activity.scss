@@ -1,0 +1,164 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  height: 28px;
+  padding: 0 11px;
+
+  &__n {
+    color: var(--text-faint);
+    font-size: var(--fs-xs);
+  }
+}
+
+.search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--text-faint);
+
+  .input {
+    width: 220px;
+    height: 30px;
+  }
+}
+
+.list {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 16px 52px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: var(--fs-sm);
+
+  &__icon {
+    align-self: center;
+    color: var(--text-faint);
+  }
+
+  &__iter {
+    color: var(--text-muted);
+    text-align: right;
+    font-size: var(--fs-xs);
+  }
+
+  &__title {
+    margin-right: 8px;
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  &__detail {
+    color: var(--text-muted);
+    word-break: break-word;
+  }
+
+  &__line {
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  &__time {
+    color: var(--text-faint);
+    font-size: var(--fs-xs);
+  }
+
+  &--accent .row__icon {
+    color: var(--accent-text);
+  }
+
+  &--warn .row__icon,
+  &--warn .row__title,
+  &--warn .row__line {
+    color: var(--warn);
+  }
+
+  &--danger .row__icon,
+  &--danger .row__title,
+  &--danger .row__line {
+    color: var(--danger);
+  }
+
+  &--ok .row__icon {
+    color: var(--ok);
+  }
+
+  &--running .row__icon {
+    color: var(--running);
+  }
+
+  &--log {
+    background: var(--panel-sunken);
+  }
+}
+
+.empty {
+  padding: 20px 16px;
+}
+
+.more {
+  width: 100%;
+  justify-content: center;
+  border-radius: 0;
+}
+
+@media (max-width: 720px) {
+  .search {
+    width: 100%;
+    margin-left: 0;
+
+    .input {
+      flex: 1;
+      width: auto;
+      height: 44px;
+    }
+  }
+
+  .chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    width: 100%;
+  }
+
+  .chip {
+    flex: none;
+    height: 44px;
+  }
+
+  .row {
+    grid-template-columns: 16px minmax(0, 1fr) auto;
+    padding: 8px 10px;
+
+    &__iter {
+      display: none;
+    }
+  }
+}

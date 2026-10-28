@@ -1,0 +1,93 @@
+@if (run(); as r) {
+  <ng-template #statusChip>
+    @if (unresolved() > 0) {
+      <button type="button" class="status-btn" (click)="showWarnings()" appTooltip="Show warnings">
+        <app-run-status [status]="r.status" [detail]="statusDetail()" [warnings]="unresolved()" [reconnecting]="reconnecting()" size="md" />
+      </button>
+    } @else {
+      <app-run-status [status]="r.status" [detail]="statusDetail()" [reconnecting]="reconnecting()" size="md" />
+    }
+  </ng-template>
+
+  <app-page-header back="/runs">
+    <h1 title class="title">{{ r.name }}</h1>
+    <div status class="title__status title__status--wide"><ng-container [ngTemplateOutlet]="statusChip" /></div>
+
+    <ng-container actions>
+      <div class="weights">
+        <button type="button" class="btn btn--primary" [disabled]="busy() || primary().kind === 'saving'" (click)="onPrimary()" [attr.aria-expanded]="primary().kind === 'weights' ? weightsOpen() : null">
+          <app-icon [name]="primary().icon" [size]="14" />
+          {{ primary().label }}
+        </button>
+        @if (weightsOpen() && weights(); as w) {
+          <div class="weights__pop" role="dialog" aria-label="Weights">
+            <h3 class="weights__title">Generator weights</h3>
+            <div class="weights__row">
+              <code class="weights__code">{{ w.path }}</code>
+              <button type="button" class="btn btn--ghost btn--icon" (click)="copy(w.path, 'the path')" appTooltip="Copy path" aria-label="Copy path"><app-icon name="copy" [size]="14" /></button>
+            </div>
+            <h3 class="weights__title">Export to ONNX</h3>
+            <div class="weights__row">
+              <code class="weights__code">{{ w.convert }}</code>
+              <button type="button" class="btn btn--ghost btn--icon" (click)="copy(w.convert, 'the command')" appTooltip="Copy command" aria-label="Copy command"><app-icon name="copy" [size]="14" /></button>
+            </div>
+          </div>
+        }
+      </div>
+      <app-menu [items]="menu()" (picked)="onMenu($event)" />
+    </ng-container>
+
+    <div tabs class="sub">
+      <div class="title__status title__status--phone"><ng-container [ngTemplateOutlet]="statusChip" /></div>
+      <app-run-progress [run]="r" [checkpoints]="live()?.checkpoints() ?? []" [native]="native()" [active]="active()" />
+      <nav class="tabs" role="tablist" aria-label="Run">
+        @for (t of tabs; track t.id) {
+          <button type="button" class="tabs__tab" role="tab" [class.tabs__tab--active]="activeTab() === t.id" [attr.aria-selected]="activeTab() === t.id" (click)="setTab(t.id)">{{ t.label }}</button>
+        }
+      </nav>
+    </div>
+  </app-page-header>
+
+  <div class="body">
+    @if (live(); as lv) {
+      @switch (activeTab()) {
+        @case ('overview') {
+          <app-run-overview [live]="lv" [active]="active()" [now]="now()" (showWarnings)="showWarnings()" />
+        }
+        @case ('images') {
+          <app-validation-gallery [validations]="lv.validations()" [checkpoints]="lv.checkpoints()" [phases]="r.phases" [recipe]="r.recipe" [live]="active()" [selectedIter]="selectedVal()" (selectedIterChange)="selectedVal.set($event)" />
+        }
+        @case ('diagnostics') {
+          <app-run-diagnostics [live]="lv" />
+        }
+        @case ('activity') {
+          <app-run-activity [events]="lv.events()" [logs]="lv.logs()" [phases]="r.phases" [(filter)]="activityFilter" />
+        }
+      }
+    }
+  </div>
+
+  <app-drawer [open]="configOpen()" title="Config" [width]="640" (closed)="configOpen.set(false)">
+    @if (configOpen()) {
+      <app-run-recipe-panel [run]="r" [platform]="settings.settings().platform" />
+    }
+  </app-drawer>
+
+  @switch (dialog()) {
+    @case ('force') {
+      <app-confirm-dialog heading="Force stop?" [body]="'Stops now without saving a checkpoint; ' + forceLoss() + '.'" confirmLabel="Force stop" [danger]="true" (confirmed)="forceStop()" (cancelled)="dialog.set(null)" />
+    }
+    @case ('fork') {
+      <app-confirm-dialog heading="Replace the recipe in Build?" body="Build has unsaved changes. Forking replaces them with this run's recipe." confirmLabel="Fork anyway" [danger]="true" (confirmed)="fork()" (cancelled)="dialog.set(null)" />
+    }
+  }
+} @else if (live()?.error(); as err) {
+  <app-page-header back="/runs" heading="Run not available" />
+  <div class="state">
+    <p class="muted">{{ err }}</p>
+    <a class="btn" routerLink="/runs">All runs</a>
+  </div>
+} @else {
+  <app-page-header back="/runs" />
+  <p class="state faint">Loading run…</p>
+}

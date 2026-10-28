@@ -1,0 +1,56 @@
+<section class="block">
+  <div class="block__head">
+    <h4>Commands</h4>
+    <span class="spacer"></span>
+    <button type="button" class="btn btn--ghost btn--sm btn--icon" (click)="copy(commands(), 'the commands')" appTooltip="Copy commands" aria-label="Copy commands"><app-icon name="copy" [size]="14" /></button>
+  </div>
+  <pre class="cmd">{{ commands() }}</pre>
+</section>
+
+@if (activeToml(); as toml) {
+  <section class="block">
+    <div class="block__head">
+      <h4>TOML</h4>
+      <span class="faint">frozen at launch · #{{ hash() }}</span>
+      <span class="spacer"></span>
+      <button type="button" class="btn btn--ghost btn--sm btn--icon" (click)="download()" appTooltip="Download this TOML" aria-label="Download this TOML"><app-icon name="download" [size]="14" /></button>
+    </div>
+    @if (tomls().length > 1) {
+      <div class="tabs" role="tablist">
+        @for (t of tomls(); track t.name; let i = $index) {
+          <button type="button" class="tabs__tab" role="tab" [class.tabs__tab--active]="toml.name === t.name" [attr.aria-selected]="toml.name === t.name" (click)="tab.set(i)">{{ t.name }}</button>
+        }
+      </div>
+    }
+    <app-toml-code class="toml" [lines]="toml.lines" />
+  </section>
+}
+
+<section class="block">
+  <div class="block__head">
+    <h4>Artifacts</h4>
+  </div>
+  <ul class="files">
+    @for (a of artifacts(); track a.phase) {
+      <li [class.faint]="!a.reached">
+        @if (artifacts().length > 1) {
+          <span class="files__phase">{{ a.phase }}</span>
+        }
+        @for (f of a.files; track f) {
+          <span class="mono files__path">{{ f }}</span>
+        }
+      </li>
+    }
+  </ul>
+</section>
+
+@if (convert(); as cmd) {
+  <section class="block">
+    <div class="block__head">
+      <h4>Export to ONNX</h4>
+      <span class="spacer"></span>
+      <button type="button" class="btn btn--ghost btn--sm btn--icon" (click)="copy(cmd, 'the convert command')" appTooltip="Copy command" aria-label="Copy the convert command"><app-icon name="copy" [size]="14" /></button>
+    </div>
+    <pre class="cmd">{{ cmd }}</pre>
+  </section>
+}

@@ -1,0 +1,118 @@
+@if (phaseAware()) {
+  <div class="phases" role="tablist" aria-label="Phase">
+    <button type="button" class="chip" [class.chip--active]="!activePhase()" (click)="selectPhase(null)" appTooltip="Values every phase inherits">Shared</button>
+    @for (p of phases(); track p.id; let i = $index) {
+      <button type="button" class="chip" [class.chip--active]="activePhase()?.id === p.id" (click)="selectPhase(p.id)" [appTooltip]="p.iters.toLocaleString() + ' updates · ' + p.init">{{ i + 1 }} · {{ p.name }}</button>
+    }
+  </div>
+}
+
+@for (v of views(); track v.part.nodeType + (v.part.title ?? '')) {
+  <section class="part">
+    @if (v.title) {
+      <h4 class="part__title">{{ v.title }}</h4>
+    }
+
+    @if (!v.node) {
+      <button type="button" class="btn add" (click)="addNode(v.part)">
+        <app-icon name="plus" [size]="14" />
+        {{ v.part.addLabel ?? 'Add ' + v.spec.label }}
+      </button>
+    } @else {
+      @for (p of v.nodeProblems; track p.id) {
+        <p class="node-problem" [class.node-problem--warn]="p.severity !== 'blocker'">
+          <app-icon [name]="p.severity === 'info' ? 'info' : 'alert-triangle'" [size]="13" />
+          <span>{{ p.message }}</span>
+        </p>
+      }
+
+      @for (editor of v.part.custom ?? []; track editor) {
+        @switch (editor) {
+          @case ('losses') {
+            <label class="gan">
+              <input type="checkbox" [checked]="ganOn(v.node)" (change)="toggleGan(v.node, $any($event.target).checked)" />
+              <span class="gan__text">Adversarial training (GAN)</span>
+              <span class="gan__hint faint">adds a discriminator and its optimizer</span>
+            </label>
+            <app-loss-editor
+              [rows]="lossRowsOf(v.node)"
+              [phases]="phases()"
+              [activePhaseId]="activePhase()?.id ?? null"
+              [hasDiscriminator]="hasDiscriminator()"
+              [showKeys]="showKeys()"
+              (rowsChange)="setLosses(v.node, $event)"
+            />
+          }
+          @case ('val-datasets') {
+            <app-val-datasets-editor [rows]="valRowsOf(v.node)" (rowsChange)="setValRows(v.node, $event)" />
+          }
+          @case ('phases') {
+            <app-phases-editor [phases]="phases()" (phasesChange)="setPhases($event)" />
+          }
+        }
+      }
+
+      @for (f of v.basics; track f.field.key) {
+        @if (isArchField(v, f)) {
+          <app-arch-select [field]="f.field" [value]="'' + (f.value ?? '')" [changed]="f.changed" [baseline]="f.baseline" [scale]="scale()" (valueChange)="set(v, f, $event)" (reset)="reset(v, f)" />
+          @for (p of f.problems; track p.id) {
+            <p class="node-problem" [class.node-problem--warn]="p.severity !== 'blocker'"><app-icon name="alert-triangle" [size]="13" /><span>{{ p.message }}</span></p>
+          }
+        } @else {
+          <app-field-row
+            [field]="f.field"
+            [value]="f.value"
+            [readout]="f.readout"
+            [changed]="f.changed"
+            [baseline]="f.baseline"
+            [problems]="f.problems"
+            [suggestion]="f.suggestion"
+            [showKey]="showKeys()"
+            [phase]="f.phase"
+            (valueChange)="set(v, f, $event)"
+            (patch)="patch(v, $event)"
+            (reset)="reset(v, f)"
+            (overrideToggle)="toggleOverride(v, f, $event)"
+          />
+        }
+      }
+
+      @for (editor of v.part.custom ?? []; track editor) {
+        @if (editor === 'arch-params') {
+          <app-disclosure title="Architecture options" [summary]="archParamsOf(v.node).length ? archParamsOf(v.node).length + ' options' : 'none'" [open]="isMoreOpen(v)" (openChange)="setMoreOpen(v, $event)">
+            <app-arch-params-editor [params]="archParamsOf(v.node)" [value]="paramsOf(v.node)" (valueChange)="setParams(v.node, $event)" />
+          </app-disclosure>
+        }
+      }
+
+      @if (v.more.length) {
+        <app-disclosure
+          title="More options"
+          [summary]="v.more.length + ' settings'"
+          [badge]="v.moreChanged ? v.moreChanged + ' changed' : ''"
+          badgeKind="accent"
+          [open]="isMoreOpen(v)"
+          (openChange)="setMoreOpen(v, $event)"
+        >
+          @for (f of v.more; track f.field.key) {
+            <app-field-row
+              [field]="f.field"
+              [value]="f.value"
+              [readout]="f.readout"
+              [changed]="f.changed"
+              [baseline]="f.baseline"
+              [problems]="f.problems"
+              [suggestion]="f.suggestion"
+              [showKey]="showKeys()"
+              [phase]="f.phase"
+              (valueChange)="set(v, f, $event)"
+              (patch)="patch(v, $event)"
+              (reset)="reset(v, f)"
+              (overrideToggle)="toggleOverride(v, f, $event)"
+            />
+          }
+        </app-disclosure>
+      }
+    }
+  </section>
+}

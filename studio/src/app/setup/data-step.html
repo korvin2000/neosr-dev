@@ -1,0 +1,131 @@
+<section class="group" aria-label="Source">
+  <div class="choice" role="radiogroup" aria-label="Source">
+    <label class="choice__card" [class.choice__card--on]="!otf()">
+      <input type="radio" name="source" [checked]="!otf()" (change)="setSource(false)" />
+      <span class="choice__title">I have low-res images</span>
+      <span class="choice__line">Matching high-res and low-res folders</span>
+    </label>
+    <label class="choice__card" [class.choice__card--on]="otf()">
+      <input type="radio" name="source" [checked]="otf()" (change)="setSource(true)" />
+      <span class="choice__title">Generate low-res on the fly</span>
+      <span class="choice__line">Real-world sources work best; anime can over-degrade</span>
+    </label>
+  </div>
+</section>
+
+<section class="group" aria-label="Folders">
+  <app-field-row [field]="gtField" [value]="gt()" [changed]="changed('dataroot_gt')" [baseline]="baseline('dataroot_gt')" [problems]="problems('dataroot_gt')" (valueChange)="setFolder('dataroot_gt', $event)" (reset)="reset('dataroot_gt')" />
+  @if (!otf()) {
+    <app-field-row [field]="lqField" [value]="lq()" [changed]="changed('dataroot_lq')" [baseline]="baseline('dataroot_lq')" [problems]="problems('dataroot_lq')" (valueChange)="setFolder('dataroot_lq', $event)" (reset)="reset('dataroot_lq')" />
+  }
+
+  <div class="result" aria-live="polite">
+    @switch (scan()?.status) {
+      @case ('checking') {
+        <span class="muted">checking…</span>
+      }
+      @case ('offline') {
+        <span class="muted">Could not check (backend offline); you can continue.</span>
+      }
+      @case ('error') {
+        <span class="muted">Could not check; you can continue.</span>
+      }
+      @case ('done') {
+        @if (report(); as r) {
+          <span>
+            @if (otf()) {
+              {{ r.gtCount | number }} images
+            } @else {
+              {{ r.pairs | number }} pairs · ×{{ scale() }} detected
+            }
+          </span>
+          @if (detected()) {
+            <app-popover title="Scale" #scalePop [width]="220">
+              <button trigger type="button" class="link">change</button>
+              <div class="seg" role="radiogroup" aria-label="Scale">
+                @for (s of allScales; track s) {
+                  <button type="button" role="radio" class="seg__item" [class.seg__item--on]="scale() === s" [attr.aria-checked]="scale() === s" (click)="setScale(s); scalePop.close()">×{{ s }}</button>
+                }
+              </div>
+              <p class="faint small">Detected from the pair sizes (simulated)</p>
+            </app-popover>
+          }
+          <span class="dot">·</span>
+          @if (issues().length) {
+            <app-popover title="Issues" #issuesPop [width]="360">
+              <button trigger type="button" class="link" [class.link--danger]="blockerCount() > 0">{{ issues().length }} issue{{ issues().length === 1 ? '' : 's' }} ›</button>
+              <ul class="issues">
+                @for (i of issues(); track i.text) {
+                  <li class="issue" [class.issue--blocker]="i.severity === 'blocker'">
+                    <app-icon [name]="i.severity === 'blocker' ? 'alert-triangle' : 'info'" [size]="13" />
+                    <span>{{ i.text }}</span>
+                  </li>
+                }
+              </ul>
+              <p class="faint small">simulated</p>
+            </app-popover>
+          } @else {
+            <span class="muted">no issues</span>
+          }
+          <span class="faint small">simulated</span>
+        }
+      }
+    }
+  </div>
+
+  @if (!detected()) {
+    <div class="scale">
+      <span class="scale__label">Scale</span>
+      <div class="seg" role="radiogroup" aria-label="Scale">
+        @for (s of scales(); track s) {
+          <button type="button" role="radio" class="seg__item" [class.seg__item--on]="scale() === s" [attr.aria-checked]="scale() === s" (click)="setScale(s)">×{{ s }}</button>
+        }
+        @if (scales().length < allScales.length) {
+          <button type="button" class="seg__more" (click)="moreScales.set(true)">more…</button>
+        }
+      </div>
+    </div>
+  }
+</section>
+
+<section class="group" aria-label="Validation">
+  <h2 class="group__title">Validation</h2>
+  <div class="radios" role="radiogroup" aria-label="Validation">
+    <label class="radio">
+      <input type="radio" name="val" [checked]="valMode() === 'paired'" (change)="setValMode('paired')" />
+      <span class="radio__body">
+        <span class="radio__title">Paired folder</span>
+        <span class="radio__line">Metrics and images every validation</span>
+      </span>
+    </label>
+    @if (valMode() === 'paired') {
+      <div class="radio__fields">
+        <app-field-row [field]="valGtField" [value]="valGt()" [problems]="valProblems()" (valueChange)="setValFolder('dataroot_gt', $event)" />
+        <app-field-row [field]="valLqField" [value]="valLq()" (valueChange)="setValFolder('dataroot_lq', $event)" />
+      </div>
+    }
+    <label class="radio">
+      <input type="radio" name="val" [checked]="valMode() === 'input'" (change)="setValMode('input')" />
+      <span class="radio__body">
+        <span class="radio__title">Input images only</span>
+        <span class="radio__line">Images to look at, no metrics</span>
+      </span>
+    </label>
+    @if (valMode() === 'input') {
+      <div class="radio__fields">
+        <app-field-row [field]="valInputField" [value]="valLq()" [problems]="valProblems()" (valueChange)="setValFolder('dataroot_lq', $event)" />
+      </div>
+    }
+    <label class="radio">
+      <input type="radio" name="val" [checked]="valMode() === 'skip'" (change)="setValMode('skip')" />
+      <span class="radio__body">
+        <span class="radio__title">Skip</span>
+        <span class="radio__line">You will only see losses, never images or metrics</span>
+      </span>
+    </label>
+  </div>
+</section>
+
+<div class="actions">
+  <a class="btn btn--primary" routerLink="/setup/review">Next <app-icon name="arrow" [size]="14" /></a>
+</div>
