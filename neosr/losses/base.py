@@ -8,6 +8,27 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 
 
+class _RestoringClamp(torch.autograd.Function):
+    """clamp(x, lo, hi) whose backward keeps the gradient components that move an out-of-range raw
+    value back into range (T-01). The hard clamp zeroes every out-of-range pixel's gradient, so such
+    a pixel can never return; a straight-through clamp would let an outward gradient drift it."""
+
+    @staticmethod
+    def forward(ctx, x: Tensor, lo: float, hi: float) -> Tensor:
+        ctx.save_for_backward(x)
+        ctx.lo, ctx.hi = lo, hi
+        return x.clamp(lo, hi)
+
+    @staticmethod
+    def backward(ctx, g: Tensor) -> tuple[Tensor, None, None]:
+        (x,) = ctx.saved_tensors
+        return g.masked_fill(((x < ctx.lo) & (g > 0)) | ((x > ctx.hi) & (g < 0)), 0), None, None
+
+
+def restoring_clamp(x: Tensor, lo: float = 0.0, hi: float = 1.0) -> Tensor:
+    return _RestoringClamp.apply(x, lo, hi)
+
+
 class Context:
     """What one generator forward exposes to the losses. Built by the trainer; losses only read it."""
 

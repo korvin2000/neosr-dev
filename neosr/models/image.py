@@ -19,7 +19,7 @@ from neosr.archs import build_network
 from neosr.config import ConfigError, qat_schedule
 from neosr.data.augmentations import apply_augment
 from neosr.losses import build_losses
-from neosr.losses.base import Context
+from neosr.losses.base import Context, restoring_clamp
 from neosr.models.base import base, build_optimizer, build_schedulers
 from neosr.models.checkpoint import cpu_copy, load_weights, read_weights
 from neosr.models.phase import Ema, LossMeter, Phase, no_sync, trainable
@@ -34,26 +34,6 @@ QAT_KEYS = (
     "enable_qat", "qat_type", "fused_init", "quantize_residual", "calibration_iters",
     "qat_freeze_norm_iter", "qat_freeze_observers_iter",
 )  # fmt: skip
-
-
-class _RestoringClamp(torch.autograd.Function):
-    """clamp(x, 0, 1) whose backward keeps the gradient components that move an out-of-range raw
-    value back into range (T-01). The hard clamp zeroes every out-of-range pixel's gradient, so such
-    a pixel can never return; a straight-through clamp would let an outward gradient drift it."""
-
-    @staticmethod
-    def forward(ctx, x: Tensor) -> Tensor:
-        ctx.save_for_backward(x)
-        return x.clamp(0, 1)
-
-    @staticmethod
-    def backward(ctx, g: Tensor) -> Tensor:
-        (x,) = ctx.saved_tensors
-        return g.masked_fill(((x < 0) & (g > 0)) | ((x > 1) & (g < 0)), 0)
-
-
-def restoring_clamp(x: Tensor) -> Tensor:
-    return _RestoringClamp.apply(x)
 
 
 def step_lr(group: dict[str, Any]) -> float:
