@@ -149,16 +149,12 @@ class image(base):
         self.buffers = {n: Buffers(net) for n, net in self.nets.items()}
         # last: DDP broadcasts the loaded weights; compiled graphs see them in place
         self.net_g_fwd = self.wrap(self.net_g)
-        # D: 2 forwards before 1 backward; broadcasting BN buffers in between would fail
+        # D: buffers synced once, not per forward (a batch-statistics D still runs 2 forwards
+        # before 1 backward, where a broadcast in between would fail)
         self.net_d_fwd = self.wrap(self.net_d, broadcast_buffers=False)
         # G's adversarial pass runs D without a DDP reducer
-        if self.net_d is None or not self.rt.distributed:
-            self.net_d_adv = self.net_d_fwd
-        elif opt.get("compile"):
-            mode = opt.get("compile_mode", "default")
-            self.net_d_adv = torch.compile(self.net_d, mode=mode, dynamic=False)
-        else:
-            self.net_d_adv = self.net_d
+        dist = self.rt.distributed
+        self.net_d_adv = self.wrap(self.net_d, ddp=False) if dist else self.net_d_fwd
 
     # ---------------------------------------------------------------- construction
     def _build(self, key: str, resuming: bool) -> nn.Module:

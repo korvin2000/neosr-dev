@@ -95,13 +95,14 @@ def test_poisson_noise_has_no_per_sample_sync():
     _no_sync(lambda: dg.generate_poisson_noise_pt(img, scale, 0))
 
 
-def test_compile_wraps_the_generator_only(tmp_path):
+def test_compile_wraps_g_and_a_one_forward_d(tmp_path):
     """A compiled spectral-norm D run on real and fake before one backward fails autograd's
-    saved-tensor version check (torch 2.9.1); D stays eager."""
+    saved-tensor version check (torch 2.9.1); since the D update is one forward on cat([real, fake])
+    (stage 2 GP-01), D is compiled too; tests/test_s2_losses.py runs it."""
     model = build(make_opt(tmp_path, d=True) | {"compile": True})
     assert model.net_g_fwd._orig_mod is model.net_g
-    assert model.net_d_fwd is model.net_d
-    assert model.net_d_adv is model.net_d
+    assert model.net_d_fwd._orig_mod is model.net_d
+    assert model.net_d_adv is model.net_d_fwd
 
 
 def test_fdl_precision_policy():

@@ -12,6 +12,7 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import CosineAnnealingLR, LRScheduler, MultiStepLR
 
 from neosr.config import METRIC_LOWER, ConfigError
+from neosr.losses.gan_loss import batch_coupled
 from neosr.metrics import build_metric
 from neosr.models.checkpoint import (
     STATE_FORMAT,
@@ -137,16 +138,19 @@ class base:
 
     # ---------------------------------------------------------------- execution wrappers
     def wrap(
-        self, net: nn.Module | None, *, broadcast_buffers: bool = True
+        self, net: nn.Module | None, *, broadcast_buffers: bool = True, ddp: bool = True
     ) -> nn.Module | None:
-        """Training-forward wrapper: DDP (multi-process), then torch.compile for the generator only
-        (T4 P7; perf.md: a compiled spectral-norm D run on real and fake before one backward fails
-        the saved-tensor version check). Never used to load, save, average or validate: those use
-        the bare module."""
+        """Training-forward wrapper: DDP (multi-process, unless `ddp=False`), then torch.compile
+        (T4 P7). D is compiled when its update is one forward (gan_loss.batch_coupled is False):
+        a compiled spectral-norm D run on real and fake before one backward fails the saved-tensor
+        version check (perf.md). Never used to load, save, average or validate: those use the bare
+        module."""
         if net is None:
             return None
-        compile_it = bool(self.opt.get("compile")) and net is self.net_g
-        if self.rt.distributed:
+        compile_it = bool(self.opt.get("compile")) and (
+            net is self.net_g or not batch_coupled(net)
+        )
+        if ddp and self.rt.distributed:
             if not broadcast_buffers:
                 # the constructor then syncs parameters only: start the buffers (SN u/v, seeded
                 # per rank) from rank 0 once; from synced weights they then evolve identically

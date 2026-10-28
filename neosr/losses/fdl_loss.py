@@ -1,8 +1,10 @@
+import types
 import warnings
 
 import torch
-from torch import nn
+from torch import Tensor, nn
 from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint as recompute
 from torchvision.models import (
     EfficientNet_B7_Weights,
     ResNet101_Weights,
@@ -165,19 +167,45 @@ class EffNet(nn.Module):
         return self.get_features(x)
 
 
+def _cached_pos_encoding(vit: nn.Module, x: Tensor, w: int, h: int) -> Tensor:
+    """The hub's interpolate_pos_encoding, memoised: of the frozen pos_embed, a pure function of the
+    token count, input size, dtype and device (2 bicubic launches per FDL call otherwise, GP-03)."""
+    key, cache = (x.shape[1], w, h, x.dtype, x.device), vit.pos_cache
+    if (out := cache.get(key)) is None:
+        if len(cache) >= 8:  # bounded: oldest first
+            del cache[next(iter(cache))]
+        out = cache[key] = type(vit).interpolate_pos_encoding(vit, x, w, h).detach()
+    return out
+
+
+class _Recomputed(nn.Module):
+    """A ViT block that keeps no activations when grad is on (the sr branch): they are recomputed
+    in backward, bitwise the same (L-17)."""
+
+    def __init__(self, block: nn.Module) -> None:
+        super().__init__()
+        self.block = block
+
+    def forward(self, x: Tensor) -> Tensor:
+        if torch.is_grad_enabled():
+            return recompute(self.block, x, use_reentrant=False)
+        return self.block(x)
+
+
 class dinov2(nn.Module):
     """
     DINOv2 backend, developed by musl from the neosr-project: https://github.com/neosr-project/neosr
     """
 
-    def __init__(self, layers=None, weights=None, norm=False):
+    def __init__(self, layers=None, weights=None, norm=False, checkpoint=False):
         super().__init__()
 
         # load model and suppress xformers dependency warning
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             self.model = (
-                torch.hub.load(
+                torch.hub
+                .load(
                     "facebookresearch/dinov2",
                     "dinov2_vitb14",
                     trust_repo="check",
@@ -197,6 +225,13 @@ class dinov2(nn.Module):
         if not self.model.chunked_blocks:
             # get_intermediate_layers runs every block; later ones only cost time (perf.md)
             del self.model.blocks[max(layers) + 1 :]
+        if checkpoint:  # the hub ViT-B/14 is not chunked: blocks are the ViT blocks
+            for i, blk in enumerate(self.model.blocks):
+                self.model.blocks[i] = _Recomputed(blk)
+        self.model.pos_cache = {}
+        self.model.interpolate_pos_encoding = types.MethodType(
+            _cached_pos_encoding, self.model
+        )
 
         if len(weights) != len(self.layers):
             msg = "Number of layer weights must match number of layers"
@@ -259,6 +294,9 @@ class fdl_loss(Loss):
     The random projections come from a CPU generator seeded with `seed`, so every
     build (and every resumed run) optimises the same objective.
 
+    `checkpoint=True` (dinov2 only, opt-in) recomputes the backbone's sr-branch activations in
+    backward: bitwise the same loss and gradient, ~70 % less saved memory, ~+20 % FDL time (L-17).
+
     By default the whole loss runs in fp32. `fp32_backbone=False` (opt-in, ~2x faster FDL) runs the
     DINOv2 backbone under the trainer's autocast for patches of at least `amp_min_size` px per side,
     the FFT / sort head always in fp32; smaller patches and the CNN backbones stay fp32
@@ -281,9 +319,13 @@ class fdl_loss(Loss):
         phase_weight=1.0,
         seed=0,
         fp32_backbone=True,
+        checkpoint=False,
     ):
         super().__init__()
         model = model.lower()
+        if checkpoint and model != "dinov2":
+            msg = f"fdl_loss: checkpoint applies to model='dinov2', not {model!r}"
+            raise ValueError(msg)
         self.fp32 = bool(fp32_backbone) or model != "dinov2"
         self.model_name = model
 
@@ -294,7 +336,7 @@ class fdl_loss(Loss):
         elif model == "vgg":
             self.model = VGG(vgg_weights=vgg_weights)
         elif model == "dinov2":
-            self.model = dinov2(dino_layers, dino_weights, dino_norm)
+            self.model = dinov2(dino_layers, dino_weights, dino_norm, checkpoint)
         else:
             msg = "Invalid model type! Valid models: VGG, EffNet, ResNet or DINOv2"
             raise NotImplementedError(msg)

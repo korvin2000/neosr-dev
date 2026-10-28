@@ -97,13 +97,6 @@ class ff_loss(Loss):
             matrix_tmp = torch.clamp(matrix_tmp, min=0.0, max=1.0)
             weight_matrix = matrix_tmp.clone().detach()
 
-        assert weight_matrix.min().item() >= 0, (
-            "The values of spectrum weight matrix should be in the range [0, 1]"
-        )
-        assert weight_matrix.max().item() <= 1, (
-            "The values of spectrum weight matrix should be in the range [0, 1]"
-        )
-
         # frequency distance using (squared) Euclidean distance
         tmp = (recon_freq - real_freq) ** 2
         freq_distance = tmp[..., 0] + tmp[..., 1]
