@@ -656,6 +656,7 @@ def test_term_grads_reports_shares_and_leaves_the_model(tmp_path):
 
     opt = model_opt(tmp_path, d=True)
     opt["train"]["mse_opt"] = {"type": "MSELoss", "loss_weight": 0.5}
+    opt["train"]["clamp"] = True  # the reference below uses the legacy hard clamp
     m = build_model_seeded(opt)
     before = deepcopy(m.net_g.state_dict())
     stats = term_grads(m, model_batches(3))
@@ -705,7 +706,9 @@ def test_term_grads_reports_an_idle_generator(tmp_path):
 def test_term_grads_zero_gradients_have_zero_share(tmp_path):
     from scripts.term_grads import term_grads  # ruff: ignore[import-outside-top-level]
 
-    m = build_model_seeded(model_opt(tmp_path))
+    opt = model_opt(tmp_path)
+    opt["train"]["clamp"] = True  # gt below is the hard-clamped output
+    m = build_model_seeded(opt)
     batch = model_batches(1)[0]
     m.net_g.eval()
     with torch.no_grad():
