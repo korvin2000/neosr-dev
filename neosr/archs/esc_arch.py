@@ -95,9 +95,11 @@ class LayerNorm(nn.Module):
 
 
 class ConvolutionalAttention(nn.Module):
-    def __init__(self, pdim: int):
+    def __init__(self, pdim: int, kernel_size: int = 13):
         super().__init__()
         self.pdim = pdim
+        # of lk_filter: a Python int pads, a traced shape exports as padding=[]
+        self.kernel_size = kernel_size
         self.sk_size = 3
         self.dwc_proj = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
@@ -125,14 +127,14 @@ class ConvolutionalAttention(nn.Module):
         x1_ = rearrange(x1_, "1 (b c) h w -> b c h w", b=bs, c=self.pdim)
 
         # Static LK Conv + Dynamic Conv
-        x1 = F.conv2d(x1, lk_filter, stride=1, padding=lk_filter.shape[-1] // 2) + x1_
+        x1 = F.conv2d(x1, lk_filter, stride=1, padding=self.kernel_size // 2) + x1_
         return torch.cat([x1, x2], dim=1)
 
 
 class ConvAttnWrapper(nn.Module):
-    def __init__(self, dim: int, pdim: int):
+    def __init__(self, dim: int, pdim: int, kernel_size: int = 13):
         super().__init__()
-        self.plk = ConvolutionalAttention(pdim)
+        self.plk = ConvolutionalAttention(pdim, kernel_size)
         self.aggr = nn.Conv2d(dim, dim, 1, 1, 0)
 
     def forward(self, x: Tensor, lk_filter: Tensor) -> Tensor:
@@ -141,9 +143,11 @@ class ConvAttnWrapper(nn.Module):
 
 
 class DecomposedConvolutionalAttention(nn.Module):
-    def __init__(self, pdim: int):
+    def __init__(self, pdim: int, kernel_size: int = 13):
         super().__init__()
         self.pdim = pdim
+        # of lk_spatial: a Python int pads, a traced shape exports as padding=[]
+        self.kernel_size = kernel_size
         self.dynamic_kernel_size = 3
         self.proj = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
@@ -165,7 +169,7 @@ class DecomposedConvolutionalAttention(nn.Module):
         # Dynamic Conv
         kernel = self.proj(x1)
         kernel = rearrange(kernel, "b (c kh kw) 1 1 -> (b c) 1 kh kw", kh=3, kw=3)
-        ks = lk_spatial.shape[-1]
+        ks = self.kernel_size
         n_pad = (ks - self.dynamic_kernel_size) // 2
         kernel = F.pad(kernel, (n_pad, n_pad, n_pad, n_pad))
 
@@ -178,10 +182,10 @@ class DecomposedConvolutionalAttention(nn.Module):
 
 
 class DecomposedConvolutionalAttentionWrapper(nn.Module):
-    def __init__(self, dim: int, pdim: int):
+    def __init__(self, dim: int, pdim: int, kernel_size: int = 13):
         super().__init__()
         self.pdim = pdim
-        self.plk = DecomposedConvolutionalAttention(pdim)
+        self.plk = DecomposedConvolutionalAttention(pdim, kernel_size)
         self.aggr = nn.Conv2d(dim, dim, 1, 1, 0)
 
     def forward(self, x: Tensor, lk_channel: Tensor, lk_spatial: Tensor) -> Tensor:
@@ -314,6 +318,7 @@ class Block(nn.Module):
         attn_type="flex",
         is_fp: bool = False,
         layer_norm: bool = False,
+        kernel_size: int = 13,
     ):
         super().__init__()
         self.is_fp = is_fp
@@ -329,17 +334,17 @@ class Block(nn.Module):
         if is_fp:
             self.lns = nn.ModuleList([LayerNorm(dim) for _ in range(conv_blocks)])
             self.pconvs = nn.ModuleList([
-                DecomposedConvolutionalAttentionWrapper(dim, pdim)
+                DecomposedConvolutionalAttentionWrapper(dim, pdim, kernel_size)
                 for _ in range(conv_blocks)
             ])
         elif layer_norm:
             self.lns = nn.ModuleList([LayerNorm(dim) for _ in range(conv_blocks)])
             self.pconvs = nn.ModuleList([
-                ConvAttnWrapper(dim, pdim) for _ in range(conv_blocks)
+                ConvAttnWrapper(dim, pdim, kernel_size) for _ in range(conv_blocks)
             ])
         else:
             self.pconvs = nn.ModuleList([
-                ConvAttnWrapper(dim, pdim) for _ in range(conv_blocks)
+                ConvAttnWrapper(dim, pdim, kernel_size) for _ in range(conv_blocks)
             ])
 
         self.convffns = nn.ModuleList([
@@ -387,7 +392,8 @@ def _geo_ensemble(k):
     k_hflip = k.flip([3])
     k_vflip = k.flip([2])
     k_hvflip = k.flip([2, 3])
-    k_rot90 = torch.rot90(k, -1, [2, 3])
+    # = torch.rot90(k, -1, [2, 3]), which has no ONNX export
+    k_rot90 = k.flip(2).transpose(2, 3)
     k_rot90_hflip = k_rot90.flip([3])
     k_rot90_vflip = k_rot90.flip([2])
     k_rot90_hvflip = k_rot90.flip([2, 3])
@@ -480,6 +486,7 @@ class esc(nn.Module):
                 attn_type,
                 is_fp,
                 realsr,  # layer_norm
+                kernel_size,
             )
             for _ in range(n_blocks)
         ])

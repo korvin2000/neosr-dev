@@ -102,11 +102,12 @@ def window_partition(x, window_size):
 
 
 def window_reverse(windows, window_size, h, w):
-    b = int(windows.shape[0] / (h * w / window_size[0] / window_size[1]))
+    # -1 for the batch: int(windows.shape[0] / ...) freezes it in an ONNX trace
+    c = windows.shape[-1]
     x = windows.view(
-        b, h // window_size[0], w // window_size[1], window_size[0], window_size[1], -1
+        -1, h // window_size[0], w // window_size[1], window_size[0], window_size[1], c
     )
-    return x.permute(0, 1, 3, 2, 4, 5).contiguous().view(b, h, w, -1)
+    return x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, h, w, c)
 
 
 class GRSA(nn.Module):

@@ -750,9 +750,9 @@ def test_fp16_without_the_converter_fails_before_writing(
     ("extra", "match"),
     [
         (["-net", "atd"], "atd.*cannot be exported.*Sort"),
-        (["-net", "esc"], "padding cannot be traced"),
+        (["-net", "esc"], "esc.*cannot be exported.*dynamic conv"),
         (["-net", "safmn"], "static shape.*-static C H W"),
-        (["-net", "grformer"], "static shape.*batch size"),
+        (["-net", "srformer_medium"], "static shape.*shift mask"),
         (["-net", "compact", "--fulloptimization"], "fulloptimization"),
     ],
 )
@@ -790,6 +790,18 @@ def test_arch_exports_and_verifies_after_the_stage2_fixes(
     extra = ["-static", *static] if static else []
     args = _args(tmp_path, *extra, net=net)
     convert_py.to_onnx(args, build_network({"type": net}, scale=2))
+
+
+@pytest.mark.parametrize("net", ["asid", "omnisr", "ditn", "dctlsa", "microsr_light"])
+def test_arch_exports_dynamically_after_the_export_fixes(tmp_path, onnx_deps, net):
+    """Export sweep fixes (ceil-div padding, traced shapes, window_reverse batch): the dynamic
+    graph verifies at every export_shapes() input, and the arch is not refused up front."""
+    from neosr.archs import build_network  # noqa: PLC0415
+
+    assert net not in convert_py.NO_ONNX
+    assert net not in convert_py.STATIC_ONLY
+    torch.manual_seed(0)
+    convert_py.to_onnx(_args(tmp_path, net=net), build_network({"type": net}, scale=2))
 
 
 class QFrozenB(nn.Module):
