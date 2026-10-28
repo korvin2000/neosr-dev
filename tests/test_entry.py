@@ -185,8 +185,8 @@ def test_train_save_validate_resume(tmp_path, data, cpu):
     assert {"net_g_2.pth", "net_g_4.pth", "net_g_latest.pth"} <= models
     assert not list(d.rglob("*.tmp"))
     # periodic validation at 2 and 4, plus the final one after a natural end (also at 4)
-    assert (d / "visualization" / "im0" / "im0_2.png").is_file()
-    assert (d / "visualization" / "im0" / "im0_4.png").is_file()
+    assert (d / "visualization" / "valset" / "im0" / "im0_2.png").is_file()
+    assert (d / "visualization" / "valset" / "im0" / "im0_4.png").is_file()
     assert list(d.glob("cfg_*.toml"))  # config copy with provenance header
     assert list(d.glob("cfg_*.toml"))[0].read_text().startswith("# GENERATE TIME")
     text = logs(tmp_path)
@@ -326,7 +326,7 @@ def test_ctrl_c_at_boundary_saves_once_and_exits_0(tmp_path, data, cpu, monkeypa
     assert states(tmp_path) == [3]
     assert (d / "models" / "net_g_latest.pth").is_file()
     assert "stop requested: saving update 3" in logs(tmp_path)
-    vis = d / "visualization" / "im0"
+    vis = d / "visualization" / "valset" / "im0"
     assert {p.name for p in vis.glob("im0_[0-9]*.png")} == {
         "im0_1.png",
         "im0_2.png",

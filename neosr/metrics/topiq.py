@@ -33,7 +33,7 @@ class TransformerEncoderLayer(nn.Module):
     def forward(self, src):
         src2 = self.norm1(src)
         q = k = src2
-        src2, __ = self.self_attn(q, k, value=src2)
+        src2, __ = self.self_attn(q, k, value=src2, need_weights=False)  # F22: unused
         src = src + self.dropout1(src2)
         src2 = self.norm2(src)
         src2 = self.linear2(self.dropout(self.activation(self.linear1(src2))))
@@ -65,7 +65,9 @@ class TransformerDecoderLayer(nn.Module):
     def forward(self, tgt, memory):
         memory = self.norm2(memory)
         tgt2 = self.norm1(tgt)
-        tgt2, __ = self.multihead_attn(query=tgt2, key=memory, value=memory)
+        tgt2, __ = self.multihead_attn(
+            query=tgt2, key=memory, value=memory, need_weights=False
+        )
         tgt = tgt + self.dropout2(tgt2)
         tgt2 = self.norm3(tgt)
         tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt2))))

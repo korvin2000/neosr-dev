@@ -65,6 +65,18 @@ def _pair(name: str) -> dict[str, np.ndarray]:
     return {"img": to_img(sr), "img2": to_img(gt)}
 
 
+def _q(img: np.ndarray) -> torch.Tensor:
+    """uint8 HWC BGR (or HW) -> what img_util.quantize gives validation: float32 RGB NCHW 0..255."""
+    img = img[..., None] if img.ndim == 2 else img[..., ::-1]
+    return torch.from_numpy(img.transpose(2, 0, 1).astype(np.float32))[None]
+
+
+@pytest.fixture
+def fresh_nets(monkeypatch):
+    """An empty metric-net cache for this test only (the real one persists per process)."""
+    monkeypatch.setattr(calculate, "_metric_nets", {})
+
+
 def _synthetic_pair() -> dict[str, np.ndarray]:
     yy, xx = np.mgrid[0:48, 0:48]
     base = np.stack([(xx * 5) % 256, (yy * 5) % 256, ((xx + yy) * 3) % 256], -1)
@@ -73,12 +85,23 @@ def _synthetic_pair() -> dict[str, np.ndarray]:
     return {"img": cv2.GaussianBlur(gt, (5, 5), 1.2), "img2": gt}
 
 
+def _numpy_reference(opt, img, img2):
+    kw = {k: v for k, v in opt.items() if k != "type"}
+    return getattr(calculate, opt["type"])(img, img2, **kw)
+
+
 def test_psnr_ssim_match_synthetic_reference():
     data = _synthetic_pair()
     for metric, opt in METRICS.items():
         built = build_metric(opt | {"better": "higher"}, torch.device("cpu"))
-        value = built(data["img"], data["img2"])
-        assert value == pytest.approx(SYNTHETIC_REFERENCE[metric], rel=1e-12, abs=0)
+        value = built(_q(data["img"]), _q(data["img2"]))
+        assert value.dtype == torch.float64
+        assert value.ndim == 0
+        assert value.item() == pytest.approx(
+            SYNTHETIC_REFERENCE[metric], rel=1e-12, abs=0
+        )
+        ref = _numpy_reference(opt, data["img"], data["img2"])
+        assert ref == pytest.approx(SYNTHETIC_REFERENCE[metric], rel=1e-12, abs=0)
 
 
 def test_build_metric_config_errors():
@@ -104,8 +127,12 @@ def test_build_metric_config_errors():
 def test_psnr_ssim_match_reference(name):
     data = _pair(name)
     for metric, opt in METRICS.items():
-        value = build_metric(opt, torch.device("cpu"))(data["img"], data["img2"])
-        assert value == pytest.approx(REFERENCE[name][metric], rel=1e-12, abs=0)
+        value = build_metric(opt, torch.device("cpu"))(
+            _q(data["img"]), _q(data["img2"])
+        )
+        assert value.item() == pytest.approx(REFERENCE[name][metric], rel=1e-12, abs=0)
+        ref = _numpy_reference(opt, data["img"], data["img2"])
+        assert ref == pytest.approx(REFERENCE[name][metric], rel=1e-12, abs=0)
 
 
 def test_crop_border_validation():
@@ -133,35 +160,34 @@ class _FakeNet(torch.nn.Module):
 
 
 @pytest.mark.parametrize("name", ["dists", "topiq"])
-def test_metric_net_cached_per_device(monkeypatch, name):
+def test_metric_net_built_once_and_moved(monkeypatch, fresh_nets, name):
     built = []
     monkeypatch.setitem(
         calculate._metric_builders, name, lambda: built.append(1) or _FakeNet()
     )
-    release_metric_nets()
     rng = np.random.default_rng(0)
     img = rng.integers(0, 256, (8, 8, 3), dtype=np.uint8)
     img2 = rng.integers(0, 256, (8, 8, 3), dtype=np.uint8)
     metric = getattr(calculate, f"calculate_{name}")
-    try:
-        first = metric(img, img2, device="cpu")
-        second = metric(img, img2, device=torch.device("cpu"))
-        net = calculate._metric_nets[name, torch.device("cpu")]
-        assert len(built) == 1
-        assert not net.training
-        assert not any(p.requires_grad for p in net.parameters())
-        # grayscale (what tensor2img returns for 1-channel output) is expanded to RGB
-        gray = tensor2img(torch.rand(1, 1, 8, 8))
-        assert type(metric(gray, gray, device="cpu")) is float
-        if torch.cuda.is_available():
-            metric(img, img2, device="cuda")
-            metric(img, img2, device="cuda:0")
-            assert len(built) == 2  # "cuda" resolves to the current device index
-    finally:
-        release_metric_nets()
+    first = metric(img, img2, device="cpu")
+    second = metric(img, img2, device=torch.device("cpu"))
+    net = calculate._metric_nets[name]
+    assert len(built) == 1
+    assert not net.training
+    assert not any(p.requires_grad for p in net.parameters())
+    # grayscale (what tensor2img returns for 1-channel output) is expanded to RGB
+    gray = tensor2img(torch.rand(1, 1, 8, 8))
+    assert type(metric(gray, gray, device="cpu")) is float
+    if torch.cuda.is_available():
+        metric(img, img2, device="cuda")
+        assert net.w.device == torch.device("cuda", torch.cuda.current_device())
+        metric(img, img2, device="cuda:0")
+    assert len(built) == 1  # moved between devices, never rebuilt
+    release_metric_nets()
+    assert calculate._metric_nets == {name: net}  # parked, not dropped
+    assert net.w.device.type == "cpu"
     assert type(first) is float
     assert first == second
-    assert not calculate._metric_nets
 
 
 DEVICES = ["cpu"] + (["cuda:0"] if torch.cuda.is_available() else [])
@@ -169,7 +195,7 @@ DEVICES = ["cpu"] + (["cuda:0"] if torch.cuda.is_available() else [])
 
 @pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("name", ["dists", "topiq"])
-def test_build_metric_net_built_once_on_device(monkeypatch, name, device):
+def test_build_metric_net_built_once_on_device(monkeypatch, fresh_nets, name, device):
     built, seen = [], []
     monkeypatch.setitem(
         calculate._metric_builders, name, lambda: built.append(1) or _FakeNet()
@@ -181,27 +207,24 @@ def test_build_metric_net_built_once_on_device(monkeypatch, name, device):
     device = torch.device(device)
     metric = build_metric({"type": f"calculate_{name}", "better": "lower"}, device)
     rng = np.random.default_rng(0)
-    img = rng.integers(0, 256, (8, 8, 3), dtype=np.uint8)
-    release_metric_nets()
-    try:
-        values = [metric(img, img[::-1].copy()) for _ in range(3)]
-        (net,) = calculate._metric_nets.values()
-        assert len(built) == 1
-        assert seen == [device] * 3
-        assert all(p.device == device for p in net.parameters())
-        assert not net.training
-        assert not any(p.requires_grad for p in net.parameters())
-    finally:
-        release_metric_nets()
-    assert len(set(values)) == 1
+    img = _q(rng.integers(0, 256, (8, 8, 3), dtype=np.uint8)).to(device)
+    values = [metric(img, img.flip(2)) for _ in range(3)]
+    (net,) = calculate._metric_nets.values()
+    assert len(built) == 1
+    assert seen == [device] * 3
+    assert all(p.device == device for p in net.parameters())
+    assert all(v.device == device and v.ndim == 0 for v in values)
+    assert not net.training
+    assert not any(p.requires_grad for p in net.parameters())
+    assert len({v.item() for v in values}) == 1
 
 
 def test_build_metric_forwards_exact_device(monkeypatch):
     seen = []
     monkeypatch.setattr(
-        calculate, "_calculate_net_metric", lambda *a: seen.append(a[-1]) or 0.0
+        calculate, "_net_metric_pt", lambda *a: seen.append(a[-1]) or 0.0
     )
-    img = np.zeros((8, 8, 3), dtype=np.uint8)
+    img = torch.zeros(1, 3, 8, 8)
     device = torch.device("cuda", 1)  # a non-current index needs no second GPU here
     build_metric({"type": "calculate_dists"}, device)(img, img)
     build_metric({"type": "calculate_topiq"}, device)(img, img)
@@ -213,7 +236,7 @@ import sys
 import numpy as np
 import torch
 from neosr.metrics import build_metric
-img = np.zeros((32, 32, 3), dtype=np.uint8)
+img = torch.zeros(1, 3, 32, 32)
 for t in ("calculate_psnr", "calculate_ssim", "calculate_dists", "calculate_topiq"):
     m = build_metric({"type": t}, torch.device("cpu"))
     if t in ("calculate_psnr", "calculate_ssim"):
@@ -236,20 +259,16 @@ def test_metric_nets_imported_lazily():
 
 
 @pytest.mark.parametrize("name", ["dists", "topiq"])
-def test_metric_net_real_weights(name):
+def test_metric_net_real_weights(fresh_nets, name):
     if not all(p.is_file() for p in NET_WEIGHTS[name]):
         pytest.skip(f"{name} weights not available offline")
     rng = np.random.default_rng(0)
     img = rng.integers(0, 256, (64, 64, 3), dtype=np.uint8)
     img2 = rng.integers(0, 256, (64, 64, 3), dtype=np.uint8)
     metric = getattr(calculate, f"calculate_{name}")
-    release_metric_nets()
-    try:
-        diff = metric(img, img2, device="cpu")
-        same = metric(img, img, device="cpu")
-        assert len(calculate._metric_nets) == 1
-    finally:
-        release_metric_nets()
+    diff = metric(img, img2, device="cpu")
+    same = metric(img, img, device="cpu")
+    assert len(calculate._metric_nets) == 1
     assert type(diff) is float
     if name == "dists":  # distance: 0 for identical images
         assert abs(same) < 1e-4 < diff
@@ -297,26 +316,29 @@ def test_ssim_negative_for_inverted_image_and_replaceable_as_best():
 
 
 @pytest.mark.parametrize("fail", [False, True])
-def test_validation_releases_metric_nets(monkeypatch, fail):
-    monkeypatch.setitem(calculate._metric_builders, "dists", _FakeNet)
-    img = np.zeros((8, 8, 3), dtype=np.uint8)
+def test_validation_parks_metric_nets_on_cpu(monkeypatch, fresh_nets, fail):
+    built = []
+    monkeypatch.setitem(
+        calculate._metric_builders, "dists", lambda: built.append(1) or _FakeNet()
+    )
+    img = torch.zeros(1, 3, 8, 8)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def validate(*_):
-        calculate.calculate_dists(img, img, device="cpu")
-        assert calculate._metric_nets
+        calculate.calculate_dists_pt(img, img, device=device)
+        assert calculate._metric_nets["dists"].w.device.type == device.type
         if fail:
             msg = "boom"
             raise RuntimeError(msg)
 
     model = SimpleNamespace(
-        rt=SimpleNamespace(rank=0), device=torch.device("cpu"), validate=validate
+        rt=SimpleNamespace(rank=0), device=device, validate=validate
     )
-    try:
+    for _ in range(2):  # two validation events: one build, parked on the CPU after each
         if fail:
             with pytest.raises(RuntimeError, match="boom"):
                 base.validation(model, None, 1, None)
         else:
             base.validation(model, None, 1, None)
-        assert not calculate._metric_nets
-    finally:
-        release_metric_nets()
+        assert calculate._metric_nets["dists"].w.device.type == "cpu"
+    assert len(built) == 1
