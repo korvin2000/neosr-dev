@@ -772,3 +772,48 @@ def test_size_sweep(name: str, size) -> None:
         y = net(torch.rand(1, 3, *size))
     assert y.shape == (1, 3, 4 * size[0], 4 * size[1])
     assert torch.isfinite(y).all()
+
+
+@cuda
+@pytest.mark.parametrize("name", [n for n in LANE if n not in HEAVY])
+def test_cuda_bf16_step_without_syncs(name: str) -> None:
+    # no host<->device synchronisation in a bf16 forward+backward (train) or forward (eval);
+    # esc: DySample's normalizer upload is the cnn lane's MX-13, so it is switched off here
+    kw = {"use_dysample": False} if name.startswith("esc") and name != "esc_fp" else {}
+    net = _build(name, **kw).cuda()
+    x = torch.rand(1, 3, 32, 40, device="cuda")
+    try:
+        for mode in (True, False):
+            net.train(mode)
+            net(x)  # first call: lazy backend state
+            torch.cuda.synchronize()
+            torch.cuda.set_sync_debug_mode("error")
+            with torch.autocast("cuda", torch.bfloat16):
+                y = net(x)
+            if mode:
+                y.float().mean().backward()
+            torch.cuda.set_sync_debug_mode(0)
+            assert torch.isfinite(y).all()
+    finally:
+        torch.cuda.set_sync_debug_mode(0)
+        del net
+        torch.cuda.empty_cache()
+
+
+@cuda
+@pytest.mark.parametrize("d", [5, 10, 20, 30, 32])
+def test_cuda_sdpa_head_padding_exact(d: int) -> None:
+    # the head-dim padding that lets the memory-efficient kernel take a grad-requiring bias
+    from neosr.archs import hma_arch
+
+    g = torch.Generator(device="cuda").manual_seed(0)
+    q, k, v = (torch.randn(4, 3, 64, d, device="cuda", generator=g, requires_grad=True) for _ in range(3))
+    bias = torch.randn(1, 3, 64, 64, device="cuda", generator=g, requires_grad=True)
+    y = hma_arch._sdpa(q, k, v, bias, scale=0.3)
+    ref = ((q @ k.transpose(-2, -1)) * 0.3 + bias).softmax(-1) @ v
+    torch.testing.assert_close(y, ref, rtol=1e-4, atol=1e-5)
+    gy = torch.randn_like(y)
+    for a, b in zip(
+        torch.autograd.grad(y, (q, k, v, bias), gy), torch.autograd.grad(ref, (q, k, v, bias), gy), strict=True
+    ):
+        torch.testing.assert_close(a, b, rtol=1e-4, atol=1e-5)

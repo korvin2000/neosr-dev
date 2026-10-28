@@ -9,20 +9,29 @@ from torch.utils.checkpoint import checkpoint
 from neosr.archs.arch_util import DropPath, to_2tuple
 
 
+def _sdpa(q, k, v, attn_mask=None, dropout_p=0.0, scale=None):
+    """F.scaled_dot_product_attention; on CUDA head dims are zero-padded to a multiple of 8, the
+    memory-efficient kernel's requirement (else the math fallback saves the probabilities).
+    Exact: q.k is unchanged and the padded output columns are zero and cut."""
+    d, dv = q.shape[-1], v.shape[-1]
+    scale = d**-0.5 if scale is None else scale
+    if not q.is_cuda or (d % 8 == 0 and dv % 8 == 0):
+        return F.scaled_dot_product_attention(q, k, v, attn_mask, dropout_p, scale=scale)
+    q, k, v = F.pad(q, (0, -d % 8)), F.pad(k, (0, -d % 8)), F.pad(v, (0, -dv % 8))
+    return F.scaled_dot_product_attention(q, k, v, attn_mask, dropout_p, scale=scale)[..., :dv]
+
+
 def _window_sdpa(q, k, v, bias, mask=None, scale=None, dropout_p=0.0):
     """softmax(q k^T * scale + bias [+ mask]) v as one fused SDPA call (the probabilities are not
     saved for backward). q: (b*nw, heads, n, d); k, v: (b*nw, heads, m, d); bias: (heads, n, m);
     mask: (nw, n, m)."""
     if mask is None:
-        return F.scaled_dot_product_attention(
-            q, k, v, bias.unsqueeze(0).to(q.dtype), dropout_p, scale=scale
-        )
+        return _sdpa(q, k, v, bias.unsqueeze(0).to(q.dtype), dropout_p, scale)
     b_, h, n = q.shape[:3]
     nw, m = mask.shape[0], k.shape[2]
     q, k, v = (t.reshape(b_ // nw, nw * h, t.shape[2], -1) for t in (q, k, v))
     am = (bias.unsqueeze(0) + mask.unsqueeze(1)).reshape(1, nw * h, n, m).to(q.dtype)
-    out = F.scaled_dot_product_attention(q, k, v, am, dropout_p, scale=scale)
-    return out.view(b_, h, n, -1)
+    return _sdpa(q, k, v, am, dropout_p, scale).reshape(b_, h, n, -1)
 
 
 class ChannelAttention(nn.Module):

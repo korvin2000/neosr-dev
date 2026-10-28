@@ -9,6 +9,18 @@ from torch.nn import functional as F
 from neosr.archs.arch_util import DropPath
 
 
+def _sdpa(q, k, v, attn_mask=None, dropout_p=0.0, scale=None):
+    """F.scaled_dot_product_attention; on CUDA head dims are zero-padded to a multiple of 8, the
+    memory-efficient kernel's requirement (else the math fallback saves the probabilities).
+    Exact: q.k is unchanged and the padded output columns are zero and cut."""
+    d, dv = q.shape[-1], v.shape[-1]
+    scale = d**-0.5 if scale is None else scale
+    if not q.is_cuda or (d % 8 == 0 and dv % 8 == 0):
+        return F.scaled_dot_product_attention(q, k, v, attn_mask, dropout_p, scale=scale)
+    q, k, v = F.pad(q, (0, -d % 8)), F.pad(k, (0, -d % 8)), F.pad(v, (0, -dv % 8))
+    return F.scaled_dot_product_attention(q, k, v, attn_mask, dropout_p, scale=scale)[..., :dv]
+
+
 class dwconv(nn.Module):
     # dwconv is used by FFN to interact with spatial information
     def __init__(self, hidden_features):
@@ -246,7 +258,7 @@ class GRSA(nn.Module):
             nw, h = mask.shape[0], self.num_heads
             q, k, v = (t.reshape(b_ // nw, nw * h, n, -1) for t in (q, k, v))
             am = (bias.unsqueeze(0) + mask.unsqueeze(1)).reshape(1, nw * h, n, n).to(v.dtype)
-        x = F.scaled_dot_product_attention(q, k, v, am, scale=1.0)  # attn_drop: never applied
+        x = _sdpa(q, k, v, am, scale=1.0)  # attn_drop: never applied
         x = x.reshape(b_, self.num_heads, n, -1).transpose(1, 2).reshape(b_, n, c)
         x = x.reshape(b_, n, 2, c // 2).permute(2, 0, 1, 3).contiguous()
         return (
