@@ -1,18 +1,31 @@
 """Stage 2 losses lane (docs/refactor/stage2/analysis/losses.md, stability.md, gpu_profile.md): exact kernel
 rewrites against in-test copies of the old kernels, and the opt-in GAN mechanisms."""
 
+import math
 import warnings
+from copy import deepcopy
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 import torch
+import torch.distributed as dist
 from torch import nn
 from torch.nn import functional as F
 from torchvision.transforms.functional import gaussian_blur
 
+from neosr.archs import build_network
 from neosr.losses import build_loss
 from neosr.losses.base import Context
+from neosr.losses.gan_loss import batch_coupled, eager, gan_loss
+from neosr.runtime import Runtime
+from tests.test_gan import LABELS, Critic, Forbidden, Spy, images
+from tests.test_gan import ctx as gan_ctx
 from tests.test_losses import CASES, make_pair
+from tests.test_model import batches as model_batches
+from tests.test_model import build as build_model_seeded
+from tests.test_model import make_opt as model_opt
+from tests.test_model import run as run_model
 
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 CUDA = torch.cuda.is_available()
@@ -317,3 +330,303 @@ def test_fdl_checkpoint_is_bitwise_and_saves_memory():
 def test_fdl_checkpoint_needs_dinov2():
     with pytest.raises(ValueError, match="dinov2"):
         build_loss({"type": "fdl_loss", "model": "vgg", "checkpoint": True})
+
+
+# ---- GAN: one-forward D update, start/ramp, lazy R1/R2, rpgan ---------------------------------------
+
+
+def _gan(**kw):
+    g_term, d_term = gan_loss(**kw).to(DEV).expand()
+    g_term.loss_weight = 0.1
+    return g_term, d_term
+
+
+def _critic(seed=0, bn=False):
+    torch.manual_seed(seed)
+    critic = Critic()
+    if bn:
+        critic.body.insert(1, nn.BatchNorm2d(8))
+    return critic.to(DEV)
+
+
+def test_d_update_is_one_forward_on_cat():
+    """GP-01: real and fake go through D as one batch; same values and grads as two forwards
+    (eval mode: no SN step, no dropout), same logs."""
+    critic = _critic().eval()
+    ref, spy = deepcopy(critic), Spy(critic)
+    _, d_term = _gan(**LABELS)
+    sr, gt = images(), images(seed=1)
+    c = gan_ctx(sr, gt, net_d=spy, net_d_adv=Forbidden())
+    d_term.compute(c).backward()
+    assert len(spy.seen) == 1
+    assert torch.equal(spy.seen[0], torch.cat([gt, sr]))
+    real, fake = ref(gt), ref(sr)
+    want = F.binary_cross_entropy_with_logits(
+        real, torch.full_like(real, 0.9)
+    ) + F.binary_cross_entropy_with_logits(fake, torch.full_like(fake, 0.2))
+    want.backward()
+    assert set(c.logs) == {"l_d_real", "l_d_fake", "out_d_real", "out_d_fake"}
+    torch.testing.assert_close(c.logs["out_d_fake"], fake.mean().detach())
+    for p, q in zip(critic.parameters(), ref.parameters(), strict=True):
+        torch.testing.assert_close(p.grad, q.grad)
+
+
+def test_batchnorm_d_keeps_two_forwards():
+    """Batch statistics couple real and fake: such a D keeps its two forwards, bitwise as before."""
+    critic = _critic(bn=True).train()
+    ref, spy = deepcopy(critic), Spy(critic)
+    assert batch_coupled(spy)
+    assert not batch_coupled(_critic())
+    _, d_term = _gan()
+    sr, gt = images(), images(seed=1)
+    torch.manual_seed(5)  # the same dropout draws in both runs
+    value = d_term.compute(gan_ctx(sr, gt, net_d=spy, net_d_adv=Forbidden()))
+    assert [x.shape[0] for x in spy.seen] == [2, 2]
+    torch.manual_seed(5)
+    real, fake = ref(gt), ref(sr)
+    want = F.binary_cross_entropy_with_logits(real, torch.ones_like(real))
+    want = want + F.binary_cross_entropy_with_logits(fake, torch.zeros_like(fake))
+    assert torch.equal(value, want)
+
+
+def test_eager_unwraps_compile_only():
+    net = Critic()
+    assert eager(net) is net
+    assert eager(torch.compile(net)) is net  # lazy: nothing is compiled here
+
+
+def test_gan_start_and_ramp():
+    """ST-05: G and D terms are off through start_iter; then G's weight ramps linearly to 1."""
+    critic = _critic().eval()
+    g_term, d_term = _gan(start_iter=3, ramp_iters=4)
+    full_term, _ = _gan()
+    sr, gt = images(), images(seed=1)
+    full = full_term.compute(gan_ctx(sr, gt, net_d=Forbidden(), net_d_adv=critic, it=4))
+    for it in range(1, 11):
+        assert g_term.active(it) is d_term.active(it) is (it > 3)
+        if it <= 3:
+            continue
+        value = g_term.compute(
+            gan_ctx(sr, gt, net_d=Forbidden(), net_d_adv=critic, it=it)
+        )
+        if it >= 3 + 4:
+            assert torch.equal(value, full)  # the full term is not scaled at all
+        else:
+            torch.testing.assert_close(value, full * (it - 3) / 4, rtol=1e-6, atol=0)
+    g0, d0 = _gan()  # the defaults: always on, never scaled
+    assert all(g0.active(it) and d0.active(it) for it in (1, 2, 10**6))
+
+
+def test_gan_start_keeps_d_idle_under_phase_filtering():
+    """The trainer drops inactive terms (Loss.active, PLAN interface 1): before start_iter neither
+    D handle is ever called and the D objective has no term (an idle phase)."""
+    g_term, d_term = _gan(start_iter=2)
+    sr, gt = images(), images(seed=1)
+    for it in (1, 2):
+        c = gan_ctx(sr, gt, net_d=Forbidden(), net_d_adv=Forbidden(), it=it)
+        assert [t for t in (g_term, d_term) if t.active(c.it)] == []
+    critic = _critic().eval()
+    c = gan_ctx(sr, gt, net_d=critic, net_d_adv=critic, it=3)
+    assert all(torch.isfinite(t.compute(c)) for t in (g_term, d_term) if t.active(3))
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"start_iter": -1},
+        {"ramp_iters": -2},
+        {"r1_gamma": -1.0},
+        {"reg_every": 0},
+        {"gan_type": "rpgan", "real_label_val": 0.9},
+        {"gan_type": "rpgan", "fake_label_val": 0.1},
+    ],
+)
+def test_gan_rejects_bad_options(kw):
+    with pytest.raises(ValueError, match=r"gan_loss|rpgan"):
+        gan_loss(**kw)
+
+
+def _penalty_reference(critic, real, fake, r1, r2, k):
+    xr, xf = real.clone().requires_grad_(), fake.clone().requires_grad_()
+    out_r, out_f = critic(xr), critic(xf)
+    pen = 0
+    for gm, out, x in ((r1, out_r, xr), (r2, out_f, xf)):
+        (gx,) = torch.autograd.grad(out.flatten(1).mean(1).sum(), x, create_graph=True)
+        pen = pen + gm * gx.square().flatten(1).sum(1).mean()
+    return out_r, out_f, 0.5 * k * pen
+
+
+def test_lazy_r1_r2_matches_reference():
+    """ST-06: every reg_every-th update adds gamma * k / 2 * E||grad_x D(x)||^2 for real (R1) and
+    fake (R2) inputs, through D's parameters (double backward); other updates are unchanged."""
+    critic = _critic().eval()
+    ref = deepcopy(critic)
+    _, d_term = _gan(r1_gamma=2.0, r2_gamma=0.5, reg_every=4)
+    _, plain = _gan()
+    sr, gt = images(), images(seed=1)
+    for it in (3, 5):  # not a regularised update: the plain objective, bitwise
+        c, cp = (
+            gan_ctx(sr, gt, net_d=critic, net_d_adv=Forbidden(), it=it) for _ in "ab"
+        )
+        assert torch.equal(d_term.compute(c), plain.compute(cp))
+        assert "l_d_reg" not in c.logs
+    c = gan_ctx(sr, gt, net_d=critic, net_d_adv=Forbidden(), it=8)
+    value = d_term.compute(c)
+    value.backward()
+    out_r, out_f, reg = _penalty_reference(ref, gt, sr, 2.0, 0.5, 4)
+    want = F.binary_cross_entropy_with_logits(out_r, torch.ones_like(out_r))
+    want = (
+        want + F.binary_cross_entropy_with_logits(out_f, torch.zeros_like(out_f)) + reg
+    )
+    want.backward()
+    torch.testing.assert_close(value, want.detach())
+    torch.testing.assert_close(c.logs["l_d_reg"], reg.detach())
+    assert reg > 0
+    for p, q in zip(critic.parameters(), ref.parameters(), strict=True):
+        torch.testing.assert_close(p.grad, q.grad)
+
+
+def test_lazy_r1_runs_in_fp32_under_autocast():
+    """The regularised D forward leaves autocast: bf16 input gradients would be rounded away."""
+    critic = _critic().eval()
+    _, d_term = _gan(r1_gamma=1.0, reg_every=1)
+    sr, gt = images(), images(seed=1)
+    out = []
+    for amp in (False, True):
+        c = gan_ctx(sr, gt, net_d=critic, net_d_adv=Forbidden(), it=1)
+        with torch.autocast(DEV, dtype=torch.bfloat16, enabled=amp):
+            out.append(d_term.compute(c).detach())
+        assert c.logs["out_d_real"].dtype == torch.float32
+    torch.testing.assert_close(out[1], out[0], rtol=1e-6, atol=1e-7)
+
+
+@pytest.mark.parametrize("dev", ["cpu", pytest.param("cuda", marks=cuda)])
+@pytest.mark.parametrize("d", ["metagan", "unet", "patchgan"])
+def test_lazy_r1_double_backward_through_discriminators(d, dev):
+    """Train-mode SN, GroupNorm/RMSNorm, Mish, DropPath and SDPA attention (metagan) all take the
+    double backward; metagan only under the math SDPA kernel (losses.md L-08)."""
+    cfg = {"metagan": {}, "unet": {"num_feat": 8}, "patchgan": {"num_feat": 8}}[d]
+    torch.manual_seed(0)
+    net = build_network({"type": d, **cfg}, section="network_d").to(dev).train()
+    _, d_term = gan_loss(r1_gamma=1.0, r2_gamma=1.0, reg_every=1).to(dev).expand()
+    sr, gt = images((2, 3, 64, 64), dev=dev), images((2, 3, 64, 64), dev=dev, seed=1)
+    c = gan_ctx(sr, gt, net_d=net, net_d_adv=Forbidden(), it=1)
+    with torch.autocast(dev, dtype=torch.bfloat16, enabled=dev == "cuda"):
+        value = d_term.compute(c)
+    value.backward()
+    grads = [p.grad for p in net.parameters() if p.requires_grad]
+    assert all(g is not None and g.isfinite().all() for g in grads)
+    assert torch.isfinite(c.logs["l_d_reg"])
+    assert c.logs["l_d_reg"] > 0
+
+
+def test_rpgan_g_term_matches_reference():
+    """ST-07: G minimises softplus(D(real) - D(fake)); D(real) is a no-grad constant of the pair."""
+    critic = _critic().eval()
+    ref, spy = deepcopy(critic), Spy(critic)
+    g_term, _ = _gan(gan_type="rpgan")
+    sr, gt = images().requires_grad_(), images(seed=1)
+    value = g_term.compute(gan_ctx(sr, gt, net_d=Forbidden(), net_d_adv=spy))
+    gd = torch.autograd.grad(value, [sr, *critic.parameters()])
+    assert [x.shape[0] for x in spy.seen] == [2, 2]
+    assert torch.equal(spy.seen[0], gt)
+    ref_sr = sr.detach().clone().requires_grad_()
+    want = F.softplus(ref(gt).detach() - ref(ref_sr)).mean() * 0.1
+    want_g = torch.autograd.grad(want, [ref_sr, *ref.parameters()])
+    torch.testing.assert_close(value, want)
+    for a, b in zip(gd, want_g, strict=True):  # D params see only the fake side
+        torch.testing.assert_close(a, b)
+
+
+def test_rpgan_d_term_matches_reference():
+    critic = _critic().eval()
+    ref = deepcopy(critic)
+    _, d_term = _gan(gan_type="rpgan")
+    sr, gt = images(), images(seed=1)
+    c = gan_ctx(sr, gt, net_d=critic, net_d_adv=Forbidden())
+    value = d_term.compute(c)
+    value.backward()
+    real, fake = ref(gt), ref(sr)
+    want = F.softplus(fake - real).mean()  # falls as D(fake) - D(real) falls
+    want.backward()
+    torch.testing.assert_close(value, want.detach())
+    assert set(c.logs) == {"out_d_margin", "out_d_real", "out_d_fake"}
+    torch.testing.assert_close(c.logs["out_d_margin"], (real - fake).mean().detach())
+    for p, q in zip(critic.parameters(), ref.parameters(), strict=True):
+        torch.testing.assert_close(p.grad, q.grad)
+
+
+# ---- GP-07: wrap() compiles a one-forward D --------------------------------------------------------
+
+
+def test_compile_wraps_a_one_forward_d(tmp_path):
+    opt = model_opt(tmp_path, d=True) | {"compile": True}
+    m = build_model_seeded(opt)
+    assert m.net_g_fwd._orig_mod is m.net_g
+    assert m.net_d_fwd._orig_mod is m.net_d
+    assert m.net_d_adv is m.net_d_fwd
+    opt["network_d"] = {
+        "type": "patchgan",
+        "num_feat": 4,
+        "norm_type": "batch",
+        "use_sn": False,
+    }
+    m = build_model_seeded(opt)
+    assert m.net_d_fwd is m.net_d_adv is m.net_d  # two forwards: eager
+
+
+def test_compiled_spectral_norm_d_trains(tmp_path):
+    """Two compiled SN-D forwards before one backward failed autograd's version check (perf.md);
+    the one-forward update trains under inductor (CPU here: the GPU is shared)."""
+    gan = {"type": "gan_loss", "loss_weight": 0.1, "r1_gamma": 1.0, "reg_every": 2}
+    opt = model_opt(tmp_path, d=True) | {"compile": True}
+    opt["train"]["gan_opt"] = gan
+    m = build_model_seeded(opt)
+    run_model(m, model_batches(3))
+    log = m.get_current_log()
+    assert m.update == 3
+    assert {"l_d_reg", "l_d_real", "grad_norm_d"} <= set(log)
+    assert all(math.isfinite(v) for v in log.values())
+
+
+# ---- DDP: the regularised D update through the reducer (2-rank gloo, CPU) -------------------------
+
+
+def _ddp_worker(rank: int, tmp: str, out: str) -> None:
+    dist.init_process_group(
+        "gloo", init_method=f"file://{tmp}/pg", rank=rank, world_size=2,
+        timeout=timedelta(seconds=60),
+    )  # fmt: skip
+    try:
+        opt = model_opt(Path(tmp) / "run", d=True, accumulate=2)
+        opt["train"]["gan_opt"] = {
+            "type": "gan_loss", "loss_weight": 0.1, "gan_type": "rpgan",
+            "ramp_iters": 2, "r1_gamma": 1.0, "r2_gamma": 0.5, "reg_every": 2,
+        }  # fmt: skip
+        m = build_model_seeded(
+            opt,
+            rt=Runtime(torch.device("cpu"), rank, 2, 0, distributed=True),
+            seed=rank,
+        )
+        run_model(m, model_batches(6, seed=rank))  # rank-specific data, 3 updates
+        log = m.get_current_log()
+        nets = {n: {k: v.detach().clone() for k, v in net.state_dict().items()}
+                for n, net in m.nets.items()}  # fmt: skip
+        torch.save({"log": log, "nets": nets, "update": m.update}, f"{out}.{rank}")
+    finally:
+        dist.destroy_process_group()
+
+
+def test_ddp_regularised_rpgan_keeps_ranks_in_sync(tmp_path):
+    """autograd.grad on D's inputs under the DDP-wrapped D, then one backward: the reducer still
+    averages D's (penalty-including) gradients, so both ranks hold the same weights."""
+    out = str(tmp_path / "res")
+    torch.multiprocessing.spawn(_ddp_worker, args=(str(tmp_path), out), nprocs=2)
+    r0, r1 = (torch.load(f"{out}.{r}", weights_only=False) for r in (0, 1))
+    assert r0["update"] == r1["update"] == 3
+    assert {"l_d_reg", "out_d_margin", "grad_norm_d"} <= set(r0["log"])
+    assert all(math.isfinite(v) for v in r0["log"].values())
+    assert r0["log"] == r1["log"]  # window means are all-reduced
+    for n in r0["nets"]:
+        for k, v in r0["nets"][n].items():
+            assert torch.equal(v, r1["nets"][n][k]), (n, k)

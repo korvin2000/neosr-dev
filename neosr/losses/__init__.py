@@ -50,6 +50,8 @@ RESERVED = {
     "l_d_fake",
     "out_d_real",
     "out_d_fake",
+    "out_d_margin",
+    "l_d_reg",
 }
 RESERVED_PREFIX = ("grad_norm_", "skipped_")
 
