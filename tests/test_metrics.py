@@ -332,13 +332,18 @@ def test_validation_parks_metric_nets_on_cpu(monkeypatch, fresh_nets, fail):
             raise RuntimeError(msg)
 
     model = SimpleNamespace(
-        rt=SimpleNamespace(rank=0), device=device, validate=validate
+        rt=SimpleNamespace(rank=0),
+        device=device,
+        validate=validate,
+        best_metric_results={},
+        save_best=lambda *_: None,
     )
+    loader = SimpleNamespace(dataset=SimpleNamespace(opt={"name": "v"}))
     for _ in range(2):  # two validation events: one build, parked on the CPU after each
         if fail:
             with pytest.raises(RuntimeError, match="boom"):
-                base.validation(model, None, 1, None)
+                base.validation(model, loader, 1, None)
         else:
-            base.validation(model, None, 1, None)
+            base.validation(model, loader, 1, None)
         assert calculate._metric_nets["dists"].w.device.type == "cpu"
     assert len(built) == 1
