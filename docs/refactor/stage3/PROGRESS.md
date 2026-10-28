@@ -200,3 +200,5 @@ worktree `.venv` has no torch), each file in its own capped scope (`systemd-run 
   A/B plan), `r3gan/codex.md` (Codex Astra review + efficiency addendum). Fable synthesis `r3gan/DESIGN.md` (draft) ->
   critique round (Codex, Opus) -> final + implementation brief. Finding to act on: the stage-2 template GAN is inert
   (metagan at chance from ~2.4k updates; `gpu_profile.md:204-213`).
+- R3GAN design final (`r3gan/DESIGN.md` section 7: Opus and Codex approved with changes, applied); brief `r3gan/TASK_R3GAN.md`;
+  implementation + A/B handed to an Opus 5.5 xhigh session in this worktree.
