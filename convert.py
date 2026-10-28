@@ -288,29 +288,39 @@ def verify_qat(args: argparse.Namespace, onnx_model, torch_model) -> None:
     )
 
 
-# Known export gaps (MT-17; export matrix of the stage-2 audit, opset 17, TorchScript exporter),
+# Known export gaps (MT-17; re-swept after the stage-2 arch lanes, opset 17, TorchScript exporter),
 # refused before anything is built or written. An arch that becomes exportable leaves the table.
 NO_ONNX = {
-    "craft": "unsupported operators",
-    "ditn": "unsupported operators",
     "atd": "uses the Sort operator",
     "atd_light": "uses the Sort operator",
-    "hit_srf": "the graph exceeds the 2 GiB protobuf limit (dense position-bias constants)",
-    "hit_srf_medium": "the graph exceeds the 2 GiB protobuf limit (dense position-bias constants)",
-    "hit_srf_large": "the graph exceeds the 2 GiB protobuf limit (dense position-bias constants)",
     "flexnet": "aten::rms_norm has no opset-17 export",
     "metaflexnet": "aten::rms_norm has no opset-17 export",
+    "esc": "its padding cannot be traced",
     "esc_light": "its padding cannot be traced",
     "esc_fp": "its padding cannot be traced",
-    "catanet": "fails to trace, also with -static",
-    "lmlt_tiny": "fails to trace, also with -static",
-    "hma": "onnxruntime rejects its LayerNorm at every shape",
-    "dct": "unsupported operators",
+    "esc_large": "its padding cannot be traced",
+    "catanet": "Unfold needs a known input size, also with -static",
+    "lmlt": "adaptive_max_pool2d output sizes are not constant, also with -static",
+    "lmlt_tiny": "adaptive_max_pool2d output sizes are not constant, also with -static",
+    "lmlt_large": "adaptive_max_pool2d output sizes are not constant, also with -static",
+    "asid": "its window padding exports with the wrong size, also with -static",
+    "asid_d8": "its window padding exports with the wrong size, also with -static",
+    "omnisr": "its window padding exports with the wrong size, also with -static",
 }
-STATIC_ONLY = {  # dynamic adaptive_max_pool2d output sizes
+STATIC_ONLY = {  # the dynamic graph is frozen at the trace shape
     "safmn": "adaptive_max_pool2d output sizes depend on the input",
+    "safmn_l": "adaptive_max_pool2d output sizes depend on the input",
     "light_safmnpp": "adaptive_max_pool2d output sizes depend on the input",
     "msdan": "adaptive_max_pool2d output sizes depend on the input",
+    "ditn": "its patch reshape freezes the input size",
+    "dctlsa": "its window merge freezes the batch size",
+    "grformer": "its window merge freezes the batch size",
+    "grformer_medium": "its window merge freezes the batch size",
+    "grformer_large": "its window merge freezes the batch size",
+    "microsr": "its window merge freezes the batch size",
+    "microsr_light": "its window merge freezes the batch size",
+    "mfghmoe": "its window merge freezes the batch size",
+    "srformer_medium": "a 20x20 trace is one 24 px window: the shift mask freezes",
 }
 
 
