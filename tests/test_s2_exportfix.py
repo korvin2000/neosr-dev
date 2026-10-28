@@ -1,4 +1,5 @@
-"""Stage-2 export fixes: the arch edits that make ONNX export dynamic keep eager outputs bitwise.
+"""Export fixes (stage 2; hma stage 3): the arch edits that make ONNX export dynamic keep eager
+outputs bitwise.
 
 Each test patches the replaced code (verbatim, below) back in and compares full-model outputs on a
 fixed seed at aligned, non-aligned and batch-2 sizes.
@@ -17,11 +18,14 @@ from neosr.archs import (
     ditn_arch,
     esc_arch,
     grformer_arch,
+    hma_arch,
     lmlt_arch,
     mfghmoe_arch,
     microsr_arch,
     omnisr_arch,
 )
+from neosr.cli import convert_args
+from tests.test_entry import convert_py
 
 SIZES = [(1, 3, 16, 16), (1, 3, 19, 23), (2, 3, 20, 20)]
 
@@ -118,6 +122,8 @@ LEGACY = {
     "lmlt_tiny": [
         (lmlt_arch.downsample_vit, "window_reverse", _old_lmlt_window_reverse)
     ],
+    "hma": [(hma_arch, "window_reverse", _old_window_reverse)],
+    "hma_medium": [(hma_arch, "window_reverse", _old_window_reverse)],
 }
 
 
@@ -153,3 +159,21 @@ def test_ceil_padding_matches_the_old_formula(ws: int, size) -> None:
     new = asid_arch.asid.check_image_size(M(), x).shape
     assert new == omnisr_arch.omnisr_net.check_image_size(M(), x).shape
     assert new == _old_check_image_size(M(), x).shape
+
+
+def test_hma_dynamic_export_runs_batch_2(tmp_path) -> None:
+    """The batch-1 trace at batch 2. The old window_reverse froze the batch, mixing the samples:
+    1e-3 here (2.8e-3 in full hma), inside convert.py's tolerance for this net, so check tighter."""
+    ort = pytest.importorskip("onnxruntime")
+    pytest.importorskip("onnx")
+    torch.manual_seed(0)
+    kw = {"depths": (2,), "num_heads": (6,)}  # one layer, default width
+    net = build_network({"type": "hma", **kw}, scale=2).eval()
+    argv = ["--input", "unused.pth", "-net", "hma", "-s", "2"]
+    convert_py.to_onnx(convert_args([*argv, "--output", str(tmp_path / "m.onnx")]), net)
+    cpu = ["CPUExecutionProvider"]
+    sess = ort.InferenceSession(str(tmp_path / "m_fp32.onnx"), providers=cpu)
+    x = torch.randn(2, 3, 20, 20, generator=torch.Generator().manual_seed(0))
+    with torch.inference_mode():
+        err = abs(sess.run(None, {"input": x.numpy()})[0] - net(x).numpy()).max()
+    assert err < 1e-5  # fixed: 6e-7

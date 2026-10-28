@@ -164,6 +164,12 @@ worktree `.venv` has no torch), each file in its own capped scope (`systemd-run 
   exporter does not fold parameter-derived ops). CPU export sweep of all 75 exportable ARCHS rows (default options,
   x2, nafnet x1, STATIC_ONLY static): 73 verify with folding on; `hma`/`hma_medium` fail the batch-2 dynamic check
   identically with folding off (pre-existing; follow-up: STATIC_ONLY row or a fix).
+- hma follow-up fixed: `window_reverse` froze the batch with `int(windows.shape[0] / ...)` (the stage-2 bug of
+  five archs); -1 now, eager bitwise. `hma`/`hma_medium` verify dynamically at all 3 shapes. Tests:
+  test_s2_exportfix LEGACY rows + a batch-2 ORT check at 1e-5 (old code 1e-3 on that net, under convert's
+  tolerance). Open, pre-existing (Codex): `check_image_size` picks reflect/replicate from the trace shape, so a
+  dynamic export pads wrong where eager falls back to replicate (pad >= size: a side under 8 px in hma, 16 px in
+  hma_medium, e.g. 3x5 / 5x7).
 - Codex review: 4 findings, fixed: `set_detect_anomaly(False)` when the key was absent clobbered a caller's state;
   the `-optimize` file had no numerical verification (pre-existing gap); comment precision (MKLDNN TF32, NaN only).
 - Test changes: `test_runtime` expects "high" (obsolete "medium").
