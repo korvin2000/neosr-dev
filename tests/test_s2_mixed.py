@@ -630,3 +630,60 @@ def test_grformer_sdpa_parity_outputs_and_grads(monkeypatch, size) -> None:
     (y * g).sum().backward()
     (y_old * g).sum().backward()
     _assert_grads_close(new, old)
+
+
+# ---------------------------------------------------------------- MX-09/10 DCT
+
+
+def _old_dct_wa(self, qkv, H, W, mask=None):
+    # dct Window_Attention.forward before MX-09: the (constant) position bias always computed
+    from neosr.archs.dct_arch import windows2img
+
+    q, k, v = (self.im2win(t, H, W) for t in (qkv[0], qkv[1], qkv[2]))
+    B, C = qkv[0].shape[0], qkv[0].shape[2]
+    attn = (q * self.scale) @ k.transpose(-2, -1)
+    if self.position_bias:
+        pos = self.pos(self.rpe_biases)
+        rpb = pos[self.relative_position_index.view(-1)].view(self.H_sp * self.W_sp, self.H_sp * self.W_sp, -1)
+        attn = attn + rpb.permute(2, 0, 1).unsqueeze(0)
+    N = attn.shape[3]
+    if mask is not None:
+        nW = mask.shape[0]
+        attn = attn.view(B, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)
+        attn = attn.view(-1, self.num_heads, N, N)
+    attn = self.attn_drop(F.softmax(attn, dim=-1, dtype=attn.dtype))
+    x = (attn @ v).transpose(1, 2).reshape(-1, self.H_sp * self.W_sp, C)
+    return windows2img(x, self.H_sp, self.W_sp, H, W)
+
+
+@pytest.mark.parametrize("size", [(64, 64), (32, 40)])  # img_size / off-size: masks per forward
+def test_dct_constant_bias_skip_parity(monkeypatch, size) -> None:
+    from neosr.archs.dct_arch import Adaptive_Window_Attention, Window_Attention
+
+    new = _build("dct", drop_path_rate=0.0).train()
+    wa = [m for m in new.modules() if isinstance(m, Window_Attention)]
+    assert wa and all(m.pos_const for m in wa)  # the default: pos_dim 1 everywhere
+    for m in wa:  # a per-head constant: perturbing its weights changes nothing
+        for p in m.pos.parameters():
+            p.data.normal_()
+    old = _build("dct", drop_path_rate=0.0).train()
+    old.load_state_dict(new.state_dict())
+    built = []
+    calc = Adaptive_Window_Attention.calculate_mask
+    monkeypatch.setattr(
+        Adaptive_Window_Attention, "calculate_mask", lambda s, *a: built.append(a) or calc(s, *a)
+    )
+    x = torch.rand(2, 3, *size)
+    with _NoHostSync():
+        y = new(x)
+    assert len(built) == (0 if size == (64, 64) else 1)  # once per forward, on the input's device
+    with monkeypatch.context() as m:
+        m.setattr(Window_Attention, "forward", _old_dct_wa)
+        y_old = old(x)
+    torch.testing.assert_close(y, y_old, rtol=1e-4, atol=1e-5)
+    g = torch.randn_like(y)
+    (y * g).sum().backward()
+    (y_old * g).sum().backward()
+    _assert_grads_close(new, old)
+    frozen = {n for n, p in new.named_parameters() if not p.requires_grad}
+    assert frozen and all(".pos." in n for n in frozen)
