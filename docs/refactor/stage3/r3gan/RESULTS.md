@@ -51,3 +51,39 @@ bf16 stays the penalty default of the recipe only if all hold, else the template
   skipped update.
 Reported but not gating: one-probe gradient variance (16 draws, 2 batches) and fixed-probe clip incidence (EMA G for the
 trained probe, unaugmented batches, gamma 1). The clip incidence that matters is each arm's logged `clipped_d`.
+
+## 3. R4 qualification results (2026-10-28, RTX 4090, frozen code 7e8989e, bf16 AMP, GT 256, B 8)
+### Cost (`scripts/bench.py`, 3 x 100 updates after warm-up, median ms/update; peak VRAM allocated in training)
+| arm | eager ms/update | compile ms/update | peak VRAM | vs A0 eager |
+|---|---|---|---|---|
+| A0 template (metagan, bce, adan_sf D) | 97.6 | 84.4 | 3.27 GB (compile 3.10) | - |
+| A1 no D | 84.3 | - | 3.09 GB | -14 % |
+| r3gan patch, rpgan, gammas 0 (ordinary update) | 105.2 | - | 3.30 GB | +8 % |
+| **R1 r3gan patch, R1/R2 every update** | **719.2** | **700.6** | 3.30 GB (compile 3.18) | **+637 %** |
+| R4 r3gan_scalar256, R1/R2 every update | 725.4 | - | 3.31 GB | +643 % |
+- **The cost gate fails by far**: the penalty pass costs ~614 ms per update (719 - 105) against an estimate of +0-10 ms;
+  memory is fine (+0.03 GB with bf16; the fp32 penalty peaks at 5.61 GB vs 3.22 GB in the 2k runs). The 2k runs took
+  0.71 s (bf16) and 0.71 s (fp32) per update: precision is not the bottleneck. Hypothesis (unverified): the double
+  backward of grouped convs (group width 16) and of the depthwise FIR runs a slow path (e.g. a per-group loop) on CUDA.
+  Consequence: a 20k R arm takes ~4 h instead of ~40 min; round 1 as planned would take ~21 GPU-hours.
+### bf16 vs fp32 penalty with identical probe signs (10 real batches; tolerances in section 2)
+| state | max raw R1/R2 rel. error | min D-grad cosine | norm ratio | min per-tensor cosine | one-probe rel. variance |
+|---|---|---|---|---|---|
+| r3gan patch, init | 0.52 % | 0.99997 | 1.0029-1.0031 | 0.99991 | 0.00035 |
+| r3gan_scalar256, init | 0.44 % | 0.99996 | 0.9965-0.9966 | 0.99976 | 0 (P = 1, no draw) |
+| r3gan patch, after 2k GAN updates | 0.23 % | 0.99996 | 0.9971-0.9983 | 0.99990 | 0.003-0.005 |
+Fixed-probe clip incidence (gamma 1, EMA G, unaugmented): 0 at init and trained; the trainer's own `clipped_d` is the
+relevant number (below). CUDA double-backward tests (bf16, channels_last, both heads, MATH SDPA): 6 passed.
+### 2k GAN updates from the pretrain, R1 settings (patch, gamma 1, w 0.3), seed 7: bf16 vs `penalty_fp32`
+| run | dev PSNR | dev TOPIQ-pipal | dev LPIPS | dev DISTS | val8 PSNR / TOPIQ / LPIPS / DISTS | mean upd. 1k-2k: margin, raw r1, r2, `clipped_d`, `l_g_gan` |
+|---|---|---|---|---|---|---|
+| pretrain P0 (20k, no GAN) | 30.399 | 0.6394 | 0.1854 | 0.1608 | 28.99 / 0.6354 / 0.2192 / 0.1489 | - |
+| Q4_bf16 | 29.233 | 0.6526 | 0.1737 | 0.1606 | 27.95 / 0.6546 / 0.1901 / 0.1379 | 0.078, 0.0182, 0.0164, 0.49, 0.221 |
+| Q4_fp32 | 29.228 | 0.6511 | 0.1715 | 0.1608 | 27.94 / 0.6538 / 0.1875 / 0.1391 | 0.095, 0.0222, 0.0198, 0.53, 0.224 |
+(dev means over all 300 dev tiles, as logged; the 219-tile evaluation applies to the A/B.) No skipped updates. The bf16
+replicate (run-to-run noise) was **not run** (owner's wrap-up decision): plain tolerances applied; raw R1/R2 bf16/fp32
+ratio 0.82-0.83 is close to the 0.8 bound and cannot be separated from run-to-run divergence without it.
+**Verdict: PASS, bf16 stays the penalty default** of `options/train_realplksr_r3gan.toml` (unchanged).
+Indicative only (no A1 control at 2k): versus the pretrain the GAN start costs 1.17 dB dev PSNR and gains +0.013
+TOPIQ-pipal and -0.012 LPIPS; D is not at chance (margin 0.08-0.09 > 0.01), but D's gradient is clipped in about half
+of the updates (template max-norm 1.0) and G's in ~90 %.

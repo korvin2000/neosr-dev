@@ -280,27 +280,44 @@ Tests as in session 4 (main checkout venv, `PYTHONPATH` = worktree, `CUDA_VISIBL
   `r3gan/RESULTS.md` section 1 before any A/B run. Harness: `experiments/r3gan_ab/harness` (gitignored; per-image metric
   capture for paired differences). Shared non-GAN pretrain P0 (20k) launched.
 
-### PAUSED 2026-10-28 ~18:05 (owner's session limit) — resume here
-- Committed and pushed: R1 a71a7a4, R2 9c4cca2, R3 504ad50, R5 split + predeclared margins 95486cd/eca16c3/fb14a06.
-  Full CPU suite once on R3 (49 files): 2047 passed, 0 failed, 377 skipped (CUDA/fixtures).
-- Running when paused: the shared non-GAN pretrain P0 (20k, GPU), which finishes by itself and its launcher copies
-  `runs/P0_pretrain/experiments/P0_pretrain/models/net_g_20000.pth` to `runs/P0_pretrain/pretrain_g.pth` (the EMA export;
-  check `done.json` and the 20000 lines in `metrics.jsonl`; if missing, rerun `harness/launch.sh P0_pretrain`).
-- Harness (gitignored, `experiments/r3gan_ab/harness/`): run_ab.py, mkcfg.py (all arms incl. Q4_* and B_r3gan_nopen;
-  configs already in `cfg/`), launch.sh (sequential, capped, refuses a busy GPU, requires done.json), r4.sh, parity.py,
-  qualify.py, visual.py, analyze.py; `r5/` = source-recovery scripts (overlap_gpu.py, edges.py, fuzzy.py), test runners.
-  Data: `experiments/r3gan_ab/data/` (symlinked splits, visual_lq, sources.json). Codex reviewed the harness; its
-  fixes are applied (scoped capture, completion check, manifest guards, R4 failure propagation and pass/fail rules).
-- Next, in order (one GPU job at a time, `nvidia-smi` first):
-  1. `python harness/r5/fuzzy.py docs/refactor/stage3/r3gan/split harness/r5/overlap_all.json <out.json>` (GPU, a few
-     minutes): fuzzy held-out vs train leak check; put matched held-out ids (peak clearly above the random-pair p99 and
-     near the exact-overlap calibration) into `experiments/r3gan_ab/data/exclude.txt` and record it in RESULTS section 0.
-  2. `harness/r4.sh` (bench eager/compile, CUDA tests, parity at init, Q4_bf16/Q4_fp32/Q4_bf16b 2k runs, parity at the
-     trained D, `qualify.py` verdict) -> R4 numbers into PROGRESS + RESULTS; if FAIL set `penalty_fp32 = true` in the
-     template (+ commit); if r3gan exceeds +30 % ms or +1.5 GB vs A0, bench slim widths / group_width 32.
-  3. Round 1: `harness/launch.sh A0_template A1_nogan R1_patch_g1 R2_patch_g3 R3_patch_g1_w01 R4_scalar_g40 R5_scalar_g4`
-     (~40 min each); per arm `visual.py <repo> runs/<arm> 5000 10000 20000`, term_grads at 0/10k/20k (separate process),
-     `analyze.py A1_nogan A0_template R...` and vs A0; then round 2 on the best R, then seed 2 (DESIGN section 4).
-  4. RESULTS.md with the gate, final report (per item commit/tests/Codex verdict; per arm numbers; recommendation).
-- Open points for the report: the `origin` remote URL in `.git/config` embeds a GitHub token in plain text (owner should
-  rotate it and use a credential helper); visual-set categories adapted to the owner's close-up people data.
+### R4 GPU qualification (2026-10-28, from a frozen code copy of 7e8989e; numbers in `r3gan/RESULTS.md` section 3)
+- bench (eager ms/update, peak VRAM): A0 97.6 / 3.27 GB (compile 84.4); A1 84.3; r3gan rpgan without penalty 105.2;
+  **R1 patch every-step R1/R2 719.2 (compile 700.6), scalar256 725.4**, VRAM 3.30 GB: the penalty pass costs ~614 ms per
+  update, the +30 % cost gate fails by ~20x (precision is not the cause: fp32 penalty runs equally slow).
+- bf16 vs fp32 penalty with identical signs: raw R1/R2 within 0.5 %, D-gradient cosine >= 0.99996, per-tensor >= 0.9998
+  (init patch/scalar, trained patch); CUDA double-backward tests 6 passed; 2k runs bf16 vs fp32: dev dPSNR 0.005 dB,
+  dTOPIQ 0.0015, dLPIPS 0.0023, dDISTS -0.0002, raw R1/R2 ratio 0.82-0.83. **Verdict PASS: bf16 stays the default.**
+- Skipped (owner's wrap-up decision, 2026-10-28): the bf16 replicate Q4_bf16b (noise estimate not done), rounds 1-2,
+  seed 2. The fuzzy leak check ran (164 held-out tiles excluded, commit 781a17c).
+- Incident: two linked sessions edited `plksr_arch.py`/`realplksr_arch.py` in this worktree during R4, so all GPU runs
+  now execute from `experiments/r3gan_ab/code` (a `git archive` of 7e8989e); the first R4 attempt was discarded.
+
+### PAUSED 2026-10-28 ~21:10 (owner: wrap up; continue the A/B later) - resume here
+**Done (pushed on `refactor/stabilize`):** R1 discriminator a71a7a4; R2 loss path 9c4cca2; R3 template + guide 504ad50;
+each Codex-reviewed with findings fixed, scoped tests green, full CPU suite once on R3 (2047 passed, 0 failed, 377
+skipped). R5 data: split 95486cd, margins/rules eca16c3 + fb14a06, leak check 781a17c, visual set 7e8989e. R4: this
+entry and RESULTS section 3 (bf16 PASS; cost gate FAIL).
+**Where things live (gitignored, `/home/korvin/apps/neosr-dev/.worktrees/refactor/experiments/r3gan_ab/`):**
+`code/` frozen code (7e8989e) every run uses; `data/` symlinked splits (`train_*`, `dev_*`, `conf_*`, `val8_*`,
+`visual_lq`), `sources.json`, `groups_eval.json`, `exclude.txt`; `harness/` run_ab.py, mkcfg.py (arms, `round2 <arm>`,
+`seed2 <arms>`), launch.sh (sequential, capped, refuses a busy GPU), post.sh (visual set + term_grads), r4.sh,
+parity.py, qualify.py, analyze.py, visual.py, `r5/` (leak-search scripts and outputs); `cfg/` generated TOMLs; `runs/`
+P0_pretrain (`pretrain_g.pth` = EMA at 20k, sha256 9a3e3cda40c29804...), Q4_bf16, Q4_fp32; `r4/` bench/parity logs.
+**Before any A/B run (decision for the owner):** an R arm costs ~0.72 s/update (20k = ~4 h; round 1 ~21 GPU-h). Options:
+(a) first profile the penalty pass (`torch.profiler` on one regularised D update of R1; suspect grouped/depthwise conv
+double backward) and fix it; (b) lazy R1/R2 (`reg_every` 4 or 16: ~0.26 or ~0.14 s/update average, a measured
+deviation from the paper); (c) shorter A/B budgets. The design's +30 % cost gate cannot pass without (a).
+**Commands (from `experiments/r3gan_ab/harness`, one GPU job at a time):**
+- round 1: `./launch.sh A0_template A1_nogan R1_patch_g1 R2_patch_g3 R3_patch_g1_w01 R4_scalar_g40 R5_scalar_g4`,
+  after each arm `./post.sh <arm>`; then analyse: `/home/korvin/apps/neosr-dev/.venv/bin/python analyze.py
+  A1_nogan A0_template R1_patch_g1 R2_patch_g3 R3_patch_g1_w01 R4_scalar_g40 R5_scalar_g4` and the same with `A0_template`
+  first (paired vs A0); pick the best R by RESULTS section 1.
+- round 2: `/home/korvin/apps/neosr-dev/.venv/bin/python mkcfg.py round2 <bestR>` then `./launch.sh <bestR>_lazy16
+  <bestR>_lazy4 <bestR>_cos01 <bestR>_noclip <bestR>_dlr1e4` (+ `A2_metagan_rpgan` only if A0 proved unstable).
+- seed 2: `/home/korvin/apps/neosr-dev/.venv/bin/python mkcfg.py seed2 A0_template A1_nogan <top1> <top2>` then
+  `./launch.sh A0_template_s2 A1_nogan_s2 <top1>_s2 <top2>_s2`; final check once on the confirmation set (add a
+  `conf` val dataset to those configs or evaluate the 20k exports) and fill RESULTS with the gate and the recommendation.
+**Open points:** the `origin` remote URL in `.git/config` embeds a GitHub token in plain text (rotate it, use a
+credential helper); the owner's visual sign-off (visual set under `runs/<arm>/experiments/<arm>/visual/`) and the 80k+
+long run are the owner's; the penalty-pass speed (above); source independence of the split is only overlap-verified
+(RESULTS section 0); `harness/` is outside git (copy it into the repo as `scripts/ab.py` only if the owner wants it kept).
