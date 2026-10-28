@@ -198,9 +198,10 @@ target = "lq"         # reference: "gt" (default) or "lq" = bicubic-upscaled lq 
 - **Updates.** An update is one optimizer step over `datasets.train.accumulate` micro-batches (default 1; the
   loss is divided by it, and DDP reduces once per window). `logger.total_iter` (default 1000000),
   `logger.print_freq` (100), `logger.save_checkpoint_freq` and `val.val_freq` all count updates.
-- **Output clamp.** `train.clamp` sets what the losses see of the generator output: `true` (default) clamps to
-  [1/255, 1], which also zeroes the gradient of every out-of-range pixel; `false` passes it unclamped;
-  `"restore"` clamps to [0, 1] but keeps the gradient that moves an out-of-range pixel back into range.
+- **Output clamp.** `train.clamp` sets what the losses see of the generator output: `"restore"` (default)
+  clamps to [0, 1] but keeps the gradient that moves an out-of-range pixel back into range; `true` is the old
+  hard clamp to [1/255, 1], which zeroes the gradient of every out-of-range pixel (at init 34-84% of the output
+  of most archs: training stalls for the first ~1-2k updates); `false` passes the output unclamped.
 - **AMP.** `use_amp = true` runs fp16 autocast with a GradScaler; adding `bfloat16 = true` runs bf16 (no
   scaler). Under AMP the nets and inputs use channels-last.
 - **Clipping.** `train.grad_clip` bounds each network's total gradient norm: `true` (default) clips to 1.0, a
@@ -464,7 +465,8 @@ Ultra light).
 - **Stage 2**: `manual_seed` no longer implies deterministic kernels (add `deterministic = true`); `fast_matmul`
   no longer enables fp16 GEMM accumulation (`fp16_accumulation = true`); a skipped update restores the buffers its
   forwards wrote and a non-finite loss in it is counted (`nonfinite_<key>`) instead of stopping the run; the fp16
-  scaler grows every 200 updates (was 2000); new `train.clamp = "restore"`, `train.grad_clip = <norm> | "spike"`,
+  scaler grows every 200 updates (was 2000); `train.clamp` defaults to `"restore"` (`true` = the old hard clamp);
+  new `train.grad_clip = <norm> | "spike"`,
   `warmup_steps` for every optimizer, `aug_multi_prob`, `logger.keep_exports`.
 - **Configuration**: unknown keys warn instead of being silently ignored, removed keys are errors, and
   `match_lq_colors` became the per-loss `target = "lq"`.

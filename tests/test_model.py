@@ -455,7 +455,7 @@ def test_state_format_and_exports(tmp_path):
         "bfloat16": False, "ema": 0.9, "world_size": 1, "optim_g": tr["optim_g"],
         "optim_d": tr["optim_d"], "scheduler": tr["scheduler"],
         "losses": {"pixel_opt": tr["pixel_opt"], "gan_opt": tr["gan_opt"]},
-        "train": {"clamp": True, "grad_clip": True, "ema_power": None} | dict.fromkeys(QAT_KEYS),
+        "train": {"clamp": "restore", "grad_clip": True, "ema_power": None} | dict.fromkeys(QAT_KEYS),
         "data": {"accumulate": 1, "batch_size": B, "patch_size": P},
     }  # fmt: skip
     assert st["best"] == m.best_metric_results

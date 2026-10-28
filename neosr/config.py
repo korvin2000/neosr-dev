@@ -401,7 +401,7 @@ def validate_train(cfg: dict[str, Any]) -> None:
     if (power := train.get("ema_power")) is not None and not power > 0:
         msg = f"train.ema_power must be > 0, got {power}"
         raise ConfigError(msg)
-    if isinstance(clamp := train.get("clamp", True), str) and clamp != "restore":
+    if isinstance(clamp := train.get("clamp", "restore"), str) and clamp != "restore":
         msg = f"train.clamp must be true, false or 'restore', got {clamp!r}"
         raise ConfigError(msg)
     clip = train.get("grad_clip", True)

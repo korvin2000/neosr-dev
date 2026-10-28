@@ -83,10 +83,8 @@ def _sr_of_one_step(tmp, clamp, shift=0.0):
 @pytest.mark.parametrize("clamp", [None, True, False, "restore"])
 def test_clamp_modes_in_the_training_step(tmp_path, clamp):
     m, raw, sr = _sr_of_one_step(tmp_path, clamp)
-    ref = {None: raw.clamp(1 / 255, 1), True: raw.clamp(1 / 255, 1), False: raw}
-    assert torch.equal(
-        sr, ref.get(clamp, raw.clamp(0, 1))
-    )  # legacy default bit-identical
+    ref = {True: raw.clamp(1 / 255, 1), False: raw}  # true: the legacy clamp, bit-identical
+    assert torch.equal(sr, ref.get(clamp, raw.clamp(0, 1)))  # default (None) = "restore"
 
 
 @pytest.mark.parametrize(("clamp", "learns"), [(True, False), ("restore", True)])

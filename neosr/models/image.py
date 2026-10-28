@@ -161,8 +161,8 @@ class image(base):
             self.phases["net_d"] = self._phase("d", self.net_d, d_terms, amp)
         self.g, self.d = self.phases["net_g"], self.phases.get("net_d")
         self.meter = LossMeter()
-        # true: legacy hard [1/255, 1]; false: none; "restore" (restoring_clamp)
-        self.clamp = tr.get("clamp", True)
+        # "restore" (default, restoring_clamp); true: legacy hard [1/255, 1]; false: none
+        self.clamp = tr.get("clamp", "restore")
         self.aug, self.aug_prob = ds.get("augmentation"), ds.get("aug_prob")
         self.aug_multi_prob = ds.get("aug_multi_prob", 0.3)
         self.aug_antialias = ds.get("aug_antialias", False)
