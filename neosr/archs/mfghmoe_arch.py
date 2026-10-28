@@ -825,9 +825,10 @@ class DualRouting(nn.Module):
             routing-feature branch learn.
         """
         B, _C, H, W = x.shape
-        # fp32 routing: bf16 logits flip near-tied top-1 choices between training and validation
+        # routing in the gate dtype (fp32 under autocast): bf16 logits flip near-tied top-1 choices
+        # between training (bf16) and validation (fp32)
         with torch.autocast(x.device.type, enabled=False):
-            x = rearrange(x.float(), "b c h w -> (b h w) c")
+            x = rearrange(x.to(self.w_group_gate.weight.dtype), "b c h w -> (b h w) c")
             p_group, g = F.softmax(self.w_group_gate(x), dim=-1).topk(1, dim=-1)
             x = x + self.group_embedding(g.squeeze(-1))
             scores = torch.where(
