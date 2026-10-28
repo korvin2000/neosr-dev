@@ -44,7 +44,7 @@ SPIKE_K, SPIKE_BETA = 3.0, 0.98
 # param-group entries that are optimizer state, not configuration (SF averaging, step counters);
 # `lr` is compared as configured: `initial_lr` when a scheduler owns it
 _GROUP_STATE = frozenset({
-    "params", "lr", "initial_lr", "step", "k", "train_mode", "weight_sum", "lr_max",
+    "params", "lr", "initial_lr", "step", "k", "train_mode", "weight_sum", "lr_max", "sf_version",
 })  # fmt: skip
 
 
@@ -86,7 +86,8 @@ class Phase:
         # resume identity: config optimizer type, its state version, SF mode, ordered trainable
         # names; no positional fallback: same-count swaps would silently remap optimizer moments
         self.opt_type, self.sf = opt_type or type(opt).__name__, is_schedule_free(opt)
-        self.version = getattr(type(opt), "STATE_VERSION", 0)
+        # the version describes the schedule-free recurrence (adan_sf v2): plain-mode states stay valid
+        self.version = getattr(type(opt), "STATE_VERSION", 0) if self.sf else 0
         self.names = None if names is None else list(names)
         if self.names is not None and len(self.names) != len(params):
             msg = f"net_{name}: {len(self.names)} names for {len(params)} parameters"

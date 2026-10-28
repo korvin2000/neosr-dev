@@ -452,6 +452,7 @@ def test_idle_generator_feeds_d_without_a_graph(tmp_path):
         t.active = lambda it: it > 1
     seen = []
     d_term = m.d.terms[0]
+    d_term.active = lambda it: True  # gan_d_loss follows G's GAN term; force a D-only window
     orig = d_term.compute
     d_term.compute = lambda ctx: seen.append(ctx.sr.requires_grad) or orig(ctx)
     run(m, batches(1))
