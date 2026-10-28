@@ -121,26 +121,38 @@ def test_adamw_sf_step_bumps_the_parameter_version(foreach):
 
 
 # ---------------------------------------------------------------------------- 4 run record
-def test_resume_warns_about_global_objective_keys(tmp_path, caplog, monkeypatch):
-    monkeypatch.setattr(
-        get_root_logger(), "propagate", True
-    )  # caplog listens on the root logger
+class _Warnings(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(logging.WARNING)
+        self.msgs: list[str] = []
+
+    def emit(self, record) -> None:
+        self.msgs.append(record.getMessage())
+
+
+@pytest.fixture
+def warned():
+    """The "neosr" logger's warnings, each once: caplog attaches to it only if it predates the test."""
+    h, log = _Warnings(), get_root_logger()
+    log.addHandler(h)
+    yield h.msgs
+    log.removeHandler(h)
+
+
+def test_resume_warns_about_global_objective_keys(tmp_path, warned):
     m = build(make_opt(tmp_path))
     run(m, batches(1))
     m.save()
     opt = make_opt(tmp_path)
     opt["path"]["resume_state"] = tmp_path / "training_states" / "1.state"
     opt["train"]["match_lq_colors"] = True
-    with caplog.at_level(logging.WARNING, logger="neosr"):
-        build(opt)
-    assert "train.match_lq_colors: None -> True" in caplog.text
-    assert "wavelet" not in caplog.text  # unset before and after: not a change
+    build(opt)
+    text = "\n".join(warned)
+    assert "train.match_lq_colors: None -> True" in text
+    assert "wavelet" not in text  # unset before and after: not a change
 
 
-def test_resume_of_a_state_older_than_a_train_key_does_not_warn(
-    tmp_path, caplog, monkeypatch
-):
-    monkeypatch.setattr(get_root_logger(), "propagate", True)
+def test_resume_of_a_state_older_than_a_train_key_does_not_warn(tmp_path, warned):
     opt = make_opt(tmp_path)
     opt["train"]["match_lq_colors"] = True
     m = build(opt)
@@ -149,15 +161,17 @@ def test_resume_of_a_state_older_than_a_train_key_does_not_warn(
     path = tmp_path / "training_states" / "1.state"
     state = torch.load(path, map_location="cpu", weights_only=True)
     del state["run"]["train"]["match_lq_colors"]  # saved before the key was recorded
-    del state["run"]["network_g"]["num_conv"]  # a config sub-key set since: still a change
+    del state["run"]["network_g"][
+        "num_conv"
+    ]  # a config sub-key set since: still a change
     torch.save(state, path)
     opt = make_opt(tmp_path)
     opt["path"]["resume_state"] = path
     opt["train"]["match_lq_colors"] = True
-    with caplog.at_level(logging.WARNING, logger="neosr"):
-        build(opt)
-    assert "match_lq_colors" not in caplog.text
-    assert "network_g.num_conv: None -> 2" in caplog.text
+    build(opt)
+    text = "\n".join(warned)
+    assert "match_lq_colors" not in text
+    assert "network_g.num_conv: None -> 2" in text
 
 
 # ---------------------------------------------------------------------------- 5 mean/std
@@ -315,10 +329,27 @@ def test_dynamic_export_traced_at_one_window_runs_at_several(tmp_path, onnx_deps
 
 # ---------------------------------------------------------------------------- 8 fp16 DySample
 def test_module_path_of_exported_node_names():
-    mp = convert_py._module_path
+    names = {
+        "a",
+        "a.0",
+        "a.0.0",
+        "a.0.0.up",
+        "a.0.0.up.offset",
+        "ups",
+        "ups.0",
+        "ups.0.1",
+    }
+    names |= {"conv_1"}
+    mp = partial(convert_py._module_path, modules=names)
     assert mp("/a/a.0/a.0.0/up/offset/Conv") == "a.0.0.up.offset"
     assert mp("/ups.0/ups.0.1/Mul_3") == "ups.0.1"
     assert mp("/Mul") == mp("Constant_7") == ""
+    # repeated calls: TorchScript suffixes the scope; a module named with a suffix keeps it
+    assert mp("/a/a.0/a.0.0/up_1/Mul") == "a.0.0.up"
+    assert mp("/a/a.0/a.0.0/up/offset_2/Conv") == "a.0.0.up.offset"
+    assert mp("/ups.0/ups.0.1_1/Conv") == "ups.0.1"
+    assert mp("/conv_1/Conv") == "conv_1"
+    assert mp("/conv_1_1/Conv") == "conv_1"
 
 
 def test_fp16_export_keeps_dysample_in_fp32_at_a_wide_input(tmp_path, onnx_deps):
@@ -339,6 +370,27 @@ def test_fp16_export_keeps_dysample_in_fp32_at_a_wide_input(tmp_path, onnx_deps)
     assert all(n.name.startswith("/1/1.0/") for n in grid)
 
 
+class _TwiceUp(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.inp, self.up, self.out = (
+            nn.Conv2d(3, 4, 1),
+            DySample(4, 4, 1, 4),
+            nn.Conv2d(4, 3, 1),
+        )
+
+    def forward(self, x):
+        return self.out(
+            self.up(self.up(self.inp(x)))
+        )  # the second call exports under /up_1/
+
+
+def test_fp16_export_keeps_a_reused_dysample_in_fp32(tmp_path, onnx_deps):
+    torch.manual_seed(0)
+    args = _convert_argv(tmp_path, "-fp16", "-static", "3", "4", "1024")
+    convert_py.to_onnx(args, _TwiceUp().eval())  # verified like the single call above
+
+
 # ---------------------------------------------------------------------------- 2 learned metric OOM
 def test_metric_net_reunites_a_net_split_by_a_failed_move(monkeypatch):
     net = nn.Sequential(nn.Linear(2, 2), nn.Linear(2, 2))
@@ -351,9 +403,8 @@ def test_metric_net_reunites_a_net_split_by_a_failed_move(monkeypatch):
 
 
 def test_learned_metric_oom_falls_back_to_the_cpu_per_image(
-    tmp_path, monkeypatch, caplog
+    tmp_path, monkeypatch, warned
 ):
-    monkeypatch.setattr(get_root_logger(), "propagate", True)
     calls, emptied = [], []
     monkeypatch.setattr(torch.cuda, "empty_cache", lambda: emptied.append(1))
 
@@ -372,11 +423,10 @@ def test_learned_metric_oom_falls_back_to_the_cpu_per_image(
     }
     logged = []
     m.log_metrics = lambda name, results, *a: logged.append(results)
-    with caplog.at_level(logging.WARNING, logger="neosr"):
-        m.validation(loader(n=2), "x", None, False)
+    m.validation(loader(n=2), "x", None, False)
     assert calls == ["cuda", "cpu", "cuda", "cpu"]  # each image tries the device first
     assert len(emptied) == 2
-    warns = [r for r in caplog.records if "learned validation metric" in r.getMessage()]
+    warns = [w for w in warned if "learned validation metric" in w]
     assert len(warns) == 1  # once per validation event
     assert logged[0]["learned"] > 0
     # a non-learned metric's OOM still propagates

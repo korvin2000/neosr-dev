@@ -3,9 +3,10 @@ Exit codes: 0 ok, 1 unexpected (traceback logged), 2 ConfigError (e.g. unknown n
 
 import argparse
 import logging
+import re
 import sys
 import warnings
-from collections.abc import Sequence
+from collections.abc import Container, Sequence
 from os import path as osp
 from pathlib import Path
 
@@ -350,12 +351,16 @@ def check_export(args: argparse.Namespace) -> None:
         raise ConfigError(msg) from e
 
 
-def _module_path(node_name: str) -> str:
+def _module_path(node_name: str, modules: Container[str]) -> str:
     """The qualified module name of a TorchScript-exported node ("/a/a.0/up/Conv" -> "a.0.up"): a
-    scope segment is the full name below a container, else the name relative to its parent."""
+    scope segment is the full name below a container, else the name relative to its parent. A
+    repeated call of a module suffixes a segment ("up_1", "a.0_1"): dropped where `modules` (the
+    qualified names) lacks the suffixed name."""
     path = ""
     for seg in node_name.split("/")[1:-1]:
         path = seg if not path or seg.startswith(path + ".") else f"{path}.{seg}"
+        if path not in modules:
+            path = re.sub(r"_\d+$", "", path)
     return path
 
 
@@ -363,11 +368,14 @@ def _cast_to(node) -> int:
     return next(a.i for a in node.attribute if a.name == "to")
 
 
-def to_fp16(src: str, dst: str, fp32_modules: Sequence[str] = ()) -> None:
+def to_fp16(
+    src: str, dst: str, fp32_modules: Sequence[str] = (), modules: Container[str] = ()
+) -> None:
     """A float16 graph: weights, compute and the input/output tensors (MT-16), with ORT's own
     converter (onnxconverter-common is unmaintained); ops without fp16 kernels get casts. The nodes
-    of `fp32_modules` (qualified names) and every GridSample stay fp32: DySample's sampling grid
-    holds pixel coordinates that fp16 rounds to whole pixels at widths of 1-2k."""
+    of `fp32_modules` (qualified names among `modules`, all of the net's) and every GridSample stay
+    fp32: DySample's sampling grid holds pixel coordinates that fp16 rounds to whole pixels at
+    widths of 1-2k."""
     import onnx  # noqa: PLC0415
     from onnxruntime.transformers.float16 import (  # noqa: PLC0415
         DEFAULT_OP_BLOCK_LIST,
@@ -380,7 +388,7 @@ def to_fp16(src: str, dst: str, fp32_modules: Sequence[str] = ()) -> None:
         n.name
         for n in graph.graph.node
         if any(
-            not q or (p := _module_path(n.name)) == q or p.startswith(q + ".")
+            not q or (p := _module_path(n.name, modules)) == q or p.startswith(q + ".")
             for q in fp32_modules
         )
     ]
@@ -484,8 +492,9 @@ def to_onnx(args: argparse.Namespace, model: nn.Module | None = None) -> None:
     if args.fp16:  # from the portable fp32 graph, not the ORT-optimized one
         print("-------- Converting to fp16...")
         output_fp16 = filename + "_fp16" + extension
-        dysample = [n for n, m in model.named_modules() if isinstance(m, DySample)]
-        to_fp16(output_fp32, output_fp16, dysample)
+        named = dict(model.named_modules())
+        dysample = [n for n, m in named.items() if isinstance(m, DySample)]
+        to_fp16(output_fp32, output_fp16, dysample, named)
         if args.nocheck is False:
             assert_verify(args, output_fp16, model, fp16=True)
         print(f"-------- Half-precision model saved at: {output_fp16}.")
