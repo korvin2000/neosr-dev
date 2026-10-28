@@ -7,6 +7,24 @@ from torch import Tensor
 from torch.optim.optimizer import Optimizer
 
 
+@torch.no_grad()
+def swap_sf_weights(opt: Optimizer, train: bool) -> None:
+    """Schedule-free y (train) <-> x (eval) swap, one foreach lerp per group:
+    eval x = y + (1 - 1/b1)(z - y), train y = x + (1 - b1)(z - x). Groups without
+    schedule_free (adan_sf) and parameters without z (never stepped) stay as they are."""
+    for group in opt.param_groups:
+        if group.get("schedule_free", True) and group["train_mode"] != train:
+            beta1 = group["betas"][0]
+            ps = [p for p in group["params"] if "z" in opt.state[p]]
+            if ps:
+                torch._foreach_lerp_(
+                    ps,
+                    [opt.state[p]["z"] for p in ps],
+                    1 - beta1 if train else 1 - 1 / beta1,
+                )
+            group["train_mode"] = train
+
+
 class adamw_sf(Optimizer):
     r"""Schedule-Free AdamW
     As the name suggests, no scheduler is needed with this optimizer.
@@ -87,28 +105,10 @@ class adamw_sf(Optimizer):
         super().add_param_group(param_group)
 
     def eval(self) -> None:
-        for group in self.param_groups:
-            train_mode = group["train_mode"]
-            beta1, _ = group["betas"]
-            if train_mode:
-                for p in group["params"]:
-                    state = self.state[p]
-                    if "z" in state:
-                        # Set p.data to x
-                        p.data.lerp_(end=state["z"], weight=1 - 1 / beta1)
-                group["train_mode"] = False
+        swap_sf_weights(self, train=False)
 
     def train(self) -> None:
-        for group in self.param_groups:
-            train_mode = group["train_mode"]
-            beta1, _ = group["betas"]
-            if not train_mode:
-                for p in group["params"]:
-                    state = self.state[p]
-                    if "z" in state:
-                        # Set p.data to y
-                        p.data.lerp_(end=state["z"], weight=1 - beta1)
-                group["train_mode"] = True
+        swap_sf_weights(self, train=True)
 
     def step(self, closure: Callable[..., Any] | None = None) -> float:  # type: ignore[reportIncompatibleMethodOverride,override]
         """Performs a single optimization step.

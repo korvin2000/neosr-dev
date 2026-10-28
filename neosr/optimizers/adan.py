@@ -25,7 +25,6 @@ def _single_tensor_adan(
     weight_decay: float,
     eps: float,
     no_prox: bool,
-    clip_global_grad_norm: Tensor | float,
 ) -> None:
     for i, param in enumerate(params):
         grad = grads[i]
@@ -33,8 +32,6 @@ def _single_tensor_adan(
         exp_avg_sq = exp_avg_sqs[i]
         exp_avg_diff = exp_avg_diffs[i]
         neg_grad_or_diff = neg_pre_grads[i]
-
-        grad.mul_(clip_global_grad_norm)
 
         # for memory saving, we use `neg_grad_or_diff`
         # to get some temp variable in a inplace way
@@ -82,12 +79,9 @@ def _multi_tensor_adan(
     weight_decay: float,
     eps: float,
     no_prox: bool,
-    clip_global_grad_norm: Tensor | float,
 ) -> None:
     if len(params) == 0:
         return
-
-    torch._foreach_mul_(grads, clip_global_grad_norm)
 
     # for memory saving, we use `neg_pre_grads`
     # to get some temp variable in a inplace way
@@ -125,6 +119,61 @@ def _multi_tensor_adan(
     torch._foreach_add_(neg_pre_grads, grads, alpha=-1.0)
 
 
+_ADAN_STATE = ("exp_avg", "exp_avg_sq", "exp_avg_diff", "neg_pre_grad")
+
+
+def clip_grad_norm_(groups: list[dict[str, Any]], max_norm: float) -> None:
+    """Optional optimizer-level clip (0 = off; the neosr trainer already clips with train.grad_clip):
+    one _foreach_norm and one 0-dim coefficient for all groups; no .item(), so no host sync."""
+    if max_norm <= 0:
+        return
+    grads = [p.grad for g in groups for p in g["params"] if p.grad is not None]
+    if not grads:
+        return
+    norm = torch.linalg.vector_norm(torch.stack(torch._foreach_norm(grads)))
+    torch._foreach_mul_(
+        grads, torch.clamp(max_norm / (norm + groups[-1]["eps"]), max=1.0)
+    )
+
+
+def adan_group_step(
+    state: dict[Tensor, dict[str, Tensor]],
+    group: dict[str, Any],
+    lr: float,
+    no_prox: bool,
+    foreach: bool,
+) -> None:
+    """One plain Adan step of a group whose "step" is already advanced; shared with adan_sf(schedule_free=False)."""
+    params = [p for p in group["params"] if p.grad is not None]
+    if not params:
+        return
+    for p in params:
+        s = state[p]
+        if len(s) == 0:
+            s["exp_avg"] = torch.zeros_like(p)
+            s["exp_avg_sq"] = torch.zeros_like(p)
+            s["exp_avg_diff"] = torch.zeros_like(p)
+        if "neg_pre_grad" not in s or group["step"] == 1:
+            s["neg_pre_grad"] = -p.grad
+    states = [state[p] for p in params]
+    beta1, beta2, beta3 = group["betas"]
+    (_multi_tensor_adan if foreach else _single_tensor_adan)(
+        params,
+        [p.grad for p in params],
+        *([s[k] for s in states] for k in _ADAN_STATE),
+        beta1=beta1,
+        beta2=beta2,
+        beta3=beta3,
+        bias_correction1=1.0 - beta1 ** group["step"],
+        bias_correction2=1.0 - beta2 ** group["step"],
+        bias_correction3_sqrt=math.sqrt(1.0 - beta3 ** group["step"]),
+        lr=lr,
+        weight_decay=group["weight_decay"],
+        eps=group["eps"],
+        no_prox=no_prox,
+    )
+
+
 class adan(Optimizer):
     """'Adan: Adaptive Nesterov Momentum Algorithm for Faster Optimizing Deep Models':
         https://arxiv.org/abs/2208.06677.
@@ -133,17 +182,18 @@ class adan(Optimizer):
     ---------
         params (iterable): iterable of parameters to optimize or
             dicts defining parameter groups.
-        lr (float, optional): learning rate. (default: 1e-3)
+        lr (float, optional): learning rate. (default: 5e-4)
         betas (Tuple[float, float, float], optional): coefficients used for
             first- and second-order moments. (default: (0.98, 0.92, 0.99))
         eps (float, optional): term added to the denominator to improve
             numerical stability. (default: 1e-8)
         weight_decay (float, optional): decoupled weight decay
-            (L2 penalty) (default: 0)
+            (L2 penalty) (default: 0.02)
         max_grad_norm (float, optional): value used to clip
-            global grad norm (default: 0.0 no clip)
+            global grad norm (default: 0.0 no clip; the trainer
+            already clips with train.grad_clip)
         no_prox (bool): how to perform the decoupled weight decay
-            (default: False)
+            (default: True)
         foreach (bool): if True would use torch._foreach implementation.
             It's faster but uses slightly more memory. (default: True)
 
@@ -198,94 +248,15 @@ class adan(Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
-        if self.defaults["max_grad_norm"] > 0:
-            device = self.param_groups[0]["params"][0].device
-            global_grad_norm = torch.zeros((), device=device)
-            for group in self.param_groups:
-                for p in group["params"]:
-                    if p.grad is not None:
-                        grad = p.grad
-                        global_grad_norm.add_(grad.pow(2).sum())
-
-            global_grad_norm = torch.sqrt(global_grad_norm)
-
-            # stays a 0-dim tensor and max_grad_norm a python float:
-            # .item() or torch.tensor(..., device=cuda) would force a host sync every step
-            clip_global_grad_norm: Tensor | float = torch.clamp(
-                self.defaults["max_grad_norm"] / (global_grad_norm + self.param_groups[-1]["eps"]),
-                max=1.0,
-            )
-        else:
-            clip_global_grad_norm = 1.0
-
+        clip_grad_norm_(self.param_groups, self.defaults["max_grad_norm"])
         for group in self.param_groups:
-            params_with_grad = []
-            grads = []
-            exp_avgs = []
-            exp_avg_sqs = []
-            exp_avg_diffs = []
-            neg_pre_grads = []
-
-            beta1, beta2, beta3 = group["betas"]
             # assume same step across group now to simplify things
             # per parameter step can be easily support
             # by making it tensor, or pass list into kernel
-            if "step" in group:
-                group["step"] += 1
-            else:
-                group["step"] = 1
-
-            bias_correction1 = 1.0 - beta1 ** group["step"]
-            bias_correction2 = 1.0 - beta2 ** group["step"]
-            bias_correction3 = 1.0 - beta3 ** group["step"]
-
-            for p in group["params"]:
-                if p.grad is None:
-                    continue
-                params_with_grad.append(p)
-                grads.append(p.grad)
-
-                state = self.state[p]
-                if len(state) == 0:
-                    state["exp_avg"] = torch.zeros_like(p)
-                    state["exp_avg_sq"] = torch.zeros_like(p)
-                    state["exp_avg_diff"] = torch.zeros_like(p)
-
-                if "neg_pre_grad" not in state or group["step"] == 1:
-                    state["neg_pre_grad"] = p.grad.clone().mul_(-clip_global_grad_norm)
-
-                exp_avgs.append(state["exp_avg"])
-                exp_avg_sqs.append(state["exp_avg_sq"])
-                exp_avg_diffs.append(state["exp_avg_diff"])
-                neg_pre_grads.append(state["neg_pre_grad"])
-
-            if not params_with_grad:
-                continue
-
-            kwargs = {
-                "params": params_with_grad,
-                "grads": grads,
-                "exp_avgs": exp_avgs,
-                "exp_avg_sqs": exp_avg_sqs,
-                "exp_avg_diffs": exp_avg_diffs,
-                "neg_pre_grads": neg_pre_grads,
-                "beta1": beta1,
-                "beta2": beta2,
-                "beta3": beta3,
-                "bias_correction1": bias_correction1,
-                "bias_correction2": bias_correction2,
-                "bias_correction3_sqrt": math.sqrt(bias_correction3),
-                "lr": group["lr"],
-                "weight_decay": group["weight_decay"],
-                "eps": group["eps"],
-                "no_prox": group["no_prox"],
-                "clip_global_grad_norm": clip_global_grad_norm,
-            }
-
-            if group["foreach"]:
-                _multi_tensor_adan(**kwargs)
-            else:
-                _single_tensor_adan(**kwargs)
+            group["step"] = group.get("step", 0) + 1
+            adan_group_step(
+                self.state, group, group["lr"], group["no_prox"], group["foreach"]
+            )
 
         return loss
 

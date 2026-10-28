@@ -223,6 +223,17 @@ target = "lq"         # reference: "gt" (default) or "lq" = bicubic-upscaled lq 
   configured scheduler; the schedule-free ones count their applied steps); the logged lr includes it. With a
   schedule-free optimizer and no EMA, validation and exports use the evaluation (x) weights; training resumes
   from the training weights. `[train.scheduler]` (`multisteplr` or `cosineannealing`) applies to every optimizer.
+  Schedule-free `adan_sf` is Schedule-Free AdamW with Adan's direction: `y` and `z` take the same step
+  `lr * min(t / warmup_steps, 1) * sqrt(1-b3^t)` along `(g + b2/(1-b2^t) v) / (sqrt(n) + eps) + weight_decay * y`,
+  where `v` is the EMA of the gradient difference
+  and `n` the second moment of the extrapolated gradient `g + b2 (g - g_prev)`; Adan's first moment is replaced
+  by the schedule-free interpolation (`b1`). (Earlier versions moved `z` with the raw gradient: the first step
+  did not move the weights and the eval weights moved uphill.) `betas = [b1, 0, b3]` drops the difference
+  term: exactly `adamw_sf` with `betas = [b1, b3]`, 2 instead of 4 state buffers per parameter.
+  `schedule_free = false` is plain Adan with warmup. `max_grad_norm` (default 0) is an extra optimizer-side
+  clip; the trainer already clips with `train.grad_clip`. A schedule-free `adan_sf` `.state` saved before this
+  fix cannot be resumed (configuration error): start a new run with `path.pretrain_network_g` (and `_d`) set to
+  its `net_g`/`net_d` `.pth`.
 - **Seeds.** `manual_seed` seeds the RNGs; without it a random seed is drawn and logged. `deterministic = true`
   selects deterministic algorithms (cuDNN benchmark off, `use_deterministic_algorithms`, filled uninitialised
   memory), which is often slower. Expandable allocator segments are on unless `PYTORCH_ALLOC_CONF` is set.
