@@ -24,27 +24,43 @@ STATE_FORMAT = 2
 _PREFIXES = ("module.", "_orig_mod.")
 
 
+def _strip(key: str) -> str:
+    while key.startswith(_PREFIXES):
+        key = key.split(".", 1)[1]
+    return key
+
+
+def _keep_metadata(src: Mapping, out: OrderedDict, rename=lambda k: k) -> OrderedDict:
+    """Carry state_dict `_metadata` (per-module versions that _load_from_state_dict remaps read) over."""
+    meta = getattr(src, "_metadata", None)
+    if meta is not None:
+        # a wrapper's root module path ("module", "_orig_mod") strips to the network root ""
+        out._metadata = OrderedDict(  # type: ignore[attr-defined]
+            (rename(k + "." if k else k).removesuffix("."), v) for k, v in meta.items()
+        )
+    return out
+
+
 def strip_prefixes(sd: Mapping[str, Any]) -> OrderedDict:
     """Drop any number of leading DDP/compile prefixes and swa's `n_averaged`."""
     out: OrderedDict = OrderedDict()
     for key, v in sd.items():
-        k = key
-        while k.startswith(_PREFIXES):
-            k = k.split(".", 1)[1]
+        k = _strip(key)
         if k == "n_averaged":
             continue
         if k in out:
             msg = f"prefix stripping collides on {k!r}"
             raise KeyError(msg)
         out[k] = v
-    return out
+    return _keep_metadata(sd, out, _strip)
 
 
 def cpu_copy(sd: Mapping[str, torch.Tensor]) -> OrderedDict:
-    return OrderedDict(
+    out = OrderedDict(
         (k, v.detach().to("cpu", memory_format=torch.contiguous_format, copy=True))
         for k, v in sd.items()
     )
+    return _keep_metadata(sd, out)
 
 
 def read_weights(path: str | Path, param_key: str | None = None) -> OrderedDict:
@@ -76,7 +92,7 @@ def load_weights(
     """strict: exact names and shapes. Relaxed: drop shape mismatches, list missing/unexpected keys."""
     if not strict:
         own = net.state_dict()
-        sd = OrderedDict(sd)
+        sd = _keep_metadata(sd, OrderedDict(sd))
         for k in [k for k in sd if k in own and own[k].shape != sd[k].shape]:
             log.warning(
                 f"shape mismatch, skipped {k}: {tuple(sd[k].shape)} -> {tuple(own[k].shape)}"

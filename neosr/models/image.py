@@ -165,6 +165,7 @@ class image(base):
         self.clamp = tr.get("clamp", True)
         self.aug, self.aug_prob = ds.get("augmentation"), ds.get("aug_prob")
         self.aug_multi_prob = ds.get("aug_multi_prob", 0.3)
+        self.aug_antialias = ds.get("aug_antialias", False)
         if self.aug is not None and list(self.aug) == ["none"]:
             self.aug = None
 
@@ -308,6 +309,7 @@ class image(base):
                 augs=self.aug,
                 prob=self.aug_prob,
                 multi_prob=self.aug_multi_prob,
+                antialias=self.aug_antialias,
             )
         self.lq = lq.contiguous(memory_format=self.mf)
         self.gt = gt.contiguous(memory_format=self.mf)

@@ -413,11 +413,6 @@ def test_legacy_temperature_remap_only_for_legacy_files(name: str) -> None:
     assert all(t.eq(1 / 8).all() for t in temps)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="handoff I1: checkpoint.cpu_copy/strip_prefixes/load_weights drop the state dict "
-    "_metadata, so an untrained current export reads back as legacy",
-)
 @pytest.mark.parametrize("name", ["asid", "ditn"])
 def test_current_export_round_trip_is_identity(tmp_path, name: str) -> None:
     net = _build(name)

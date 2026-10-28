@@ -110,6 +110,8 @@ SCHEMA: dict[str, dict[str, Any]] = {
         "augmentation": list,
         "aug_prob": list,
         "aug_multi_prob": float,
+        "aug_antialias": bool,
+        "tight_canvas": bool,
         "use_hflip": bool,
         "use_rot": bool,
         "color": str,

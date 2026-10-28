@@ -56,7 +56,15 @@ class dists_loss(Loss):
         super().__init__()
         self.as_loss = as_loss
 
-        vgg_pretrained_features = models.vgg16(weights="DEFAULT").features
+        # only the feature stages are used: no 120M-parameter classifier is built or initialised
+        with torch.device("meta"):
+            vgg_pretrained_features = models.vgg16(weights=None).features
+        vgg_pretrained_features.to_empty(device="cpu")
+        vgg_sd = models.VGG16_Weights.DEFAULT.get_state_dict(progress=False)
+        vgg_pretrained_features.load_state_dict(
+            {k[9:]: v for k, v in vgg_sd.items() if k.startswith("features.")}
+        )
+        del vgg_sd
         self.stage1 = torch.nn.Sequential()
         self.stage2 = torch.nn.Sequential()
         self.stage3 = torch.nn.Sequential()

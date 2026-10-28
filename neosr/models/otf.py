@@ -20,14 +20,20 @@ class otf(image):
             cfg = opt["datasets"]["train"]
             self.patch_size = cfg["patch_size"]
             self.degrader = Degrader(cfg, scale=self.scale, device=self.device)
+            # an RGB gt is the dataset's 8-bit decode: the pool stores it exactly as uint8
             self.pool = PairPool(
-                cfg.get("queue_size", 180), cfg["batch_size"], device=self.device
+                cfg.get("queue_size", 180),
+                cfg["batch_size"],
+                device=self.device,
+                gt_8bit=not self.degrader.gray,
             )
 
     @torch.no_grad()  # not inference_mode: the batch must stay usable by autograd
     def feed_data(self, data: dict[str, Any]) -> None:
         gt = data["gt"].to(self.device, non_blocking=True)
-        lq = self.degrader(gt, data["kernel1"], data["kernel2"], data["sinc_kernel"])
+        gt, lq = self.degrader.degrade(
+            gt, data["kernel1"], data["kernel2"], data["sinc_kernel"]
+        )
         # patch_size is the lq patch size
         gt, lq = paired_random_crop([gt], lq, self.patch_size, self.scale)
         self._set_batch(*self.pool(lq, gt))

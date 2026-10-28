@@ -124,7 +124,8 @@ class DySample(nn.Module):
             .flatten(0, 1)
         )
         # autocast promotes x to the fp32 grid; a half/bf16 net casts the finished grid once
-        if not torch.is_autocast_enabled(x.device.type):
+        # (the meta device used by census tests has no autocast state)
+        if x.device.type == "meta" or not torch.is_autocast_enabled(x.device.type):
             coords = coords.to(x.dtype)
         output = F.grid_sample(
             x.reshape(B * self.groups, -1, H, W),

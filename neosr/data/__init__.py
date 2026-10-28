@@ -50,7 +50,8 @@ def build_dataloader(
     sampler: Sampler | None = None,
 ) -> DataLoader:
     """Train: `batch_size` and `num_worker_per_gpu` (default 4, "auto": `auto_workers`) per process,
-    shuffled unless `sampler` is given. Val/test: batch 1 in the main process.
+    shuffled unless `sampler` is given. Val/test: batch 1, in order; `num_worker_per_gpu` (default 0:
+    the main process) lets test.py decode the next images while the GPU runs.
 
     The loader generator, seeded `runtime.seed + runtime.rank`, drives shuffling and the per-epoch
     worker seeds.
@@ -60,12 +61,11 @@ def build_dataloader(
         msg = f"Wrong dataset phase: {phase}. Supported ones are 'train', 'val' and 'test'."
         raise ValueError(msg)
     train = phase == "train"
-    workers, batch_size = 0, 1
+    workers, batch_size = cfg.get("num_worker_per_gpu", 4 if train else 0), 1
+    if workers == "auto":
+        workers = auto_workers(runtime.world_size)
+        logging.getLogger("neosr").info(f"num_worker_per_gpu auto: {workers}")
     if train:
-        workers = cfg.get("num_worker_per_gpu", 4)
-        if workers == "auto":
-            workers = auto_workers(runtime.world_size)
-            logging.getLogger("neosr").info(f"num_worker_per_gpu auto: {workers}")
         batch_size = cfg["batch_size"]
     return DataLoader(
         dataset,
