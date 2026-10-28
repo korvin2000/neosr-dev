@@ -183,6 +183,22 @@ def test_ldl_box_variance_is_never_negative():
     assert (loss.get_local_weights(flat) >= 0).all()
 
 
+def test_ldl_box_variance_survives_a_biased_flat_residual():
+    # m2 - m1^2 in fp32 turned a constant 2.7 into variance 6e-6 and changed this loss ~20x
+    loss = build_loss({"type": "ldl_loss"})
+    assert loss.get_local_weights(torch.full((1, 1, 16, 16), 2.7)).max() < 1e-12
+    torch.manual_seed(0)
+    gt = torch.zeros(2, 3, 32, 32)
+    sr = 0.9 + 1e-4 * torch.randn(2, 3, 32, 32)
+    # a flat region next to a biased one
+    sr[..., :16] = 1e-4 * torch.randn(2, 3, 32, 16).abs()
+    for pred in (sr, sr[..., 16:].contiguous()):
+        v, g = grads_of(loss, pred, gt[..., : pred.shape[-1]])
+        v_old, g_old = grads_of(old_ldl(), pred, gt[..., : pred.shape[-1]])
+        torch.testing.assert_close(v, v_old, rtol=1e-4, atol=0)
+        torch.testing.assert_close(g, g_old, rtol=1e-4, atol=1e-11)
+
+
 # ---- L-06 MS-SSIM: separable window, one filter call per side ------------------------------------
 
 
@@ -673,3 +689,28 @@ def test_term_grads_skips_inactive_terms(tmp_path):
     assert only["l_g_pix"]["share"] == pytest.approx(1.0)
     assert only["l_g_pix"]["cos"] == pytest.approx(1.0)
     assert set(term_grads(m, model_batches(1), it=6)) == {"l_g_pix", "l_g_gan"}
+
+
+def test_term_grads_reports_an_idle_generator(tmp_path):
+    from scripts.term_grads import term_grads  # ruff: ignore[import-outside-top-level]
+
+    opt = model_opt(tmp_path, d=True)
+    del opt["train"]["pixel_opt"]  # GAN-only
+    opt["train"]["gan_opt"]["start_iter"] = 5
+    m = build_model_seeded(opt)
+    assert term_grads(m, model_batches(1)) == {}  # update 1: no G term is active
+    assert set(term_grads(m, model_batches(1), it=6)) == {"l_g_gan"}
+
+
+def test_term_grads_zero_gradients_have_zero_share(tmp_path):
+    from scripts.term_grads import term_grads  # ruff: ignore[import-outside-top-level]
+
+    m = build_model_seeded(model_opt(tmp_path))
+    batch = model_batches(1)[0]
+    m.net_g.eval()
+    with torch.no_grad():
+        batch["gt"] = m.net_g(batch["lq"]).clamp(1 / 255, 1)  # L1 = 0 here
+    m.net_g.train()
+    stats = term_grads(m, [batch])
+    assert stats["l_g_pix"]["norm"] == 0
+    assert stats["l_g_pix"]["share"] == 0

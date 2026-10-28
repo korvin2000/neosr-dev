@@ -32,12 +32,15 @@ from neosr.runtime import setup_runtime  # ruff: ignore[module-import-not-at-top
 def term_grads(model, batches, it: int | None = None) -> dict[str, dict[str, float]]:
     """{log key: {value, norm, share, cos}} of the G terms active at update `it` (default: the next
     update), averaged over `batches`. Parameters, optimizer state and clocks are left as they were
-    (train-mode forwards still move buffers: BN statistics, spectral-norm vectors)."""
+    (train-mode forwards still move buffers: BN statistics, spectral-norm vectors). {} when no G
+    term is active at `it`."""
     phase, rows = model.g, []
 
     def measure(ctx: Context) -> None:
         # Loss.active (PLAN interface 1) where present: an inactive term is not part of this update
         terms = [t for t in phase.terms if getattr(t, "active", lambda _: True)(ctx.it)]
+        if not terms:
+            return  # G is idle at this update (e.g. a GAN-only objective before start_iter)
         with torch.autocast(**phase.autocast):
             values = [t.compute(ctx) for t in terms]
         scale = phase.scaler.get_scale() if phase.scaler.is_enabled() else 1.0  # fp16
@@ -53,11 +56,13 @@ def term_grads(model, batches, it: int | None = None) -> dict[str, dict[str, flo
             grads.append(torch.cat(flat) / scale)
         total = torch.stack(grads).sum(0)
         sq = torch.stack([g.square().sum() for g in grads])
+        # all-zero gradients: shares 0, not NaN
+        denom = sq.sum().clamp_min(torch.finfo(sq.dtype).tiny)
         rows.append({
             t.log_key: {
                 "value": float(v.detach()),
                 "norm": float(s.sqrt()),
-                "share": float(s / sq.sum()),
+                "share": float(s / denom),
                 "cos": float(F.cosine_similarity(g, total, dim=0)),
             }
             for t, v, g, s in zip(terms, values, grads, sq, strict=True)
@@ -73,6 +78,8 @@ def term_grads(model, batches, it: int | None = None) -> dict[str, dict[str, flo
             model.optimize_parameters()
     finally:
         model.update, model.micro, model.d, phase.backward, phase.step = saved
+    if not rows:
+        return {}  # no active G term at this update
     n = len(rows)  # the same terms on every batch: they depend on `it` only
     mean = {k: {s: sum(r[k][s] for r in rows) / n for s in rows[0][k]} for k in rows[0]}
     return dict(sorted(mean.items(), key=lambda kv: -kv[1]["share"]))
@@ -112,6 +119,10 @@ def main(argv: list[str] | None = None) -> None:
     ds_cfg = cfg["datasets"]["train"]
     loader = build_dataloader(build_dataset(ds_cfg), ds_cfg, runtime=rt)
     stats = term_grads(model, islice(loader, args.batches), args.iter)
+    if not stats:
+        at = model.update + 1 if args.iter is None else args.iter
+        print(f"no active generator term at update {at}")
+        return
 
     print(f"\n{'term':<16}{'value':>12}{'|g|':>12}{'share':>10}{'cos(g, total)':>15}")
     for key, s in stats.items():
