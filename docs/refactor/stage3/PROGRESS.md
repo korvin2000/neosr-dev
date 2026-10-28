@@ -273,3 +273,28 @@ Tests as in session 4 (main checkout venv, `PYTHONPATH` = worktree, `CUDA_VISIBL
   `val8`; visual set of 16 dev tiles + 4 real-LQ crops (`split/visual.txt`). Margins and decision rules predeclared in
   `r3gan/RESULTS.md` section 1 before any A/B run. Harness: `experiments/r3gan_ab/harness` (gitignored; per-image metric
   capture for paired differences). Shared non-GAN pretrain P0 (20k) launched.
+
+### PAUSED 2026-10-28 ~18:05 (owner's session limit) — resume here
+- Committed and pushed: R1 a71a7a4, R2 9c4cca2, R3 504ad50, R5 split + predeclared margins 95486cd/eca16c3/fb14a06.
+  Full CPU suite once on R3 (49 files): 2047 passed, 0 failed, 377 skipped (CUDA/fixtures).
+- Running when paused: the shared non-GAN pretrain P0 (20k, GPU), which finishes by itself and its launcher copies
+  `runs/P0_pretrain/experiments/P0_pretrain/models/net_g_20000.pth` to `runs/P0_pretrain/pretrain_g.pth` (the EMA export;
+  check `done.json` and the 20000 lines in `metrics.jsonl`; if missing, rerun `harness/launch.sh P0_pretrain`).
+- Harness (gitignored, `experiments/r3gan_ab/harness/`): run_ab.py, mkcfg.py (all arms incl. Q4_* and B_r3gan_nopen;
+  configs already in `cfg/`), launch.sh (sequential, capped, refuses a busy GPU, requires done.json), r4.sh, parity.py,
+  qualify.py, visual.py, analyze.py; `r5/` = source-recovery scripts (overlap_gpu.py, edges.py, fuzzy.py), test runners.
+  Data: `experiments/r3gan_ab/data/` (symlinked splits, visual_lq, sources.json). Codex reviewed the harness; its
+  fixes are applied (scoped capture, completion check, manifest guards, R4 failure propagation and pass/fail rules).
+- Next, in order (one GPU job at a time, `nvidia-smi` first):
+  1. `python harness/r5/fuzzy.py docs/refactor/stage3/r3gan/split harness/r5/overlap_all.json <out.json>` (GPU, a few
+     minutes): fuzzy held-out vs train leak check; put matched held-out ids (peak clearly above the random-pair p99 and
+     near the exact-overlap calibration) into `experiments/r3gan_ab/data/exclude.txt` and record it in RESULTS section 0.
+  2. `harness/r4.sh` (bench eager/compile, CUDA tests, parity at init, Q4_bf16/Q4_fp32/Q4_bf16b 2k runs, parity at the
+     trained D, `qualify.py` verdict) -> R4 numbers into PROGRESS + RESULTS; if FAIL set `penalty_fp32 = true` in the
+     template (+ commit); if r3gan exceeds +30 % ms or +1.5 GB vs A0, bench slim widths / group_width 32.
+  3. Round 1: `harness/launch.sh A0_template A1_nogan R1_patch_g1 R2_patch_g3 R3_patch_g1_w01 R4_scalar_g40 R5_scalar_g4`
+     (~40 min each); per arm `visual.py <repo> runs/<arm> 5000 10000 20000`, term_grads at 0/10k/20k (separate process),
+     `analyze.py A1_nogan A0_template R...` and vs A0; then round 2 on the best R, then seed 2 (DESIGN section 4).
+  4. RESULTS.md with the gate, final report (per item commit/tests/Codex verdict; per arm numbers; recommendation).
+- Open points for the report: the `origin` remote URL in `.git/config` embeds a GitHub token in plain text (owner should
+  rotate it and use a credential helper); visual-set categories adapted to the owner's close-up people data.
