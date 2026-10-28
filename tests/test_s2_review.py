@@ -18,7 +18,12 @@ from neosr.cli import convert_args
 from neosr.config import ConfigError, load_config, validate_train
 from neosr.losses.base import restoring_clamp
 from neosr.losses.consistency_loss import consistency_loss
-from neosr.metrics.calculate import _ssim_kernel, calculate_ssim_pt
+from neosr.metrics.calculate import (
+    _metric_net,
+    _metric_nets,
+    _ssim_kernel,
+    calculate_ssim_pt,
+)
 from neosr.optimizers import adamw_sf, adan, adan_sf
 from neosr.optimizers.adan import clip_grad_norm_
 from neosr.utils import get_root_logger
@@ -335,6 +340,16 @@ def test_fp16_export_keeps_dysample_in_fp32_at_a_wide_input(tmp_path, onnx_deps)
 
 
 # ---------------------------------------------------------------------------- 2 learned metric OOM
+def test_metric_net_reunites_a_net_split_by_a_failed_move(monkeypatch):
+    net = nn.Sequential(nn.Linear(2, 2), nn.Linear(2, 2))
+    net[1].to("meta")  # as if the move to the device ran out of memory after net[0]
+    moves = []
+    monkeypatch.setattr(net, "to", lambda d: moves.append(d) or net)
+    monkeypatch.setitem(_metric_nets, "split", net)
+    assert _metric_net("split", torch.device("cpu")) is net
+    assert moves == [torch.device("cpu")]
+
+
 def test_learned_metric_oom_falls_back_to_the_cpu_per_image(
     tmp_path, monkeypatch, caplog
 ):

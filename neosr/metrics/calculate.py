@@ -340,7 +340,8 @@ def _metric_net(name: str, device: torch.device) -> nn.Module:
     if net is None:
         net = _metric_builders[name]().eval().requires_grad_(False)
         _metric_nets[name] = net
-    if next(net.parameters()).device != device:
+    # every tensor: a move that ran out of memory midway leaves the net split across devices
+    if any(t.device != device for t in (*net.parameters(), *net.buffers())):
         net.to(device)
     return net
 
