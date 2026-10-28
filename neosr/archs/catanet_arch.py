@@ -471,6 +471,13 @@ class catanet(nn.Module):
         return x
 
     def forward(self, x):
+        h, w = x.shape[2:]
+        # LRSA crops patch_size windows: a side between ps/2 and ps lost most of its crop
+        # (negative slice start) and below 8 px the k-means pad failed; pad up, crop back
+        m = max(self.patch_size)
+        ph, pw = max(m - h, 0), max(m - w, 0)
+        if ph or pw:
+            x = F.pad(x, (0, pw, 0, ph), "reflect" if ph < h and pw < w else "replicate")
         if self.upscale != 1:
             base = F.interpolate(
                 x, scale_factor=self.upscale, mode="bilinear", align_corners=False
@@ -486,4 +493,4 @@ class catanet(nn.Module):
             out = x
         else:
             out = self.lrelu(self.pixel_shuffle(self.upconv(x)))
-        return self.last_conv(out) + base
+        return (self.last_conv(out) + base)[:, :, : h * self.upscale, : w * self.upscale]
