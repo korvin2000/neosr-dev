@@ -7,7 +7,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from neosr.archs.arch_util import DySample
-from neosr.archs.span_arch import param_key
+from neosr.archs.span_arch import cache_stale, fuse_online, param_key
 
 
 class Interpolate(nn.Module):
@@ -141,11 +141,11 @@ class OmniShift(nn.Module):
         return self
 
     def forward(self, x):
-        if self.training or torch.compiler.is_compiling():
+        if fuse_online(self):
             # online re-parameterisation: alpha-weighted identity + dw 1x1/3x3/5x5 is one dw 5x5,
             # the same function of (x, params), so outputs and gradients match the branch form
             return F.conv2d(x, self.fused_kernel(), padding=2, groups=self.conv5x5.groups)
-        if self._key != param_key(self):
+        if cache_stale(self):
             self.reparam_5x5()
         return self.conv5x5_reparam(x)
 

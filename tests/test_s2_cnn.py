@@ -242,6 +242,25 @@ def _ln_manual(m, x):
     )
 
 
+def _bf16_errors(m, x, g, fwd, ref=None, ref_only=False):
+    """Relative L2 errors of output, x gradient and every parameter gradient of fwd under bf16
+    autocast against the fp64 module (upstream gradient g, non-uniform)."""
+
+    def run(mod, f, xx, *, ac):
+        xx = xx.detach().requires_grad_()
+        ps = [p for p in mod.parameters() if p.requires_grad]
+        with torch.autocast("cpu", dtype=torch.bfloat16, enabled=ac):
+            out = f(xx)
+        grads = torch.autograd.grad(out, [xx, *ps], g.to(out.dtype))
+        return [t.detach().double() for t in (out, *grads)]
+
+    if ref_only:
+        md = copy.deepcopy(m).double()
+        return run(md, md, x.double(), ac=False)
+    got = run(m, fwd, x, ac=True)
+    return [float((a - r).norm() / r.norm()) for a, r in zip(got, ref, strict=True)]
+
+
 LAYER_NORMS = {
     "safmn": lambda c: safmn_arch.LayerNorm(c, data_format="channels_first"),
     "man": lambda c: man_arch.LayerNorm(c, data_format="channels_first"),
@@ -267,12 +286,15 @@ def test_channels_first_layer_norm(name: str, fmt) -> None:
     torch.testing.assert_close(out, ref, rtol=1e-5, atol=1e-5)
     for g, r in zip(grads, ref_grads, strict=True):
         torch.testing.assert_close(g, r, rtol=1e-4, atol=1e-5)
+    # bf16 autocast against fp64: output, x and weight gradients gain an order of magnitude; the
+    # bias gradient (exact before: a plain sum) is now at bf16 rounding
     xb = (torch.randn(2, 16, 8, 8) + 16 * torch.randn(2, 1, 8, 8)).to(torch.bfloat16)
-    exact = _ln_manual(copy.deepcopy(m).double(), xb.double())
-    with torch.autocast("cpu", dtype=torch.bfloat16):
-        new, old = m(xb), _ln_manual(m, xb)
-    err = [float((y.double() - exact).norm() / exact.norm()) for y in (new, old)]
-    assert err[0] < 4e-3 < err[1], err
+    g = torch.randn(2, 16, 8, 8)
+    exact = _bf16_errors(m, xb, g, m, ref_only=True)
+    new = _bf16_errors(m, xb, g, m, exact)
+    old = _bf16_errors(m, xb, g, lambda t: _ln_manual(m, t), exact)
+    assert max(new) < 1e-2, new
+    assert all(n < o / 2 for n, o in zip(new[:3], old[:3], strict=True)), (new, old)
 
 
 # ---------------------------------------------------------------- gradient census (A-03, A-05, A-06, A-10)
@@ -401,6 +423,29 @@ def test_fused_training_block_equals_branch_form(name: str, dtype) -> None:
         torch.testing.assert_close(g, r, **tol)
 
 
+@pytest.mark.parametrize("name", BLOCKS)
+def test_fused_training_block_under_bf16_autocast(name: str) -> None:
+    """Production autocast against fp64: output, x gradient and every parameter gradient of the
+    fused block stay at bf16 rounding and within 1.5x of the branch form's error (Conv3XC and
+    MBConv come out lower, OmniShift and the large-kernel conv about equal)."""
+    torch.manual_seed(0)
+    m = BLOCKS[name]().train()
+    with torch.no_grad():
+        for p in m.parameters():
+            if p.requires_grad:
+                p.normal_(0, 0.3)
+    x = torch.randn(2, 6, 17, 23)
+    g = torch.randn_like(m(x))
+    ref = _bf16_errors(m, x, g, m, ref_only=True)
+    fused = _bf16_errors(m, x, g, m, ref)
+    branch = _bf16_errors(m, x, g, lambda t: _branch_of(m)(m, t), ref)
+    assert max(fused) < 2e-2, fused
+    assert all(f < 1.5 * b + 1e-3 for f, b in zip(fused, branch, strict=True)), (
+        fused,
+        branch,
+    )
+
+
 REPARAM_NETS = {
     "span": {},
     "span_fast": {},
@@ -496,6 +541,40 @@ def test_eval_kernel_follows_ema_optimizer_and_load(name: str) -> None:
         torch.testing.assert_close(other(x), _fresh(other, x))
 
 
+@pytest.mark.parametrize("name", CACHED)
+def test_eval_forward_under_autograd_keeps_every_gradient(name: str) -> None:
+    """The cached deploy conv is frozen: an eval forward that autograd records runs the fused
+    kernel instead, so every branch parameter gets the train-mode gradient (fp64)."""
+    net = _net(name, **CACHED[name]).double().eval()
+    x = torch.rand(1, 3, 19, 13, dtype=torch.float64)
+    g = torch.randn_like(net(x))
+    grads = {}
+    for mode in (False, True):
+        net.train(mode).zero_grad(set_to_none=True)
+        out = net(x)
+        out.backward(g)
+        grads[mode] = (out.detach(), {n: p.grad for n, p in net.named_parameters()})
+    (out, ev), (ref, tr) = grads[False], grads[True]
+    torch.testing.assert_close(out, ref, rtol=1e-9, atol=1e-11)
+    for n, p in net.named_parameters():
+        if p.requires_grad:
+            assert ev[n] is not None, n
+            torch.testing.assert_close(ev[n], tr[n], rtol=1e-8, atol=1e-11)
+
+
+@pytest.mark.parametrize("name", CACHED)
+def test_built_under_inference_mode(name: str) -> None:
+    """Inference tensors have no version counter: the blocks re-fuse on every eval forward."""
+    x = torch.rand(1, 3, 20, 12)
+    with torch.inference_mode():
+        net = _net(name, **CACHED[name]).eval()
+        out = net(x)
+        torch.testing.assert_close(net(x), out)
+        ref = net.train()(x)
+        net.eval()
+    torch.testing.assert_close(out, ref, rtol=1e-5, atol=1e-5)
+
+
 # ---------------------------------------------------------------- ONNX export (MT-01)
 @pytest.mark.filterwarnings("ignore")
 @pytest.mark.parametrize("name", ["span", "span_fast", "spanplus", "plainusr_ultra"])
@@ -582,10 +661,25 @@ def test_flexnet_sdpa_gets_4d_inputs(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------- span_fast init (A-06)
-def test_span_fast_init_keeps_every_block_alive() -> None:
+def test_span_fast_default_init_is_the_legacy_fan_out() -> None:
+    """The A-06 init is opt-in (fan_in_init) until an A/B: by default every weight is the legacy
+    kaiming fan_out draw. Same seed, same draws: the two inits differ by std ratios only."""
+    torch.manual_seed(0)
+    old = _net("span_fast")
+    torch.manual_seed(0)
+    new = _net("span_fast", fan_in_init=True)
+    for (n, a), b in zip(old.named_parameters(), new.parameters(), strict=True):
+        if a.ndim < 2 or not a.requires_grad or "eval_conv" in n:
+            continue
+        fan_in, fan_out = nn.init._calculate_fan_in_and_fan_out(a)
+        scale = {"conv_9x9.weight": 8, "conv_cat.weight": 1 / 8}.get(n, 1)
+        torch.testing.assert_close(b, a * scale * (fan_out / fan_in) ** 0.5, msg=n)
+
+
+def test_span_fast_fan_in_init_keeps_every_block_alive() -> None:
     """fan_out init made the bias-free SPAB chain underflow to exact zeros by block 3: blocks 3-5
     and conv_2 got zero/subnormal gradients that Adam (eps 1e-8) cannot move."""
-    net = _net("span_fast").train()
+    net = _net("span_fast", fan_in_init=True).train()
     feats = []
     for b in (net.block_1, net.block_3, net.block_5):
         b.register_forward_hook(lambda _m, _i, o: feats.append(o[0].std().item()))
