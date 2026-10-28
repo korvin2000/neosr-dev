@@ -106,3 +106,19 @@ worktree `.venv` has no torch), each file in its own capped scope (`systemd-run 
   takes it); the two ctor-validation cases moved to builder-level ConfigError tests.
 - Verified: test_s3_losses (16), test_s2_losses, test_gan, test_losses, test_losses_pipeline (10 GB cap; it exceeds
   4 GB at HEAD), test_s2_integration, test_s2_review, test_registry, test_resume, test_model: green.
+
+### A5 scripts/bench.py
+- Done: builds the trainer from a TOML as train.py does (train datasets only; no run folder, state, export,
+  validation or log file) and drives it as the loop does (get_current_log whenever `update % print_freq == 0`).
+  Reports build_s, first_update_s (compile, autotuning), warm-up (default 30 updates, 60 with compile), then
+  `trials` x `updates` timed updates, each trial bracketed by one synchronize (the stage-2 harness method): median
+  ms/update with min/max; peak VRAM per scope (warm-up, timed trials, inference), peak host RSS of the main process;
+  eager inference ms of the evaluated generator under validate()'s contexts and the run's precision. Flags:
+  `--compile/--eager`, `--compile_mode`, `--precision bf16|fp16|fp32`, `--trials`, `--updates`, `--warmup`,
+  `--infer`. Last line is one JSON record.
+- Codex review: per-update synchronize removed overlap (-> trial timing); log cadence keyed on model.update and
+  applied during warm-up; first-update/warm-up/compile separated; memory scopes labelled; inference under
+  observers_frozen + no_cudnn_autotune; counts validated; RSS may be None (Windows). Not done: downloads of loss
+  weights into their caches are allowed (as in training), stated in the docstring.
+- Verified: test_s3_bench (3: CPU eager smoke incl. accumulate 2 across epochs and print_freq 3 log reads at
+  updates 3 and 6). GPU numbers are the owner's (never next to a training run).
