@@ -266,11 +266,11 @@ def _gan_bn(tmp, **kw):
 
 def test_transient_non_finite_batch_is_a_clean_skip(tmp_path):
     m = _gan_bn(tmp_path)
-    data = batches(4)
-    run(m, data[:2])
+    bs = batches(4)
+    run(m, bs[:2])
     m.get_current_log()
     g0, d0, e0 = clone(m.net_g), clone(m.net_d), clone(m.ema.module)
-    bad = {k: v.clone() for k, v in data[2].items()}
+    bad = {k: v.clone() for k, v in bs[2].items()}
     bad["lq"][0, 0, 0, 0] = math.nan  # one NaN pixel
     assert run(m, [bad]) == [True]
     assert m.g.skipped == 1 and m.d.skipped == 1
@@ -282,7 +282,7 @@ def test_transient_non_finite_batch_is_a_clean_skip(tmp_path):
     assert (log["skipped_g"], log["skipped_d"]) == (1, 1)
     assert log["nonfinite_l_g_total"] == 1 and log["nonfinite_l_g_pix"] == 1
     assert "l_g_pix" not in log and "grad_norm_g" not in log
-    run(m, data[3:])  # training goes on
+    run(m, bs[3:])  # training goes on
     log = m.get_current_log()
     assert log["skipped_g"] == 0 and not any(k.startswith("nonfinite") for k in log)
     assert not same(g0, clone(m.net_g))
@@ -852,14 +852,14 @@ def test_model_update_keeps_one_host_sync_per_phase(tmp_path, clip):
     opt["train"] |= {"clamp": "restore", "grad_clip": clip}
     cuda = Runtime(torch.device("cuda", 0), 0, 1, 0, False)
     m = build(opt, rt=cuda)
-    data = [{k: v.cuda() for k, v in b.items()} for b in batches(4)]
-    run(m, data[:3])
+    bs = [{k: v.cuda() for k, v in b.items()} for b in batches(4)]
+    run(m, bs[:3])
     torch.cuda.synchronize()
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         torch.cuda.set_sync_debug_mode("warn")
         try:
-            assert run(m, data[3:]) == [True]
+            assert run(m, bs[3:]) == [True]
         finally:
             torch.cuda.set_sync_debug_mode(0)
     syncs = [w for w in caught if "called a synchronizing" in str(w.message)]
