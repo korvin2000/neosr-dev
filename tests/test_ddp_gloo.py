@@ -125,7 +125,7 @@ def _worker(rank: int, tmp: str, device: str, out: str) -> None:
         stop.install()
         try:
             for i, x in enumerate(data):
-                if rank == 1 and i == 2 * ACC + 1:  # second micro-batch of update 3
+                if rank == 1 and i == ACC + 1:  # second micro-batch of update 2
                     os.kill(os.getpid(), signal.SIGINT)
                 s.feed_data(x)
                 if s.optimize_parameters() and stop.requested(dev):
@@ -187,4 +187,5 @@ def test_resume_on_both_ranks_equals_the_uninterrupted_run(ranks):
 def test_stop_on_one_rank_stops_both_at_the_same_update(ranks):
     (u0, m0, f0), (u1, m1, f1) = (r["stopped"] for r in ranks)
     assert (f0, f1) == (False, True)  # only rank 1 got the signal
+    # each boundary reads the flag reduced at the previous one (T-11): both stop one update later
     assert (u0, m0) == (u1, m1) == (3, 3 * ACC)
