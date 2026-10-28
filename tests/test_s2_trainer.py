@@ -674,6 +674,15 @@ def test_deterministic_keeps_the_strict_branch_and_a_user_alloc_conf(monkeypatch
     assert torch.backends.cuda.matmul.allow_fp16_accumulation
 
 
+@pytest.mark.usefixtures("restore_torch_state", "fake_gpus")
+def test_the_deprecated_alloc_conf_name_is_respected(monkeypatch):
+    monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:64")
+    runtime.setup_runtime({})
+    assert (
+        "PYTORCH_ALLOC_CONF" not in os.environ
+    )  # it would override the user's setting
+
+
 @pytest.mark.usefixtures("restore_torch_state")
 def test_use_amp_without_cuda_is_a_config_error(monkeypatch):
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)

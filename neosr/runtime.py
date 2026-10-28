@@ -73,8 +73,10 @@ def setup_runtime(cfg: dict[str, Any], *, launcher: str = "none") -> Runtime:
         os.environ.setdefault(
             "CUBLAS_WORKSPACE_CONFIG", ":4096:8"
         )  # before the first cuBLAS handle
-    # the allocation layout does not change results; a user's PYTORCH_ALLOC_CONF wins
-    os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
+    # the allocation layout does not change results; a user's setting (also the deprecated
+    # PYTORCH_CUDA_ALLOC_CONF, which PYTORCH_ALLOC_CONF would override) wins
+    if "PYTORCH_CUDA_ALLOC_CONF" not in os.environ:
+        os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
     distributed = launcher != "none"
     if distributed:
