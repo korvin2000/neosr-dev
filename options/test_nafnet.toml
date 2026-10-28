@@ -1,0 +1,22 @@
+# Results will be saved to neosr/experiments/results/
+# NAFNet is a 1x restoration network (denoise, deblur, artifact removal): scale must be 1.
+# Official weights (e.g. NAFNet-SIDD-width32.pth, NAFNet-SIDD-width64.pth) load as they are.
+
+name = "test_nafnet"
+model_type = "image"
+scale = 1
+#use_amp = true
+
+[datasets.test_1]
+name = "val_1"
+type = "single"
+dataroot_lq = 'C:\datasets\val\'
+[val]
+#tile = 256 # prefer full images: the channel attention pools globally, so tiles see other statistics
+
+[network_g]
+type = "nafnet"
+#type = "nafnet_l"
+
+[path]
+pretrain_network_g = 'C:\model.pth'

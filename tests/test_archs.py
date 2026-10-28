@@ -28,6 +28,7 @@ SIZE = {
     "lmlt_large": 64,
 }  # lmlt pads to its window only above 32 px
 UNSUPPORTED = {("swinir_large", 2): "swinir_large asserts x4 in its ctor"}
+ONLY_1X = {"nafnet", "nafnet_l"}  # 1x restoration networks
 TOO_BIG = {
     "hit_srf_large": "allocates >9.6 GiB per forward at any input size (shared 24 GiB GPU)"
 }
@@ -39,7 +40,7 @@ TRAIN_TOO_BIG = {
 def cases() -> list:
     out = []
     for name, (stem, kw) in ARCHS.items():
-        for scale in (2, 4) if kw else (None,):
+        for scale in (1,) if name in ONLY_1X else (2, 4) if kw else (None,):
             marks = []
             if (name, scale) in UNSUPPORTED:
                 marks.append(

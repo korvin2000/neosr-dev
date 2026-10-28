@@ -138,3 +138,18 @@ worktree `.venv` has no torch), each file in its own capped scope (`systemd-run 
   enabled fails backward (follow-up).
 - Verified: test_s3_archs (9), realplksr rows of test_s2_cnn/test_archs: green. Speed (LN vs GN, eager/compile) and
   the 8k A/B are the owner's GPU runs (bench.py).
+
+### A7 NAFNet (1x restoration; kept: the owner made 1x restoration a goal)
+- Done: `neosr/archs/nafnet_arch.py` from the paper and the official MIT code: SimpleGate, simplified channel
+  attention, `arch_util.LayerNorm2d` (F.layer_norm on the NHWC view, eps 1e-6) instead of the custom autograd
+  Function; enc [2,2,4,8], middle 12, dec [2,2,2,2]; pads to 2^levels and crops; `scale` must be 1 (ConfigError).
+  ARCHS rows `nafnet` (width 32: 664 keys, 29,159,715 params = the paper's 29.1M) and `nafnet_l` (64); official key
+  names (strict load of a spelled-out official key/shape table); `options/test_nafnet.toml`. Dynamic ONNX export
+  verifies at neosr's 3 shapes (different padding per shape), so no NO_ONNX/STATIC_ONLY row. `tests/test_archs.py`
+  runs 1x-only rows at scale 1.
+- Codex review: no architecture bug (forward order, dropout, zero beta/gamma, SCA, down/up convs, padded residual,
+  crop and the LayerNorm formula match the official code). Fixed: the export test now pads differently per shape
+  (4 levels); a block test with open gates against the official forward spelled out; the tiling note says to prefer
+  full images (global pooling). For the guide (A9): official NAFNet trains unclamped, neosr's default restoring clamp
+  differs (`train.clamp = false` to reproduce).
+- Verified: test_s3_nafnet (8), test_registry, test_imports, nafnet rows of test_archs (CUDA rows skip on CPU).

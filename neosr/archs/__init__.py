@@ -56,6 +56,7 @@ ARCHS: dict[str, tuple[str, str | None]] = {
     "moesr": ("moesr_arch", "scale"),
     "mosrv2": ("mosrv2_arch", "scale"),
     "msdan": ("msdan_arch", "upscale_factor"),
+    "nafnet": ("nafnet_arch", "scale"), "nafnet_l": ("nafnet_arch", "scale"),  # 1x only
     "ninasr": ("ninasr_arch", "scale"), "ninasr_b0": ("ninasr_arch", "scale"),
     "ninasr_b2": ("ninasr_arch", "scale"),
     "omnisr": ("omnisr_arch", "upsampling"),
