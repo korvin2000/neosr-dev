@@ -30,6 +30,31 @@ def default_init_weights(module_list, scale=1, bias_fill=0, **kwargs):
                     m.bias.data.fill_(bias_fill)
 
 
+@torch.no_grad()
+def icnr_(conv: nn.Conv2d, scale: int, init: Callable = nn.init.kaiming_normal_) -> None:
+    """ICNR (Aitken et al. 2017, "Checkerboard artifact free sub-pixel convolution") for a conv that
+    feeds PixelShuffle(scale): every sub-pixel phase starts from one kernel and bias, so the initial
+    upsampler is nearest-neighbour instead of a random checkerboard. Init only: no key changes."""
+    r2 = scale**2
+    base = torch.empty_like(conv.weight[::r2])
+    init(base)
+    # PixelShuffle's channel order: c * r^2 + phase
+    conv.weight.copy_(base.repeat_interleave(r2, dim=0))
+    if conv.bias is not None:
+        conv.bias.copy_(conv.bias[::r2].repeat_interleave(r2))
+
+
+class LayerNorm2d(nn.LayerNorm):
+    """LayerNorm over the channels of NCHW: F.layer_norm on the NHWC view (a view, no layout copy,
+    under channels_last; CUDA autocast runs it in fp32, and its statistics accumulate in fp32 in any
+    dtype). Keys `weight`, `bias` as nn.LayerNorm."""
+
+    def forward(self, x: Tensor) -> Tensor:
+        y = x.permute(0, 2, 3, 1)
+        y = F.layer_norm(y, self.normalized_shape, self.weight, self.bias, self.eps)
+        return y.permute(0, 3, 1, 2)
+
+
 def make_layer(basic_block, num_basic_block, **kwarg):
     """Stack identical blocks into a sequential container."""
 

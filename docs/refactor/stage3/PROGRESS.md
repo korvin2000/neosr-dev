@@ -122,3 +122,19 @@ worktree `.venv` has no torch), each file in its own capped scope (`systemd-run 
   weights into their caches are allowed (as in training), stated in the docstring.
 - Verified: test_s3_bench (3: CPU eager smoke incl. accumulate 2 across epochs and print_freq 3 log reads at
   updates 3 and 6). GPU numbers are the owner's (never next to a training run).
+
+### A6 RealPLKSR layer_norm, ICNR
+- Done: `realplksr(layer_norm=False)` / `PLKBlock(layer_norm=False)`: opt-in pre-LayerNorm on the block input
+  (`arch_util.LayerNorm2d`: F.layer_norm on the NHWC view, eps 1e-6), residual from the raw input, post-branch
+  GroupNorm -> Identity; keys `feats.N.layer_norm.{weight,bias}` only when on; the GN default and its 12 keys per block
+  untouched. `arch_util.icnr_(conv, scale, init)` (Aitken 2017: one kernel and bias per PixelShuffle phase), applied by
+  `realplksr(icnr=True)` with the arch's own trunc_normal_(0.02) (ignored with dysample). Init output std (28 blocks,
+  x4, CPU): GN 2.12, LN 0.35.
+- Codex review: spandrel 0.4.1 parity confirmed by Codex in the redux-dev env (same names, pre-block LN, raw-input
+  residual, eps 1e-6, GroupNorm replaced by Identity; strict load, fp32 max diff 1.2e-7); opset-17 exporter maps it to
+  LayerNormalization. Fixed: the docstring's autocast claim is CUDA-only; the init-std test is seeded in fork_rng;
+  added legacy GN key layout, channels_last output, LN+ICNR backward, zero-branch identity, ICNR off with dysample.
+  Not fixed (pre-existing, out of scope): PLKConv2d's eval path writes in place, so eval-mode forward with grad
+  enabled fails backward (follow-up).
+- Verified: test_s3_archs (9), realplksr rows of test_s2_cnn/test_archs: green. Speed (LN vs GN, eager/compile) and
+  the 8k A/B are the owner's GPU runs (bench.py).

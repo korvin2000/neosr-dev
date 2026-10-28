@@ -5,7 +5,7 @@ import torch
 from torch import nn
 from torch.nn.init import trunc_normal_
 
-from neosr.archs.arch_util import DySample
+from neosr.archs.arch_util import DySample, LayerNorm2d, icnr_
 
 
 class DCCM(nn.Sequential):
@@ -58,8 +58,14 @@ class PLKBlock(nn.Module):
         split_ratio: float,
         norm_groups: int,
         use_ea: bool = True,
+        layer_norm: bool = False,
     ):
         super().__init__()
+
+        # opt-in pre-LayerNorm (spandrel's key names and eps); the post-branch GroupNorm then goes
+        self.use_ln = layer_norm
+        if layer_norm:
+            self.layer_norm = LayerNorm2d(dim, eps=1e-6)
 
         # Local Texture
         self.channel_mixer = DCCM(dim)
@@ -81,12 +87,17 @@ class PLKBlock(nn.Module):
         trunc_normal_(self.refine.weight, std=0.02)
 
         # Group Normalization
-        self.norm = nn.GroupNorm(norm_groups, dim)
-        nn.init.constant_(self.norm.bias, 0)
-        nn.init.constant_(self.norm.weight, 1.0)
+        if layer_norm:
+            self.norm = nn.Identity()
+        else:
+            self.norm = nn.GroupNorm(norm_groups, dim)
+            nn.init.constant_(self.norm.bias, 0)
+            nn.init.constant_(self.norm.weight, 1.0)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x_skip = x
+        if self.use_ln:
+            x = self.layer_norm(x)
         x = self.channel_mixer(x)
         x = self.lk(x)
         x = self.attn(x)
@@ -114,6 +125,8 @@ class realplksr(nn.Module):
         norm_groups: int = 4,
         dropout: float = 0,
         dysample: bool = False,
+        layer_norm: bool = False,
+        icnr: bool = False,
     ):
         super().__init__()
 
@@ -125,7 +138,7 @@ class realplksr(nn.Module):
         self.feats = nn.Sequential(
             *[nn.Conv2d(in_ch, dim, 3, 1, 1)]
             + [
-                PLKBlock(dim, kernel_size, split_ratio, norm_groups, use_ea)
+                PLKBlock(dim, kernel_size, split_ratio, norm_groups, use_ea, layer_norm)
                 for _ in range(n_blocks)
             ]
             + [nn.Dropout2d(dropout)]
@@ -133,6 +146,10 @@ class realplksr(nn.Module):
         )
         trunc_normal_(self.feats[0].weight, std=0.02)
         trunc_normal_(self.feats[-1].weight, std=0.02)
+        if (
+            icnr and not dysample
+        ):  # opt-in: the PixelShuffle head starts as nearest-neighbour
+            icnr_(self.feats[-1], upscaling_factor, partial(trunc_normal_, std=0.02))
 
         self.repeat_op = partial(
             torch.repeat_interleave, repeats=upscaling_factor**2, dim=1
