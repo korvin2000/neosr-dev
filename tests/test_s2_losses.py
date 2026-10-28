@@ -2,6 +2,7 @@
 rewrites against in-test copies of the old kernels, and the opt-in GAN mechanisms."""
 
 import warnings
+from pathlib import Path
 
 import pytest
 import torch
@@ -228,3 +229,91 @@ def test_ff_loss_does_not_sync():
     y = torch.rand(2, 3, 64, 64, device="cuda")
     _no_sync(lambda: loss(x, y).backward())  # two .item() asserts synced per call
     assert x.grad.abs().sum() > 0
+
+
+# ---- GP-03 / L-17 FDL(DINOv2): cached position embedding, opt-in recomputation ---------------------
+
+DINO = Path(torch.hub.get_dir(), "facebookresearch_dinov2_main").is_dir()
+dino = pytest.mark.skipif(not DINO, reason="DINOv2 hub repository not cached")
+
+
+def saved_bytes(fn):
+    """Bytes of the distinct storages autograd saves for backward while fn() runs."""
+    seen = {}
+
+    def pack(t):
+        seen[t.untyped_storage().data_ptr()] = t.untyped_storage().nbytes()
+        return t
+
+    with torch.autograd.graph.saved_tensors_hooks(pack, lambda t: t):
+        out = fn()
+    return out, sum(seen.values())
+
+
+@dino
+def test_fdl_pos_encoding_cache_is_exact_and_bounded():
+    vit = build_loss({"type": "fdl_loss", "model": "dinov2"}).model.model
+    g = torch.Generator().manual_seed(0)
+
+    def tokens(h, w):
+        return torch.rand(1, 1 + (h // 14) * (w // 14), 768, generator=g)
+
+    for h, w in ((28, 42), (42, 56), (56, 28), (28, 42)):
+        x = tokens(h, w)
+        hit = vit.interpolate_pos_encoding(x, h, w)
+        assert torch.equal(hit, type(vit).interpolate_pos_encoding(vit, x, h, w))
+    assert len(vit.pos_cache) == 3  # the repeated size was a hit
+    assert not any(t.requires_grad for t in vit.pos_cache.values())
+    for h in range(14, 14 * 12, 14):
+        vit.interpolate_pos_encoding(tokens(h, 14), h, 14)
+    assert len(vit.pos_cache) == 8
+
+
+@dino
+@pytest.mark.parametrize(
+    "amp", [False, pytest.param(True, marks=cuda)], ids=["fp32", "bf16"]
+)
+def test_fdl_pos_encoding_cache_keeps_the_loss_bitwise(amp):
+    dev = "cuda" if amp else "cpu"
+    loss = build_loss({
+        "type": "fdl_loss",
+        "model": "dinov2",
+        "fp32_backbone": not amp,
+    }).to(dev)
+    loss.amp_min_size = 56  # let the small test patch take the autocast path
+    pred, gt = (t[:1, :, :56, :70] for t in make_pair("random", dev))
+    out = []
+    for cached in (True, False):
+        if not cached:
+            del loss.model.model.interpolate_pos_encoding  # back to the hub method
+        sr = pred.clone().requires_grad_()
+        with torch.autocast(dev, dtype=torch.bfloat16, enabled=amp):
+            value = loss.compute(Context(sr=sr, gt=gt, lq=gt, it=1))
+        value.backward()
+        out.append((value.detach(), sr.grad))
+    assert torch.equal(out[0][0], out[1][0])
+    assert torch.equal(out[0][1], out[1][1])
+
+
+@dino
+def test_fdl_checkpoint_is_bitwise_and_saves_memory():
+    plain = build_loss({"type": "fdl_loss", "model": "dinov2"})
+    ckpt = build_loss({"type": "fdl_loss", "model": "dinov2", "checkpoint": True})
+    pred, gt = (t[:2, :, :56, :56] for t in make_pair("random", "cpu"))
+    out = []
+    for loss in (plain, ckpt):
+        sr = pred.clone().requires_grad_()
+        value, nbytes = saved_bytes(
+            lambda loss=loss, sr=sr: loss.compute(Context(sr=sr, gt=gt, lq=gt, it=1))
+        )
+        value.backward()
+        out.append((value.detach(), sr.grad, nbytes))
+    (v0, g0, b0), (v1, g1, b1) = out
+    assert torch.equal(v0, v1)
+    assert torch.equal(g0, g1)
+    assert b1 < 0.5 * b0, (b1, b0)
+
+
+def test_fdl_checkpoint_needs_dinov2():
+    with pytest.raises(ValueError, match="dinov2"):
+        build_loss({"type": "fdl_loss", "model": "vgg", "checkpoint": True})
