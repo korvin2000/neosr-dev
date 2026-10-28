@@ -222,8 +222,19 @@ def calculate_psnr_pt(
     return 10.0 * torch.log10(255.0 * 255.0 / mse)  # mse 0 -> inf, as the reference
 
 
-# float64 (11, 1); the reference filters with its outer product
+# float64 (11, 1); the reference filters with its outer product. One copy per device: an H2D copy
+# per call would block the host on every image
 _SSIM_KERNEL = cv2.getGaussianKernel(11, 1.5)
+_ssim_kernels: dict[torch.device, Tensor] = {}
+
+
+def _ssim_kernel(device: torch.device) -> Tensor:
+    k = _ssim_kernels.get(device)
+    if k is None:
+        k = _ssim_kernels[device] = (
+            torch.from_numpy(_SSIM_KERNEL).to(device).view(1, 1, 11, 1)
+        )
+    return k
 
 
 def calculate_ssim_pt(
@@ -242,7 +253,7 @@ def calculate_ssim_pt(
     if test_y_channel:
         img, img2 = _y_pt(img), _y_pt(img2)
     n, c, h, w = img.shape
-    k = torch.from_numpy(_SSIM_KERNEL).to(img.device).view(1, 1, 11, 1)
+    k = _ssim_kernel(img.device)
     c1, c2 = (0.01 * 255) ** 2, (0.03 * 255) ** 2
     ssims = []
     for i in range(c):  # one channel at a time: the fp64 statistics are 5x the channel

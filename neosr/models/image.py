@@ -365,7 +365,8 @@ class image(base):
 
     def validate(self, loader, current_iter, tb_logger, save_img: bool) -> None:
         """Output contract of the old nondist_validation (T2 §6.3); rank 0, called by validation().
-        Metrics run on the device on the quantised images (the values tensor2img writes, MT-04); a
+        Metrics run on the quantised images (the values tensor2img writes, MT-04) where the output is:
+        the device, or the CPU for a tiled one (its full-size fp64 SSIM statistics); a
         uint8 host copy is made only for an image that is saved or logged, PNGs are written by one
         background thread. Inference (test.py) honours use_amp/bfloat16; training validation stays
         fp32 (GP-13). cuDNN autotuning is off: every val shape would be timed anew (MT-11)."""
@@ -417,23 +418,22 @@ class image(base):
                             sr = self._infer(net, lq, warned)
                         if metrics or save_img or save_tb:  # else nothing consumes sr
                             q = quantize(sr)  # where sr is (tiled: the CPU)
-                            del sr
-                        if metrics:
-                            q_dev = (  # tiled: upload the integers as uint8 (exact, 1/4 the bytes)
-                                q
-                                if q.device == self.device
-                                else q.to(torch.uint8).to(self.device).float()
-                            )
-                            gt = quantize(data["gt"].to(self.device, non_blocking=True))
+                        del sr
+                        if metrics:  # where q is: a tiled image stays on the CPU, whose
+                            # fp64 SSIM statistics would not fit the device at that size
+                            gt = quantize(data["gt"].to(q.device, non_blocking=True))
                             for k, f in metrics.items():
-                                values[k].append(f(q_dev, gt))
+                                values[k].append(
+                                    f(q, gt).to(self.device, non_blocking=True)
+                                )
+                            del gt
                     if save_img or save_tb:  # the one host copy: uint8 HWC RGB
                         rgb = q[0].to(torch.uint8).permute(1, 2, 0).cpu().numpy()
                         if save_img:  # tensor2img's layout: BGR, or HW for gray
                             bgr = rgb[..., 0] if rgb.shape[-1] == 1 else rgb[..., ::-1]
                             path = self._img_path(vis, name, rel, current_iter)
                             write(np.ascontiguousarray(bgr), path)
-                            lq_path = self._img_path(vis, name, rel, "lq")
+                            lq_path = self._lq_path(vis, name, rel)
                             if save_lq and not lq_path.exists():
                                 write(tensor2img([data["lq"]]), lq_path)
                         if save_tb:
@@ -443,6 +443,7 @@ class image(base):
                                 global_step=current_iter,
                                 dataformats="HWC",
                             )
+                    q = lq = None  # nothing of this image lives into the next forward
                     if pbar is not None:
                         pbar.update(1)
         finally:
@@ -453,9 +454,10 @@ class image(base):
             f.result()
         if metrics:
             # one sync for the event; summed in Python in image order, as before
+            rows = torch.stack([torch.stack(v).double() for v in values.values()])
             results = {
-                k: sum(torch.stack(v).double().tolist()) / len(v)
-                for k, v in values.items()
+                k: sum(row) / len(row)
+                for k, row in zip(values, rows.tolist(), strict=True)
             }
             for k, v in results.items():
                 self.update_best(name, k, v, current_iter)
@@ -464,15 +466,20 @@ class image(base):
     def _img_path(self, vis: Path, dataset: str, rel: Path, tag) -> Path:
         """`rel`: the image's path below its dataroot without suffix (image_id); dataset and
         subfolders keep same-named images apart (F21). Training: one folder per image,
-        vis/<dataset>/<rel>/<stem>_<iter>.png and <stem>_lq.png. Test: the outputs alone in
-        vis/<dataset>/<rel parent>/<stem>_<suffix>.png, the LQ copies in vis/lq/<dataset>/<rel>.png."""
+        vis/<dataset>/<rel>/<stem>_<iter>.png. Test: the outputs alone in
+        vis/<dataset>/<rel parent>/<stem>_<suffix>.png."""
         if self.is_train:
             return vis / dataset / rel / f"{rel.name}_{tag}.png"
-        if tag == "lq":
-            return vis / "lq" / dataset / f"{rel}.png"
         suffix = (self.opt.get("val") or {}).get("suffix")
         suffix = self.opt["name"] if suffix is None else suffix
         return vis / dataset / rel.parent / f"{rel.name}_{suffix}.png"
+
+    def _lq_path(self, vis: Path, dataset: str, rel: Path) -> Path:
+        """Training: vis/<dataset>/<rel>/<stem>_lq.png next to the outputs. Test:
+        vis/lq/<dataset>/<rel>.png, apart from the outputs whatever the run is called."""
+        if self.is_train:
+            return vis / dataset / rel / f"{rel.name}_lq.png"
+        return vis / "lq" / dataset / f"{rel}.png"
 
     # ---------------------------------------------------------------- checkpoint payloads
     def export_state_dicts(self) -> dict[str, dict[str, Tensor]]:

@@ -170,37 +170,6 @@ def scalarize_qdq(path: str) -> None:
     onnx.save(mdl, path)
 
 
-def verify_qat(args: argparse.Namespace, onnx_model, torch_model) -> None:
-    """Fake-quant torch vs ORT. Rounding ties flip single int8 steps, so QAT has its own tolerance
-    (T5 S4): unoptimized max <= 5e-3, mean <= 1e-4; ORT's default (fused int8 kernels) mean <= 2e-3."""
-    import onnxruntime  # noqa: PLC0415
-
-    shape = (1, *args.static) if args.static is not None else (1, 3, 40, 32)
-    x = torch.rand(shape, generator=torch.Generator().manual_seed(0))
-    with torch.inference_mode():
-        ref = torch_model(x).numpy()
-    level = onnxruntime.GraphOptimizationLevel
-    for opt_level, max_tol, mean_tol in (
-        (level.ORT_DISABLE_ALL, 5e-3, 1e-4),
-        (level.ORT_ENABLE_ALL, float("inf"), 2e-3),
-    ):
-        so = onnxruntime.SessionOptions()
-        so.graph_optimization_level = opt_level
-        sess = onnxruntime.InferenceSession(
-            onnx_model, so, providers=["CPUExecutionProvider"]
-        )
-        out = sess.run(None, {sess.get_inputs()[0].name: x.numpy()})[0]
-        err = np.abs(out - ref)
-        print(
-            f"-------- QDQ parity ({opt_level.name}): max {err.max():.2e}, mean {err.mean():.2e}"
-        )
-        # NaN compares False: a non-finite output (either side) fails outright
-        if not np.isfinite(err).all() or err.max() > max_tol or err.mean() > mean_tol:
-            msg = f"QDQ ONNX deviates from the fake-quant model ({opt_level.name})"
-            raise RuntimeError(msg)
-    print("-------- Model successfully verified.")
-
-
 TRACE = (1, 3, 20, 20)  # dynamic exports are traced at this input
 
 
@@ -212,23 +181,16 @@ def export_shapes(args: argparse.Namespace) -> list[tuple[int, ...]]:
     return [TRACE, (1, c, h + 12, w + 4), (2, c, h, w)]
 
 
-def assert_verify(
-    args: argparse.Namespace, onnx_model, torch_model, *, fp16: bool = False
-) -> None:
-    """torch vs onnxruntime (CPU) at every export_shapes() input. Float: rtol 1e-2, atol 1e-3 (looser
-    than numpy's 1e-7/0: ORT reorders reductions); fp16 (its fp16 input vs the fp32 torch output):
-    max 2e-2, mean 2e-3 abs. A shape the torch model itself rejects is skipped with a warning (the
-    arch does not support it); any other failure raises naming the shape: a dynamic graph frozen at
-    the trace shape passes there and is silently wrong elsewhere."""
-    import onnxruntime  # noqa: PLC0415
-
-    # NOTE: "CUDAExecutionProvider" errors if some nvidia libs are not found
-    sess = onnxruntime.InferenceSession(onnx_model, providers=["CPUExecutionProvider"])
-    feed = sess.get_inputs()[0].name
+def _outputs(args: argparse.Namespace, sessions, torch_model, sample, *, fp16=False):
+    """(shape label, torch output, ORT output per session) at every export_shapes() input. A shape
+    the torch model itself rejects is skipped with a warning (the arch does not support it); an ORT
+    error or an output shape that differs from torch raises naming the shape: a dynamic graph frozen
+    at the trace shape passes there and is silently wrong elsewhere (MT-02)."""
     hint = "use -static C H W" if args.static is None else "the arch does not export"
+    feed = sessions[0].get_inputs()[0].name
     gen = torch.Generator().manual_seed(0)
     for i, shape in enumerate(export_shapes(args)):
-        x = torch.randn(shape, generator=gen)
+        x = sample(shape, generator=gen)
         at = "x".join(map(str, shape))
         try:
             with torch.inference_mode():
@@ -238,18 +200,36 @@ def assert_verify(
                 raise
             log.warning(f"verification skips {at}: the torch model fails there ({e})")
             continue
-        try:
-            xin = x.numpy().astype(np.float16 if fp16 else np.float32)
-            out = sess.run(None, {feed: xin})[0].astype(np.float32)
-        except Exception as e:
-            msg = f"ONNX export fails at {at} in onnxruntime ({e}): {hint}"
-            raise RuntimeError(msg) from e
+        xin = x.numpy().astype(np.float16 if fp16 else np.float32)
+        outs = []
+        for sess in sessions:
+            try:
+                out = sess.run(None, {feed: xin})[0].astype(np.float32)
+            except Exception as e:
+                msg = f"ONNX export fails at {at} in onnxruntime ({e}): {hint}"
+                raise RuntimeError(msg) from e
+            if out.shape != ref.shape:
+                msg = f"ONNX export is wrong at {at}: output {out.shape}, torch {ref.shape}; {hint}"
+                raise RuntimeError(msg)
+            outs.append(out)
+        yield at, ref, outs
+
+
+def assert_verify(
+    args: argparse.Namespace, onnx_model, torch_model, *, fp16: bool = False
+) -> None:
+    """torch vs onnxruntime (CPU) at every export_shapes() input (_outputs). Float: rtol 1e-2, atol
+    1e-3 (looser than numpy's 1e-7/0: ORT reorders reductions); fp16 (its fp16 input vs the fp32
+    torch output): max 2e-2, mean 2e-3 abs."""
+    import onnxruntime  # noqa: PLC0415
+
+    # NOTE: "CUDAExecutionProvider" errors if some nvidia libs are not found
+    sess = onnxruntime.InferenceSession(onnx_model, providers=["CPUExecutionProvider"])
+    hint = "use -static C H W" if args.static is None else "the arch does not export"
+    for at, ref, (out,) in _outputs(args, [sess], torch_model, torch.randn, fp16=fp16):
         # first: a NaN/inf on either side is its own failure, not a tolerance question
         if not (np.isfinite(ref).all() and np.isfinite(out).all()):
             msg = f"ONNX verification failed at {at}: non-finite output (torch or onnxruntime)"
-            raise RuntimeError(msg)
-        if out.shape != ref.shape:
-            msg = f"ONNX export is wrong at {at}: output {out.shape}, torch {ref.shape}; {hint}"
             raise RuntimeError(msg)
         err = np.abs(out - ref)
         ok = (
@@ -263,6 +243,46 @@ def assert_verify(
                 f"this arch/shape is not export-safe; {hint}"
             )
             raise RuntimeError(msg)
+    print(
+        f"-------- Model successfully verified at {len(export_shapes(args))} shape(s)."
+    )
+
+
+def verify_qat(args: argparse.Namespace, onnx_model, torch_model) -> None:
+    """Fake-quant torch vs ORT at every export_shapes() input (_outputs), on [0, 1) inputs. Rounding
+    ties flip single int8 steps, so QAT has its own tolerance (T5 S4): unoptimized max <= 5e-3, mean
+    <= 1e-4; ORT's default (fused int8 kernels) mean <= 2e-3."""
+    import onnxruntime  # noqa: PLC0415
+
+    level = onnxruntime.GraphOptimizationLevel
+    levels = (
+        (level.ORT_DISABLE_ALL, 5e-3, 1e-4),
+        (level.ORT_ENABLE_ALL, float("inf"), 2e-3),
+    )
+    sessions = []
+    for opt_level, *_ in levels:
+        so = onnxruntime.SessionOptions()
+        so.graph_optimization_level = opt_level
+        sessions.append(
+            onnxruntime.InferenceSession(
+                onnx_model, so, providers=["CPUExecutionProvider"]
+            )
+        )
+    for at, ref, outs in _outputs(args, sessions, torch_model, torch.rand):
+        for (opt_level, max_tol, mean_tol), out in zip(levels, outs, strict=True):
+            err = np.abs(out - ref)
+            print(
+                f"-------- QDQ parity at {at} ({opt_level.name}): "
+                f"max {err.max():.2e}, mean {err.mean():.2e}"
+            )
+            # NaN compares False: a non-finite output (either side) fails outright
+            if (
+                not np.isfinite(err).all()
+                or err.max() > max_tol
+                or err.mean() > mean_tol
+            ):
+                msg = f"QDQ ONNX deviates from the fake-quant model at {at} ({opt_level.name})"
+                raise RuntimeError(msg)
     print(
         f"-------- Model successfully verified at {len(export_shapes(args))} shape(s)."
     )
@@ -335,10 +355,10 @@ def to_fp16(src: str, dst: str) -> None:
 
 
 def to_onnx(args: argparse.Namespace, model: nn.Module | None = None) -> None:
+    check_export(args)  # first: a missing onnx/onnxruntime is a ConfigError (exit 2)
     import onnx  # noqa: PLC0415
     import onnxruntime  # noqa: PLC0415
 
-    check_export(args)
     if model is None:
         model = load_net(args)
     # set model to eval mode

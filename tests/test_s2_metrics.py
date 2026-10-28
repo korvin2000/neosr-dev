@@ -1,10 +1,11 @@
 """Stage 2, metrics lane: exact on-device validation metrics (MT-04), tensor2img (MT-08), metric-net
 lifecycle (MT-05, MT-13, MT-12), validation runtime (MT-11, T-03, MT-10, MT-15) and the ONNX converter
-(MT-02, MT-07, MT-16, MT-17)."""
+(MT-02, MT-07, MT-16, MT-17), plus the review fixes of stage 2."""
 
 import logging
 import math
 import threading
+import weakref
 from pathlib import Path
 
 import cv2
@@ -429,6 +430,88 @@ def test_validation_second_oom_propagates(tmp_path):
         )
 
 
+class Watch(Tiny):
+    """Records, at every forward, how many of the watched tensors are still alive."""
+
+    def __init__(self, refs) -> None:
+        super().__init__()
+        self.refs, self.alive = refs, []
+
+    def forward(self, x):
+        self.alive.append(sum(r() is not None for r in self.refs))
+        return super().forward(x)
+
+
+def test_validation_frees_the_image_buffers_before_the_next_forward(tmp_path):
+    """Review: the quantised sr and gt of one image must not live into the next forward."""
+    refs = []
+    m = make_model(tmp_path, metrics={"p": {"type": "calculate_psnr"}})
+    m.metrics = {
+        "p": lambda q, gt: refs.extend(map(weakref.ref, (q, gt))) or torch.zeros(())
+    }
+    m.net_g = Watch(refs)
+    m.validation(DataLoader(PairSet(FILES), batch_size=1), 1, None, save_img=True)
+    assert len(refs) == 6
+    assert m.net_g.alive == [0, 0, 0]
+
+
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+def test_tiled_output_metrics_run_on_the_cpu_and_mix_with_device_ones(tmp_path):
+    """Review: a tiled output (here the OOM retry of the first image) is on the CPU; its PSNR/SSIM
+    stay there (full-size fp64 statistics), the untiled ones run on the device, and the event
+    still averages both."""
+    cfg = {"psnr": ALL_METRICS["psnr"], "ssim": ALL_METRICS["ssim"]}
+    ds = PairSet([f"/data/lq/im{i}.png" for i in range(2)], hw=(20, 300))
+    ref = make_model(tmp_path / "ref", metrics=cfg, device="cuda")
+    ref.validation(DataLoader(ds, batch_size=1), 1, None, save_img=False)
+    m = make_model(tmp_path, metrics=cfg, device="cuda")
+    m.net_g, m.tile_overlap = OOMOnce(limit=256, n=1).cuda(), 4
+    m.net_g.load_state_dict(ref.net_g.state_dict())
+    seen = []
+    for k, f in list(m.metrics.items()):
+        m.metrics[k] = lambda q, gt, f=f: (
+            seen.append((q.device.type, gt.device.type)) or f(q, gt)
+        )
+    m.validation(DataLoader(ds, batch_size=1), 1, None, save_img=False)
+    assert seen == [("cpu", "cpu")] * 2 + [("cuda", "cuda")] * 2
+    for k in cfg:
+        assert m.best_metric_results["valset"][k]["val"] == pytest.approx(
+            ref.best_metric_results["valset"][k]["val"], abs=1e-9
+        )
+
+
+def test_a_test_run_named_lq_keeps_outputs_and_lq_copies_apart(tmp_path):
+    """Review: the run name is the test output tag; "lq" must not route outputs to the LQ copies."""
+    m = make_model(tmp_path, name="lq")
+    m.validation(DataLoader(PairSet(FILES[:1]), batch_size=1), "lq", None, True)
+    vis = tmp_path / "vis"
+    got = sorted(p.relative_to(vis).as_posix() for p in vis.rglob("*.png"))
+    assert got == ["lq/valset/a/x.png", "valset/a/x_lq.png"]
+    want = tensor2img([m.net_g.eval()(PairSet(FILES[:1]).items[0][1][None]).detach()])
+    np.testing.assert_array_equal(cv2.imread(str(vis / "valset/a/x_lq.png")), want)
+
+
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+def test_device_metrics_do_not_sync_the_host():
+    """Review: the per-image metric calls queue work only; the event syncs once at the end."""
+    g = torch.Generator().manual_seed(0)
+    x, y = (quantize(torch.rand(1, 3, 32, 24, generator=g).cuda()) for _ in range(2))
+    calls = [
+        lambda: calculate.calculate_psnr_pt(x, y, 2, test_y_channel=True),
+        lambda: calculate.calculate_ssim_pt(x, y, 0),
+        lambda: calculate.calculate_ssim_pt(x, y, 2, test_y_channel=True),
+    ]
+    for f in calls:  # first use: the kernel is copied to the device once
+        f()
+    torch.cuda.synchronize()
+    torch.cuda.set_sync_debug_mode("error")
+    try:
+        for f in calls:
+            f()
+    finally:
+        torch.cuda.set_sync_debug_mode(0)
+
+
 class TB:
     def __init__(self) -> None:
         self.images, self.scalars = [], []
@@ -691,3 +774,41 @@ def test_export_capability_is_checked_up_front(
 
 def test_static_only_arch_exports_with_static(tmp_path, onnx_deps):
     convert_py.check_export(_args(tmp_path, "-static", "3", "16", "16", net="safmn"))
+
+
+class QFrozenB(nn.Module):
+    """A QDQ graph with a trace-time batch constant (window_reverse's int(B), F08)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        from torch.ao.quantization import FakeQuantize  # noqa: PLC0415
+
+        self.fq = FakeQuantize()
+        self.conv = nn.Conv2d(3, 3, 3, padding=1)
+
+    def forward(self, x):
+        x = self.fq(x)
+        return self.conv(x) + x.sum(0, keepdim=True) / int(x.shape[0])
+
+
+def test_qat_export_is_verified_at_every_shape(tmp_path, onnx_deps):
+    """Review/MT-02: the QDQ check runs at the export_shapes() inputs too, not only at batch 1."""
+    net = QFrozenB()
+    net(torch.rand(2, 3, 20, 20))  # calibrate, then freeze the ranges
+    net.fq.disable_observer()
+    assert convert_py.is_qat(net)
+    with pytest.raises(RuntimeError, match="deviates .* at 2x3x20x20"):
+        convert_py.to_onnx(_args(tmp_path), net)
+    convert_py.to_onnx(_args(tmp_path, "-static", "3", "20", "20"), net)
+
+
+@pytest.mark.parametrize("dep", ["onnx", "onnxruntime"])
+def test_missing_onnx_dependency_is_a_config_error(tmp_path, monkeypatch, capsys, dep):
+    """Review/MT-17: exit 2 with a message, before the weights are read or a file is written."""
+    import sys  # noqa: PLC0415
+
+    monkeypatch.setitem(sys.modules, dep, None)
+    argv = ["--input", str(tmp_path / "missing.pth"), "-net", "compact"]
+    assert convert_py.main(argv + ["--output", str(tmp_path / "m.onnx")]) == 2
+    assert "needs onnx and onnxruntime" in capsys.readouterr().err
+    assert not list(tmp_path.iterdir())
