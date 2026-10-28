@@ -61,3 +61,11 @@
   cap is killed alone (exit 137), the app scope stays active.
 - Q-set partial (killed): Q1 (G adan_sf b2=0, D B) 28.95/0.1902 @6000, 28.81/0.1896 @7000; Q2 (D b2=0)
   28.90/0.1908 @6000; Q3 (GAN 0.1) 28.92/0.1913 @6000. Q4-Q6 relaunched capped.
+- Full CPU suite on the complete merge (3481216): 1832 passed / 370 skipped / 0 failed (6:15). clamp default flipped
+  to "restore" (5dcadcf). Export sweep merged (9a72a0e): NO_ONNX/STATIC_ONLY re-derived per arch; arch-side export
+  bugs (asid/omnisr round-up, esc padding, ditn x.data.shape, window_reverse batch freeze in 5 archs) -> agent on
+  s2/exportfix. Cross-lane Codex review (2 reviewers): 11 findings (consistency hard clamp defeats restore, learned
+  metrics OOM under tiled validation, max_grad_norm after resume, run_record gaps, mean/std policy, skip streak not
+  saved, window_sdpa nW=1 trace, fp16 ONNX DySample grid, SSIM peak, adamw_sf .data writes, resume across GAN start)
+  -> workflow wf_0deb80fd-c5d on s2/review. Q4-Q6 @4k: FDL 0.02 29.22/0.1915, GAN start 28.77/0.1928, AdamW G
+  28.75/0.1881 (Q1 ref 28.62/0.1959).

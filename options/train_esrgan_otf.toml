@@ -14,8 +14,8 @@ dataroot_gt = 'C:\datasets\gt\'
 patch_size = 64
 batch_size = 8
 #accumulate = 1
-augmentation = [ "none", "mixup", "cutmix", "resizemix", "cutblur" ]
-aug_prob = [ 0.5, 0.1, 0.1, 0.1, 0.5 ]
+#augmentation = [ "none", "mixup", "cutmix", "resizemix", "cutblur" ]
+#aug_prob = [ 0.5, 0.1, 0.1, 0.1, 0.5 ]
 
 [degradations]
 resize_prob = [ 0.3, 0.4, 0.3 ]
@@ -99,12 +99,12 @@ wavelet_init = 80000
 #match_lq_colors = true
 
 [train.optim_g]
-type = "adan_sf"
-lr = 8e-4
-betas = [ 0.98, 0.92, 0.99 ]
-weight_decay = 0.01
-schedule_free = true
-warmup_steps = 1600
+type = "adamw"
+lr = 2e-4
+betas = [ 0.9, 0.99 ]
+weight_decay = 0
+# schedule-free option: type = "adan_sf", lr = 5e-4, betas = [ 0.98, 0.0, 0.99 ],
+# weight_decay = 0.01, schedule_free = true, warmup_steps = 1600
 
 [train.optim_d]
 type = "adan_sf"
@@ -115,6 +115,10 @@ schedule_free = true
 warmup_steps = 600
 
 #  losses
+[train.pixel_opt]
+type = "L1Loss"
+loss_weight = 1.0
+
 [train.mssim_opt]
 type = "mssim_loss"
 loss_weight = 1.0
@@ -130,7 +134,7 @@ loss_weight = 1.0
 [train.fdl_opt]
 type = "fdl_loss"
 model = "dinov2" # "vgg", "resnet", "effnet"
-loss_weight = 0.75
+loss_weight = 0.02
 
 [train.gan_opt]
 type = "gan_loss"

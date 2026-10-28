@@ -462,6 +462,10 @@ Ultra light).
   `simple_otf`, `eqr_otf`, `pancam_otf` with their datasets and the `pancam`/`eqrsrgan` archs.
 - **Checkpoints**: training states are format 2 (old `.state` files cannot be resumed; old `net_*.pth` load as
   pretrained weights); only the newest `logger.keep_states` states are kept.
+- **Templates (stage 2)**: generator AdamW 2e-4 (schedule-free `adan_sf` with `betas = [0.98, 0, 0.99]` noted
+  as the alternative), an L1 term, FDL(DINOv2) weight 0.02 (was 0.75, ~99% of the generator gradient), no batch
+  augmentation by default, `train.clamp = "restore"`. On the realplksr GAN template (8k updates, held-out PSNR/SSIM/
+  DISTS) this moved 27.23/0.627/0.2024 to 29.36/0.721/0.1787; see `docs/refactor/stage2/DECISIONS.md`.
 - **Stage 2**: `manual_seed` no longer implies deterministic kernels (add `deterministic = true`); `fast_matmul`
   no longer enables fp16 GEMM accumulation (`fp16_accumulation = true`); a skipped update restores the buffers its
   forwards wrote and a non-finite loss in it is counted (`nonfinite_<key>`) instead of stopping the run; the fp16
