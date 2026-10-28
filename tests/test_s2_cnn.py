@@ -101,3 +101,131 @@ def test_plk_convert_keeps_device_and_dtype() -> None:
             m.convert()
             torch.testing.assert_close(m(x.clone()), ref, rtol=1e-10, atol=1e-10)
         assert m.conv.weight.dtype == torch.float64
+
+
+# ---------------------------------------------------------------- DySample (A-02 / MT-03 / MX-13)
+def _zero_offsets(m: DySample) -> DySample:
+    for t in (m.offset.weight, m.offset.bias, m.scope.weight, m.init_pos):
+        t.data.zero_()  # offset 0: the grid reaches grid_sample unchanged
+    return m
+
+
+def test_dysample_grid_stays_fp32(monkeypatch) -> None:
+    """Under autocast the grid is the fp32 grid (grid_sample promotes x to it); a bf16 net casts
+    the finished fp32 grid once. The old code rounded `arange + 0.5` and the normaliser first."""
+    H, W, s = 2, 512, 2
+    seen = []
+    grid_sample = F.grid_sample
+    monkeypatch.setattr(
+        F, "grid_sample", lambda x, g, **k: seen.append(g) or grid_sample(x, g, **k)
+    )
+    m = _zero_offsets(DySample(4, 3, scale=s, groups=4))
+    x = torch.rand(1, 4, H, W)
+    ref = 2 * (torch.arange(W, dtype=torch.float32) + 0.5) / W - 1
+    ref = ref.repeat_interleave(s).expand(4, s * H, -1)
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        m(x)
+    m.to(torch.bfloat16)(x.to(torch.bfloat16))
+    assert seen[0].dtype == torch.float32
+    assert torch.equal(seen[0][..., 0], ref)
+    assert seen[1].dtype == torch.bfloat16
+    assert torch.equal(seen[1][..., 0], ref.to(torch.bfloat16))
+
+
+def _old_dysample_forward(m: DySample, x: torch.Tensor) -> torch.Tensor:
+    """The pre-fix forward (host-built normaliser, grid cast to x.dtype first)."""
+    offset = m.offset(x) * m.scope(x).sigmoid() * 0.5 + m.init_pos
+    B, _, H, W = offset.shape
+    offset = offset.view(B, 2, -1, H, W)
+    coords_h = torch.arange(H, dtype=torch.float32) + 0.5
+    coords_w = torch.arange(W, dtype=torch.float32) + 0.5
+    coords = (
+        torch
+        .stack(torch.meshgrid([coords_w, coords_h], indexing="ij"))
+        .transpose(1, 2)[None, :, None]
+        .to(x.dtype)
+    )
+    normalizer = torch.tensor([W, H], dtype=x.dtype).view(1, 2, 1, 1, 1)
+    coords = 2 * (coords + offset) / normalizer - 1
+    coords = (
+        F
+        .pixel_shuffle(coords.reshape(B, -1, H, W), m.scale)
+        .view(B, 2, -1, m.scale * H, m.scale * W)
+        .permute(0, 2, 3, 4, 1)
+        .contiguous()
+        .flatten(0, 1)
+    )
+    out = F.grid_sample(
+        x.reshape(B * m.groups, -1, H, W),
+        coords,
+        mode="bilinear",
+        align_corners=False,
+        padding_mode="border",
+    ).view(B, -1, m.scale * H, m.scale * W)
+    return m.end_conv(out) if m.end_convolution else out
+
+
+def test_dysample_fp32_bit_identical() -> None:
+    m = DySample(16, 3, scale=2, groups=4)
+    nn.init.normal_(m.scope.weight, std=0.5)  # non-trivial offsets
+    x = torch.randn(2, 16, 13, 9, requires_grad=True)
+    out = m(x)
+    ref = _old_dysample_forward(m, x)
+    assert torch.equal(out, ref)
+    g = torch.randn_like(out)
+    got = torch.autograd.grad(out, [x, *m.parameters()], g)
+    exp = torch.autograd.grad(ref, [x, *m.parameters()], g)
+    for a, b in zip(got, exp, strict=True):
+        assert torch.equal(a, b)
+
+
+def _ort_errors(net: nn.Module, trace: tuple, shapes: list) -> list[float]:
+    ort = pytest.importorskip("onnxruntime")
+    f = io.BytesIO()
+    net = net.eval()
+    with torch.inference_mode():
+        torch.onnx.export(
+            net,
+            torch.rand(*trace),
+            f,
+            opset_version=17,
+            dynamo=False,
+            input_names=["input"],
+            output_names=["output"],
+            dynamic_axes={
+                "input": {0: "b", 2: "h", 3: "w"},
+                "output": {0: "b", 2: "H", 3: "W"},
+            },
+        )
+    sess = ort.InferenceSession(f.getvalue(), providers=["CPUExecutionProvider"])
+    errs = []
+    for shape in shapes:
+        x = torch.rand(*shape)
+        with torch.inference_mode():
+            ref = net(x).numpy()
+        errs.append(float(abs(sess.run(None, {"input": x.numpy()})[0] - ref).max()))
+    return errs
+
+
+@pytest.mark.filterwarnings("ignore")
+def test_dysample_dynamic_onnx_export() -> None:
+    """F07: the normaliser was a trace constant (max error 1.85 at 12x10)."""
+    m = DySample(16, 3, scale=2, groups=4)
+    nn.init.normal_(m.scope.weight, std=0.5)
+    errs = _ort_errors(
+        m, (1, 16, 8, 8), [(1, 16, 8, 8), (1, 16, 12, 10), (2, 16, 33, 17)]
+    )
+    assert max(errs) < 1e-4, errs
+
+
+def test_dysample_has_no_host_tensor() -> None:
+    """MT-03 / MX-13: no torch.tensor(list) per forward (an H2D copy and sync on CUDA)."""
+    m = DySample(16, 3, scale=2, groups=4)
+    calls = []
+    real = torch.tensor
+    try:
+        torch.tensor = lambda *a, **k: calls.append(a) or real(*a, **k)
+        m(torch.rand(1, 16, 5, 7))
+    finally:
+        torch.tensor = real
+    assert not calls
