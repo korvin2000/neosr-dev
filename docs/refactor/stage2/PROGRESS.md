@@ -48,3 +48,16 @@
 - P4b/P5/P6 @8k (on P3): no aug 28.31/0.1862; FDL 0.05 28.69/0.1830 (best); GAN 0.1 28.43/0.1854.
 - Q-set launched (s2_m2 code, restore, L1, no aug, FDL 0.05, G adan_sf b2=0): D betas B vs b2=0, GAN 0.1,
   FDL 0.02, GAN start 1000 + ramp 1000, adamw control.
+- All 8 lanes done and merged (data, window, mixed clean merges). Integration commit 3481216: OTF degrade()+uint8
+  gt pool, schema keys aug_antialias/tight_canvas, checkpoint helpers keep state_dict _metadata (ASID/DITN remap
+  xfail removed), DISTS builds VGG features only, val/test num_worker_per_gpu, DySample meta-device guard.
+  Full CPU suite running on 3481216. Export-capability sweep agent on branch s2/export (convert.py tables).
+- 2026-10-28 03:54 second session kill. Root cause (journalctl): both kills (01:07, 03:54) were global OOMs caused by
+  one of this session's python processes (49 GB / 36 GB anon RSS: CPU probes/exports of heavy archs while 8 lanes,
+  A/B runs and test suites ran together); the kernel OOM-killed it and systemd's OOMPolicy=stop on the Claude app
+  scope then SIGKILLed claude-desktop. Fix: every heavy job now runs in its own capped user scope
+  (scratchpad/capped.sh = systemd-run --user --scope -p MemoryMax=$CAP -p MemorySwapMax=0), A/B runs capped at
+  10G each (launch.py), suites at 16G, export probes at 8G; lower concurrency. Verified: a capped job exceeding its
+  cap is killed alone (exit 137), the app scope stays active.
+- Q-set partial (killed): Q1 (G adan_sf b2=0, D B) 28.95/0.1902 @6000, 28.81/0.1896 @7000; Q2 (D b2=0)
+  28.90/0.1908 @6000; Q3 (GAN 0.1) 28.92/0.1913 @6000. Q4-Q6 relaunched capped.
