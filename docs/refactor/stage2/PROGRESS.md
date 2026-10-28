@@ -88,3 +88,8 @@
   111.6 -> 85.2 (1.31x), dat 190.2 -> 165.9 (1.15x). Logs: scratchpad/bench/.
 - End-to-end acceptance launched (s2_acc 09a9e71, new templates): realplksr GAN 1500 + resume to 2000, compact_otf
   600, dat compile 400.
+- End-to-end acceptance on 09a9e71 with the new templates (all capped, exit 0): realplksr GAN seed 11: 28.22 @500,
+  28.91 @1000, 29.06 @1500 -> exact resume (no config-change warnings) -> 29.12/0.714/0.1934 @2000 (shipped template
+  @2000: 25.32/0.516/0.2415); compact_otf 600 updates; dat with compile=true 400 updates; test.py (bf16 autocast,
+  paired val67) PSNR 29.03, 67 outputs + LQ copies; convert.py fp32 + fp16 ONNX verified at 3 shapes each.
+- STAGE 2 DONE on refactor/stabilize (not merged into master, not pushed: awaiting the owner).

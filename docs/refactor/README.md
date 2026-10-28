@@ -10,6 +10,10 @@ Started 2026-10-20. Branch `refactor/stabilize`, checked out as the worktree `.w
 3. `git log --oneline master..refactor/stabilize` and `git status` show what landed and what is uncommitted.
 4. Continue the first step in `PLAN.md` whose status is not `done`; log the outcome in `PROGRESS.md` and commit per step.
 
+## Stage 2 (2026-10-27/28)
+Speed / reliability / memory / training-efficiency pass: `stage2/PLAN.md` (lanes, interfaces), `stage2/PROGRESS.md`
+(log, A/B numbers, benchmark), `stage2/DECISIONS.md` (what changed and why), `stage2/analysis/` (10-lane audit).
+
 ## Files
 | file | content |
 |---|---|
