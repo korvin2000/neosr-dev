@@ -9,6 +9,7 @@ from torch import nn
 
 from neosr.archs import build_network
 from neosr.archs import esc_arch
+from neosr.models.checkpoint import cpu_copy
 
 cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
 
@@ -190,7 +191,7 @@ def test_asid_legacy_checkpoint_keeps_its_forward(monkeypatch) -> None:
     from neosr.archs.asid_arch import Channel_Attention, Channel_Attention_grid
 
     old = _build("asid").eval()
-    sd = old.state_dict()  # flash default: every temperature is exactly 1 (it never trained)
+    sd = cpu_copy(old.state_dict())  # a weight file; flash default: every t is exactly 1
     x = torch.rand(1, 3, 64, 64)  # the training patch (= 8 * window) where grid scales agree
     with monkeypatch.context() as m:
         m.setattr(Channel_Attention, "forward", _old_asid_attn(grid=False))
@@ -290,7 +291,7 @@ def test_ditn_matches_spandrel_and_keeps_legacy_forward(monkeypatch) -> None:
     from neosr.archs.ditn_arch import ISA
 
     old = _build("ditn").eval()
-    sd = old.state_dict()
+    sd = cpu_copy(old.state_dict())  # as read from a weight file (no module metadata)
     x = torch.rand(2, 3, 24, 40)
     with torch.no_grad(), monkeypatch.context() as m:
         m.setattr(ISA, "forward", _old_ditn_isa)
@@ -316,6 +317,20 @@ def test_ditn_matches_spandrel_and_keeps_legacy_forward(monkeypatch) -> None:
     (y * g).sum().backward()
     (y_ref * g).sum().backward()
     _assert_grads_close(new, canon)
+
+
+@pytest.mark.parametrize("name", ["asid", "ditn"])
+def test_legacy_temperature_remap_only_for_weight_files(name: str) -> None:
+    import copy
+
+
+    net = _build(name)
+    ema = copy.deepcopy(net)
+    temps = [m.temperature for m in ema.modules() if hasattr(m, "temperature")]
+    ema.load_state_dict(net.state_dict())  # the EMA's first copy: module version 2, no remap
+    assert temps and all(t.eq(1).all() for t in temps)
+    ema.load_state_dict(cpu_copy(net.state_dict()))  # a weight file (no metadata): legacy
+    assert all(t.eq(1 / 8).all() for t in temps)
 
 
 # ---------------------------------------------------------------- MX-04/06 MicroSR

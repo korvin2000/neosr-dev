@@ -327,13 +327,18 @@ class _LegacyTemperature(nn.Module):
     """The old flash path ran SDPA under no_grad with its default 1/sqrt(E) scale, so its
     temperature never trained and stays exactly 1. Such checkpoints load as t = 1/ps: the old
     local attention exactly, the old grid attention exactly at an input of 8 * ps (the 64 px
-    training patch); the grid scale no longer depends on the input size."""
+    training patch); the grid scale no longer depends on the input size. In-process state dicts
+    carry `_version` 2 (an EMA copy of an untrained net keeps t = 1); weight files lose the
+    metadata and count as legacy."""
 
-    def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
+    _version = 2
+
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, *args, **kwargs):
         t = state_dict.get(prefix + "temperature")
-        if self.flash_attn and t is not None and bool((t == 1).all()):
+        legacy = local_metadata.get("version", 1) < 2
+        if legacy and self.flash_attn and t is not None and bool((t == 1).all()):
             state_dict[prefix + "temperature"] = t / self.ps
-        super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
+        super()._load_from_state_dict(state_dict, prefix, local_metadata, *args, **kwargs)
 
 
 class Channel_Attention(_LegacyTemperature):

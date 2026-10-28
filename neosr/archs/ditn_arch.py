@@ -1,5 +1,4 @@
 # type: ignore
-import math
 import numbers
 
 import torch
@@ -105,13 +104,16 @@ class ISA(nn.Module):
         self.project_out = nn.Conv2d(dim, dim, kernel_size=1, bias=bias)
         self.patch_size = patch_size
 
-    def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
+    _version = 2  # in-process state dicts carry it; weight files lose it and count as legacy
+
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, *args, **kwargs):
         # the old forward discarded softmax(t * q k^T) and returned SDPA's default 1/sqrt(ps^2)
         # scale, so its temperature never trained (exactly 1): load such weights as t = 1/ps
         t = state_dict.get(prefix + "temperature")
-        if t is not None and bool((t == 1).all()):
+        legacy = local_metadata.get("version", 1) < 2
+        if legacy and t is not None and bool((t == 1).all()):
             state_dict[prefix + "temperature"] = t / self.patch_size
-        super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
+        super()._load_from_state_dict(state_dict, prefix, local_metadata, *args, **kwargs)
 
     def forward(self, x):
         b, c, h, w = x.shape
@@ -292,16 +294,13 @@ class ditn(nn.Module):
         self.dropout = nn.Dropout2d(p=0.5)
         self.upsample = UpsampleOneStep(upscale, dim, 3)
         self.dim = dim
-        self.patch_sizes = [8, 8]
         self.scale = upscale
         self.SAL_blocks = SAL_blocks
         self.ITL_blocks = ITL_blocks
 
     def check_image_size(self, x):
         _, _, h, w = x.size()
-        wsize = self.patch_sizes[0]
-        for i in range(1, len(self.patch_sizes)):
-            wsize = wsize * self.patch_sizes[i] // math.gcd(wsize, self.patch_sizes[i])
+        wsize = self.patch_size  # UFONE splits the map into patch_size windows (was fixed 8)
         mod_pad_h = (wsize - h % wsize) % wsize
         mod_pad_w = (wsize - w % wsize) % wsize
         mode = "reflect" if mod_pad_h < h and mod_pad_w < w else "replicate"
