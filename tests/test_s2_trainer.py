@@ -582,10 +582,10 @@ def test_linear_warmup_for_plain_optimizers_chains_and_resumes(tmp_path):
     again = make_opt(tmp_path, optim={"type": "adamw", "lr": 1.0})  # warmup removed
     again["train"]["scheduler"] = opt["train"]["scheduler"]
     again["path"]["resume_state"] = tmp_path / "training_states" / "7.state"
-    with pytest.raises(
-        ConfigError, match="scheduler #0 changed: LinearLR -> MultiStepLR"
-    ):
-        build(again)
+    # stage 3 A2: a changed scheduler list is rebuilt from the config and replayed to update 7
+    r = build(again)
+    assert [type(s).__name__ for s in r.g.schedulers] == ["MultiStepLR"]
+    assert r.current_lr() == [pytest.approx(0.5)]
 
 
 def test_warmup_steps_is_validated_and_sf_keeps_its_own(tmp_path):

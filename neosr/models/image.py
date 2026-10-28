@@ -22,7 +22,14 @@ from neosr.losses import build_losses
 from neosr.losses.base import Context, restoring_clamp
 from neosr.models.base import base, build_optimizer, build_schedulers
 from neosr.models.checkpoint import cpu_copy, load_weights, read_weights
-from neosr.models.phase import Ema, LossMeter, Phase, no_sync, trainable
+from neosr.models.phase import (
+    Ema,
+    LossMeter,
+    Phase,
+    is_schedule_free,
+    no_sync,
+    trainable,
+)
 from neosr.models.tiling import infer_tiled
 from neosr.runtime import Runtime
 from neosr.utils import get_root_logger, imwrite, tc, tensor2img
@@ -262,7 +269,15 @@ class image(base):
         kind, opt = build_optimizer(cfg, params, section)
         # built first: the configured scheduler then chains onto the warmed-up lr
         scheds = [LinearLR(opt, 1 / warmup, total_iters=warmup)] if warmup else []
-        scheds += build_schedulers(self.opt["train"].get("scheduler"), opt)
+        sched = self.opt["train"].get("scheduler") or {}
+        # train.scheduler.nets, else every optimizer that is not schedule-free
+        if (nets := sched.get("nets")) is None and sched and is_schedule_free(opt):
+            get_root_logger().info(
+                f"train.scheduler: net_{name} ({kind}) is schedule-free: not scheduled "
+                f"(list {name!r} in train.scheduler.nets to schedule it)"
+            )
+        elif sched and (nets is None or name in nets):
+            scheds += build_schedulers(sched, opt)
         return Phase(
             name,
             params,

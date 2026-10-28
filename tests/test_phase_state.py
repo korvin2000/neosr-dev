@@ -3,7 +3,7 @@ import io
 import pytest
 import torch
 from torch import nn
-from torch.optim.lr_scheduler import CosineAnnealingLR, MultiStepLR
+from torch.optim.lr_scheduler import MultiStepLR
 
 from neosr.config import ConfigError
 from neosr.models.phase import Ema, Phase, is_schedule_free, trainable
@@ -192,20 +192,7 @@ def test_mismatch_raises_naming_first_difference():
         "#1",
         "1.weight -> 0.bias",
     )
-    # scheduler type, and an added scheduler
-    cos = (lambda o: CosineAnnealingLR(o, 10),)
-    _raises(
-        sd,
-        _phase(_net(), _adamw, scheds=cos),
-        "scheduler #0",
-        "MultiStepLR -> CosineAnnealingLR",
-    )
-    _raises(
-        sd,
-        _phase(_net(), _adamw, scheds=MSLR + cos),
-        "scheduler #1",
-        "None -> CosineAnnealingLR",
-    )
+    # a changed scheduler list is rebuilt and replayed (stage 3 A2: tests/test_s3_scheduler.py)
 
 
 @CUDA

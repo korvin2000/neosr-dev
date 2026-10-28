@@ -69,6 +69,7 @@ def build_schedulers(
     if not cfg:
         return []
     kind, cls, kwargs = _lookup(SCHEDULERS, cfg, "train.scheduler")
+    kwargs.pop("nets", None)  # which optimizers: decided by the trainer
     return [construct(cls, "train.scheduler", kind, kwargs, optimizer=opt)]
 
 
@@ -357,7 +358,7 @@ class base:
                 msg = f"{path}: {n} does not match the configured network:\n{e}"
                 raise ConfigError(msg) from e
         for n, ph in self.phases.items():
-            ph.load_state_dict(state["phases"][n], log)
+            ph.load_state_dict(state["phases"][n], log, update=state["update"])
         if self.ema is not None and state["ema"] is not None:
             self.ema.load_state_dict(state["ema"])
         elif self.ema is not None:
@@ -380,8 +381,9 @@ class base:
         self._pending_rng = state["rng"]
         log.info(
             f"resumed {path.name}: update {self.update}, epoch {self.epoch}. Exact: weights, EMA, "
-            "optimizers, schedulers, scalers, counters, model-side RNG (rank 0). "
-            "Restarted: data order, augmentation, OTF pool."
+            "optimizers, schedulers (a changed scheduler config: rebuilt and replayed, see above), "
+            "scalers, counters, model-side RNG (rank 0). Restarted: data order, augmentation, "
+            "OTF pool."
         )
 
     def restore_rng(self) -> None:

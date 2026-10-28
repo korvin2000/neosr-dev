@@ -420,6 +420,7 @@ def test_ema_export_is_the_average(tmp_path):
 def test_state_format_and_exports(tmp_path):
     opt = make_opt(tmp_path, d=True, ema=0.9, optim=SF)
     opt["train"]["scheduler"] = {"type": "MultiStepLR", "milestones": [2], "gamma": 0.5}
+    opt["train"]["scheduler"]["nets"] = ["g", "d"]  # stage 3 A2: SF G is opt-in
     opt["logger"]["keep_states"] = 2
     m = build(opt)
     m.validation(loader(), 0, None, save_img=False)

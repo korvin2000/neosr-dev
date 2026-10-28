@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 import logging
+import warnings
+from collections import Counter
 from contextlib import nullcontext
 from itertools import zip_longest
 from typing import TYPE_CHECKING
@@ -46,6 +48,36 @@ SPIKE_K, SPIKE_BETA = 3.0, 0.98
 _GROUP_STATE = frozenset({
     "params", "lr", "initial_lr", "step", "k", "train_mode", "weight_sum", "lr_max", "sf_version",
 })  # fmt: skip
+
+
+# scheduler state entries that are its clock, not its configuration (base_lrs follow the optimizer's
+# restored initial_lr; `verbose` was saved by older torch)
+_SCHED_CLOCK = frozenset({
+    "base_lrs", "last_epoch", "_step_count", "_last_lr", "_is_initial",
+    "_get_lr_called_within_step", "verbose",
+})  # fmt: skip
+
+
+def _sched_config(kind: str, state: Mapping) -> tuple[str, dict]:
+    """(type, configuration): compared by value, so 0 == 0.0 and Counter == Counter."""
+    return kind, {k: v for k, v in state.items() if k not in _SCHED_CLOCK}
+
+
+def _sched_repr(configs: list[tuple[str, dict]]) -> str:
+    """[MultiStepLR(milestones=[6], gamma=0.5)] for the resume warning."""
+    return (
+        "["
+        + ", ".join(
+            f"{kind}("
+            + ", ".join(
+                f"{k}={sorted(v.elements()) if isinstance(v, Counter) else v!r}"
+                for k, v in cfg.items()
+            )
+            + ")"
+            for kind, cfg in configs
+        )
+        + "]"
+    )
 
 
 def _hparams(group: Mapping) -> dict:
@@ -199,6 +231,24 @@ class Phase:
             f"{msg}: they are never updated or weight-decayed"
         )
 
+    def _replay(self, update: int) -> None:
+        """The schedulers as a run with this configuration would have them after `update` updates:
+        from the restored base lr (initial_lr, saved-state-authoritative), constructed in order, then
+        stepped once per update like step() does. Exact for chained warm-up and decay."""
+        for g in self.opt.param_groups:
+            g["lr"] = g.setdefault("initial_lr", g["lr"])
+        with warnings.catch_warnings():  # "scheduler.step() before optimizer.step()"
+            warnings.simplefilter("ignore", UserWarning)
+            for s in (
+                self.schedulers
+            ):  # what LRScheduler.__init__ does, on the restored groups
+                s.base_lrs = [g["initial_lr"] for g in self.opt.param_groups]
+                s.last_epoch = -1
+                s._initial_step()  # noqa: SLF001
+            for _ in range(update):
+                for s in self.schedulers:
+                    s.step()
+
     def _need_names(self) -> list[str]:
         if self.names is None:
             msg = f"net_{self.name}: state needs the trainable names (pass names=)"
@@ -223,9 +273,13 @@ class Phase:
             "streak": self.streak,  # the skip guard spans a resume
         }
 
-    def load_state_dict(self, sd: Mapping, log: Logger) -> None:
-        """Strict resume: a changed optimizer, state version, SF mode, trainable set or scheduler
-        list raises. Saved hyper-parameters win over the config, with a warning per change."""
+    def load_state_dict(
+        self, sd: Mapping, log: Logger, update: int | None = None
+    ) -> None:
+        """Strict resume: a changed optimizer, state version, SF mode or trainable set raises. Saved
+        hyper-parameters win over the config, with a warning per change. Schedulers: an unchanged
+        configuration restores exactly; a changed one (also an added or removed scheduler) is
+        rebuilt from the config and replayed to `update` (default: the saved clock), with a warning."""
         o, hint = sd["optimizer"], "; start a new run with pretrain_network_*"
         if (o["type"], o["sf"]) != (self.opt_type, self.sf):
             msg = (
@@ -245,11 +299,6 @@ class Phase:
             i, a, b = _first_diff(o["names"], names)
             msg = f"net_{self.name}: trainable parameter #{i} changed: {a} -> {b}{hint}"
             raise ConfigError(msg)
-        saved = [s["type"] for s in sd["schedulers"]]
-        if saved != (now := [type(s).__name__ for s in self.schedulers]):
-            i, a, b = _first_diff(saved, now)
-            msg = f"net_{self.name}: scheduler #{i} changed: {a} -> {b}{hint}"
-            raise ConfigError(msg)
         groups = o["state"]["param_groups"]
         for i, (old, new) in enumerate(
             zip(groups, self.opt.param_groups, strict=False)
@@ -261,9 +310,25 @@ class Phase:
                         f"net_{self.name}{where}: restored {k} {v!r} from the state (config "
                         f"{now[k]!r}); use pretrain_network_{self.name} to change it"
                     )
+        old = [_sched_config(s["type"], s["state"]) for s in sd["schedulers"]]
+        new = [_sched_config(type(s).__name__, s.state_dict()) for s in self.schedulers]
         self.opt.load_state_dict(o["state"])  # restores SF train_mode group flags
-        for s, ss in zip(self.schedulers, sd["schedulers"], strict=True):
-            s.load_state_dict(ss["state"])
+        if old == new:
+            for s, ss in zip(self.schedulers, sd["schedulers"], strict=True):
+                s.load_state_dict(ss["state"])
+        else:
+            if update is None:
+                update = max(
+                    (s["state"]["last_epoch"] for s in sd["schedulers"]), default=0
+                )
+            lr = [g["lr"] for g in self.opt.param_groups]
+            self._replay(update)
+            log.warning(
+                f"net_{self.name}: scheduler changed since the state: {_sched_repr(old)} -> "
+                f"{_sched_repr(new)}; rebuilt "
+                f"from the config and replayed to update {update}: lr {lr} -> "
+                f"{[g['lr'] for g in self.opt.param_groups]}"
+            )
         self.streak = sd.get("streak", 0)  # absent: saved before it was recorded
         if self.spike and (ema := sd.get("clip_ema")) is not None:
             self.norm_ema = ema.to(self.params[0].device)

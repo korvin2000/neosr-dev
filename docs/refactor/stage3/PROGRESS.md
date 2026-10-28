@@ -41,3 +41,30 @@ worktree `.venv` has no torch), each file in its own capped scope (`systemd-run 
 - Owner: 1x restoration needed (A7 stays); real-world photos are the main goal (Phase B OTF approved after R3GAN);
   R3GAN track started: analysis lanes (Opus audit, Opus neosr-fit, Codex Astra) -> Fable design -> implementation brief.
   Reports in `stage3/r3gan/`.
+
+### A1 fixup (3751cc0)
+- `test_metrics::test_validation_parks_metric_nets_on_cpu` drives `base.validation` with a duck-typed model; after A1
+  it needs `best_metric_results`, `save_best` and a loader name. Missed in the A1 scoped runs (the file was not among
+  them); fixed and verified at HEAD in a temporary worktree. `test_s2_mixed` and `test_losses_pipeline` exceed the 4 GB
+  cap at HEAD already (exit 137, memory, not failures): the final suite runs them with a larger cap.
+
+### A2 scheduler targeting, resume, range checks
+- Done: `train.scheduler.nets = ["g", "d"]` (explicit targeting; default = every optimizer not in schedule-free mode,
+  one info line per optimizer left out). Resume: each scheduler's configuration (state minus clock/base_lrs, compared
+  by value) is matched against the saved one; unchanged -> exact restore (as before); changed, added or removed (also
+  the trainer's LinearLR warm-up, or a changed `nets`) -> rebuilt from the config and replayed to the saved update from
+  the restored `initial_lr` (saved lr wins, as for the optimizer), with one warning naming old/new schedulers and the
+  lr before/after. `validate_train`: `nets` range check; ConfigWarning for CosineAnnealing `T_max < total_iter` and a
+  MultiStepLR milestone `>= total_iter` (assumption: the brief's "last milestone < total_iter" reads inverted; a last
+  milestone below total_iter is the normal case). No `wsd` row (after E2).
+- Behaviour change (per the brief/CONSENSUS decision): with a `[train.scheduler]` and no `nets`, a schedule-free
+  optimizer is no longer scheduled (no template has a scheduler). A state that scheduled one resumes with a warning and
+  the base lr; `nets = ["g", "d"]` keeps the old targeting. Replay costs ~1 us per scheduler step (2 s at 1M updates).
+- Codex review: 4 findings, all fixed: string comparison made `eta_min` 0 vs 0.0 (older torch) a change -> structural
+  comparison, formatting only for the log; nested `nets` arrays raised TypeError -> element type check; more coverage
+  (warm-up + cosine T_max change, idle D clock, changed `nets`, legacy `verbose`/int state, SF migration); the resume
+  summary no longer claims an exact scheduler restore after a replay.
+- Test changes (obsolete by design): `test_phase_state` scheduler-list raises removed, `test_s2_trainer` warm-up removal
+  now replays (lr 0.5) instead of raising, `test_model` state test sets `nets` for its SF G.
+- Verified: test_s3_scheduler (25), test_phase_state, test_s2_trainer, test_resume, test_model, test_config,
+  test_entry, test_ddp_gloo, test_phase, test_s2_review, test_stop: green.

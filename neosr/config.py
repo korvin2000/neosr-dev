@@ -435,6 +435,7 @@ def validate_train(cfg: dict[str, Any]) -> None:
         if metric.get("better", "higher") not in {"higher", "lower"}:
             msg = f"val.metrics.{name}.better must be 'higher' or 'lower', got {metric['better']!r}"
             raise ConfigError(msg)
+    _validate_scheduler(cfg, train)
     if (best := val.get("save_best")) is not None and best not in (
         metrics := val.get("metrics") or {}
     ):
@@ -495,6 +496,41 @@ def validate_train(cfg: dict[str, Any]) -> None:
             raise ConfigError(msg)
     if train.get("enable_qat"):
         _validate_qat(cfg, train)
+
+
+def _validate_scheduler(cfg: dict[str, Any], train: dict[str, Any]) -> None:
+    """train.scheduler: `nets` names optimizers that exist; a horizon outside the run warns."""
+    sched = train.get("scheduler") or {}
+    nets, known = sched.get("nets"), ["g", "d"] if "network_d" in cfg else ["g"]
+    if nets is not None and (
+        not isinstance(nets, list)
+        or not nets
+        or not all(isinstance(n, str) for n in nets)
+        or len(set(nets)) != len(nets)
+        or not set(nets) <= set(known)
+    ):
+        msg = f"train.scheduler.nets must be a non-empty list of distinct names from {known}, got {nets!r}"
+        raise ConfigError(msg)
+    total = (cfg.get("logger") or {}).get("total_iter", 1000000)
+    kind = str(sched.get("type")).lower()
+    t_max = sched.get("T_max") if kind == "cosineannealing" else None
+    if isinstance(t_max, int) and t_max < total:
+        warnings.warn(
+            f"train.scheduler.T_max={t_max} < logger.total_iter={total}: the lr climbs back up "
+            "after T_max",
+            ConfigWarning,
+            stacklevel=3,
+        )
+    late = [
+        m for m in sched.get("milestones") or [] if isinstance(m, int) and m >= total
+    ]
+    if kind == "multisteplr" and late:
+        warnings.warn(
+            f"train.scheduler: milestone {late[0]} >= logger.total_iter={total} never affects a "
+            "training update",
+            ConfigWarning,
+            stacklevel=3,
+        )
 
 
 def qat_schedule(train: dict[str, Any], total_iter: int) -> tuple[int, int, int]:
