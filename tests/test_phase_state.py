@@ -14,6 +14,8 @@ CUDA = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
 
 
 class Ctx:
+    it = 1
+
     def __init__(self, lq, gt) -> None:
         self.lq, self.gt, self.logs = lq, gt, {}
 
@@ -24,6 +26,9 @@ class Ctx:
 class Term:
     def __init__(self, net) -> None:
         self.net = net
+
+    def active(self, _it) -> bool:
+        return True
 
     def compute(self, ctx):
         return (self.net(ctx.lq).float() - ctx.gt).abs().mean()

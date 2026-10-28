@@ -109,6 +109,7 @@ def cfg(**train) -> dict:
         "network_g": {"type": "compact"},
         "datasets": {"train": {"patch_size": 8, "batch_size": 2}},
         "train": {"optim_g": {"type": "adamw"}, "ema": 0.999, **train},
+        "logger": {"save_checkpoint_freq": 1},
     }
 
 

@@ -21,7 +21,11 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.fixture
 def restore_torch_state(monkeypatch: pytest.MonkeyPatch):
     """setup_runtime sets process-wide flags, seeds and environment variables: put them back."""
-    for var in ("CUBLAS_WORKSPACE_CONFIG", "PYTORCH_ALLOC_CONF"):
+    for var in (
+        "CUBLAS_WORKSPACE_CONFIG",
+        "PYTORCH_ALLOC_CONF",
+        "PYTORCH_CUDA_ALLOC_CONF",
+    ):
         monkeypatch.setenv(var, os.environ.get(var, ""))  # registers the restore
         monkeypatch.delenv(var)
     cudnn, matmul = torch.backends.cudnn, torch.backends.cuda.matmul
@@ -71,7 +75,12 @@ def fake_gpus(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.usefixtures("restore_torch_state", "fake_gpus")
 def test_single_process() -> None:
-    cfg = {"manual_seed": 7, "fast_matmul": True, "num_gpu": "auto"}
+    cfg = {
+        "manual_seed": 7,
+        "deterministic": True,
+        "fast_matmul": True,
+        "num_gpu": "auto",
+    }
     rt = runtime.setup_runtime(cfg)
     assert rt == runtime.Runtime(torch.device("cuda", 0), 0, 1, 7, distributed=False)
     recorded = {"dist": False, "rank": 0, "world_size": 1, "manual_seed": 7}

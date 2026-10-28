@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from neosr.config import ConfigError
 from neosr.models import build_model
+from neosr.models.image import QAT_KEYS
 from neosr.runtime import Runtime
 
 CPU = Runtime(torch.device("cpu"), 0, 1, 0, False)
@@ -29,7 +30,7 @@ STATE_KEYS = {
     "best",
     "run",
 }
-G_KEYS = {"l_g_pix", "l_g_total", "grad_norm_g", "skipped_g"}
+G_KEYS = {"l_g_pix", "l_g_total", "grad_norm_g", "clipped_g", "skipped_g"}
 D_KEYS = {
     "l_g_gan",
     "l_d_real",
@@ -38,6 +39,7 @@ D_KEYS = {
     "out_d_fake",
     "l_d_total",
     "grad_norm_d",
+    "clipped_d",
     "skipped_d",
 }
 SF = {"type": "adan_sf", "lr": 1e-2, "schedule_free": True}
@@ -323,6 +325,9 @@ def test_nan_gradient_is_skipped_cleanly(tmp_path):
 
 def test_nan_objective_with_finite_grads_raises_at_log(tmp_path):
     class NaNTerm:
+        def active(self, _it):
+            return True
+
         def compute(self, _ctx):
             return torch.tensor(float("nan"))  # detached: the gradients stay finite
 
@@ -434,17 +439,23 @@ def test_state_format_and_exports(tmp_path):
     assert sd_equal(st["nets"]["net_g"], m.net_g.state_dict())
     assert sd_equal(st["ema"], m.ema.module.state_dict())
     ph = st["phases"]["net_g"]
-    assert set(ph) == {"optimizer", "scaler", "schedulers"}
+    assert set(ph) == {"optimizer", "scaler", "schedulers", "clip_ema"}
     assert ph["scaler"] == {}
-    assert set(ph["optimizer"]) == {"type", "sf", "names", "state"}
+    assert ph["clip_ema"] is None  # grad_clip = "spike" only
+    assert set(ph["optimizer"]) == {"type", "version", "sf", "names", "state"}
     assert (ph["optimizer"]["type"], ph["optimizer"]["sf"]) == ("adan_sf", True)
     assert ph["optimizer"]["names"] == [n for n, _ in m.net_g.named_parameters()]
     assert [s["type"] for s in ph["schedulers"]] == ["MultiStepLR"]
     assert m.current_lr() == [pytest.approx(5e-3)]
     assert set(st["rng"]) == {"python", "numpy", "neosr", "torch", "cuda", "loader"}
+    tr = opt["train"]
     assert st["run"] == {
         "network_g": opt["network_g"], "network_d": opt["network_d"], "use_amp": False,
-        "bfloat16": False, "ema": 0.9, "world_size": 1,
+        "bfloat16": False, "ema": 0.9, "world_size": 1, "optim_g": tr["optim_g"],
+        "optim_d": tr["optim_d"], "scheduler": tr["scheduler"],
+        "losses": {"pixel_opt": tr["pixel_opt"], "gan_opt": tr["gan_opt"]},
+        "train": {"clamp": True, "grad_clip": True, "ema_power": None} | dict.fromkeys(QAT_KEYS),
+        "data": {"accumulate": 1, "batch_size": B, "patch_size": P},
     }  # fmt: skip
     assert st["best"] == m.best_metric_results
     assert set(st["best"]["valset"]) == {"psnr"}

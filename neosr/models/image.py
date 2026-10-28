@@ -8,6 +8,8 @@ from typing import Any
 import torch
 from torch import Tensor, nn
 from torch.ao.quantization import FakeQuantizeBase
+from torch.ao.quantization.observer import ObserverBase
+from torch.optim.lr_scheduler import LinearLR
 from tqdm import tqdm
 
 from neosr.archs import build_network
@@ -21,6 +23,61 @@ from neosr.models.phase import Ema, LossMeter, Phase, no_sync, trainable
 from neosr.models.tiling import infer_tiled
 from neosr.runtime import Runtime
 from neosr.utils import get_root_logger, imwrite, tc, tensor2img
+
+# optimizers without a native warmup_steps: the trainer prepends a LinearLR warmup (ST-10)
+LINEAR_WARMUP = frozenset({"adam", "adamw", "nadam", "adan"})
+QAT_KEYS = (
+    "enable_qat", "qat_type", "fused_init", "quantize_residual", "calibration_iters",
+    "qat_freeze_norm_iter", "qat_freeze_observers_iter",
+)  # fmt: skip
+
+
+class _RestoringClamp(torch.autograd.Function):
+    """clamp(x, 0, 1) whose backward keeps the gradient components that move an out-of-range raw
+    value back into range (T-01). The hard clamp zeroes every out-of-range pixel's gradient, so such
+    a pixel can never return; a straight-through clamp would let an outward gradient drift it."""
+
+    @staticmethod
+    def forward(ctx, x: Tensor) -> Tensor:
+        ctx.save_for_backward(x)
+        return x.clamp(0, 1)
+
+    @staticmethod
+    def backward(ctx, g: Tensor) -> Tensor:
+        (x,) = ctx.saved_tensors
+        return g.masked_fill(((x < 0) & (g > 0)) | ((x > 1) & (g < 0)), 0)
+
+
+def restoring_clamp(x: Tensor) -> Tensor:
+    return _RestoringClamp.apply(x)
+
+
+def step_lr(group: dict[str, Any]) -> float:
+    """The lr of the last step: adan_sf/adamw_sf scale `lr` by their own linear warmup (`step` and
+    `k` count their applied steps); a trainer LinearLR warmup is already in `lr`."""
+    w, n = group.get("warmup_steps") or 0, group.get("step", group.get("k", 0))
+    return group["lr"] * min(1.0, n / w) if w else group["lr"]
+
+
+class Buffers:
+    """The buffers of a net (BN statistics and counters, spectral-norm u/v, QAT observers) and a
+    preallocated copy taken at the start of every update window: a skipped update puts back what its
+    forwards wrote (T-04). Like Ema, it assumes buffers keep their shape and change in place (QAT
+    materialises its per-channel shapes in prepare_qat)."""
+
+    def __init__(self, net: nn.Module) -> None:
+        self.live = list(net.buffers())
+        self.copy = [torch.empty_like(b) for b in self.live]
+
+    @torch.no_grad()
+    def save(self) -> None:
+        if self.live:
+            torch._foreach_copy_(self.copy, self.live)
+
+    @torch.no_grad()
+    def restore(self) -> None:
+        if self.live:
+            torch._foreach_copy_(self.live, self.copy)
 
 
 @contextmanager
@@ -64,25 +121,32 @@ class image(base):
             tr, scale=self.scale, device=self.device, has_d=self.net_d is not None
         )
         self.accumulate = ds.get("accumulate", 1)
+        # true: the legacy max-norm 1.0; a positive float; "spike"
+        clip = tr.get("grad_clip", True)
         amp = {
             "amp_dtype": torch.bfloat16 if opt.get("bfloat16") else torch.float16,
             "use_amp": bool(opt.get("use_amp")),
             "accumulate": self.accumulate,
-            "grad_clip": 1.0 if tr.get("grad_clip", True) else 0.0,
+            "grad_clip": float(clip) if isinstance(clip, bool) else clip,
             "max_skip_streak": tr.get("max_skip_streak", 10),
+            "strict_unused": self.rt.distributed
+            and not opt.get("find_unused_parameters"),
         }
         self.phases = {"net_g": self._phase("g", self.net_g, g_terms, amp)}
         if self.net_d is not None:
             self.phases["net_d"] = self._phase("d", self.net_d, d_terms, amp)
         self.g, self.d = self.phases["net_g"], self.phases.get("net_d")
         self.meter = LossMeter()
+        # true: legacy hard [1/255, 1]; false: none; "restore" (restoring_clamp)
         self.clamp = tr.get("clamp", True)
         self.aug, self.aug_prob = ds.get("augmentation"), ds.get("aug_prob")
+        self.aug_multi_prob = ds.get("aug_multi_prob", 0.3)
         if self.aug is not None and list(self.aug) == ["none"]:
             self.aug = None
 
         if resuming:
             self.resume(Path(opt["path"]["resume_state"]))
+        self.buffers = {n: Buffers(net) for n, net in self.nets.items()}
         # last: DDP broadcasts the loaded weights; compiled graphs see them in place
         self.net_g_fwd = self.wrap(self.net_g)
         # D: 2 forwards before 1 backward; broadcasting BN buffers in between would fail
@@ -183,8 +247,19 @@ class image(base):
     ) -> Phase:
         section = f"train.optim_{name}"
         names, params = trainable(net)
-        kind, opt = build_optimizer(self.opt["train"][f"optim_{name}"], params, section)
-        scheds = build_schedulers(self.opt["train"].get("scheduler"), opt)
+        cfg = dict(self.opt["train"][f"optim_{name}"])
+        warmup = 0
+        if str(cfg.get("type")).lower() in LINEAR_WARMUP:
+            warmup = cfg.pop("warmup_steps", 0)
+            if not isinstance(warmup, int) or isinstance(warmup, bool) or warmup < 0:
+                msg = (
+                    f"[{section}] warmup_steps must be an integer >= 0, got {warmup!r}"
+                )
+                raise ConfigError(msg)
+        kind, opt = build_optimizer(cfg, params, section)
+        # built first: the configured scheduler then chains onto the warmed-up lr
+        scheds = [LinearLR(opt, 1 / warmup, total_iters=warmup)] if warmup else []
+        scheds += build_schedulers(self.opt["train"].get("scheduler"), opt)
         return Phase(
             name,
             params,
@@ -207,7 +282,12 @@ class image(base):
     def _set_batch(self, lq: Tensor, gt: Tensor) -> None:
         if self.aug is not None:
             gt, lq = apply_augment(
-                gt, lq, scale=self.scale, augs=self.aug, prob=self.aug_prob
+                gt,
+                lq,
+                scale=self.scale,
+                augs=self.aug,
+                prob=self.aug_prob,
+                multi_prob=self.aug_multi_prob,
             )
         self.lq = lq.contiguous(memory_format=self.mf)
         self.gt = gt.contiguous(memory_format=self.mf)
@@ -216,29 +296,48 @@ class image(base):
         """One micro-batch. Returns True when it closed an update window (then `self.update` grew)."""
         if self.qat is not None:
             self._qat_step(self.update + 1)
+        if self.micro % self.accumulate == 0:  # a window starts
+            for b in self.buffers.values():
+                b.save()
         boundary = (self.micro + 1) % self.accumulate == 0
-        with no_sync(self.net_g_fwd, boundary):  # forward + losses + backward
-            with torch.autocast(**self.g.autocast):
-                sr = self.net_g_fwd(self.lq)
-                if self.clamp:
-                    sr = sr.clamp(1 / 255, 1)
-            ctx = Context(
-                sr=sr,
-                gt=self.gt,
-                lq=self.lq,
-                it=self.update + 1,  # the update being computed
-                net_d=self.net_d_fwd,
-                net_d_adv=self.net_d_adv,
-            )
-            self.g.backward(ctx)
-        if self.d is not None:
-            with no_sync(self.net_d_fwd, boundary):
-                self.d.backward(ctx)
-        self.meter.add(ctx.logs)
+        it = self.update + 1  # the update being computed
+        g_on = self.g.active(it)
+        if g_on or (self.d is not None and self.d.active(it)):
+            # forward + losses + backward; an idle G only makes D's fake samples (no graph)
+            with no_sync(self.net_g_fwd, boundary), torch.set_grad_enabled(g_on):
+                with torch.autocast(**self.g.autocast):
+                    sr = self.net_g_fwd(self.lq)
+                    if self.clamp == "restore":
+                        sr = restoring_clamp(sr)
+                    elif self.clamp:
+                        sr = sr.clamp(1 / 255, 1)
+                ctx = Context(
+                    sr=sr,
+                    gt=self.gt,
+                    lq=self.lq,
+                    it=it,
+                    net_d=self.net_d_fwd,
+                    net_d_adv=self.net_d_adv,
+                )
+                self.g.backward(ctx)
+            g_logs = dict(ctx.logs)
+            self.meter.add(g_logs, "g")
+            if self.d is not None:
+                with no_sync(self.net_d_fwd, boundary):
+                    self.d.backward(ctx)
+                self.meter.add(
+                    {k: v for k, v in ctx.logs.items() if k not in g_logs}, "d"
+                )
+        else:  # every phase idle: no forward (compute, RNG, buffer writes); the clocks still run
+            for p in self.phases.values():
+                p.idle = True
         self.micro += 1
         if not boundary:
             return False
+        # True applied, False skipped (its buffers are put back), None idle
         ok = {self.g: self.g.step()}
+        if ok[self.g] is False:
+            self.buffers["net_g"].restore()
         if ok[self.g] and self.ema is not None:
             self.ema.update()
         elif self.qat is not None and self.ema is not None and self.ema.lists is None:
@@ -249,8 +348,16 @@ class image(base):
                 torch._foreach_copy_(*buffers)
         if self.d is not None:
             ok[self.d] = self.d.step()
-        # the mean over successful updates: a skipped one adds nothing
-        self.meter.add({f"grad_norm_{p.name}": p.grad_norm for p, s in ok.items() if s})
+            if ok[self.d] is False:
+                self.buffers["net_d"].restore()
+        # means over applied steps: a skipped or idle one adds nothing
+        for p, s in ok.items():
+            if s:
+                clipped = {} if p.clipped is None else {f"clipped_{p.name}": p.clipped}
+                self.meter.add({f"grad_norm_{p.name}": p.grad_norm, **clipped}, p.name)
+        # each phase's values by its own step: an applied G with a broken loss raises (T1 D15)
+        # even when D skipped
+        self.meter.commit({p.name: s is not False for p, s in ok.items()})
         self.update += 1
         return True
 
@@ -269,13 +376,21 @@ class image(base):
             *([self.ema.module] if self.ema else []),
             *([self.net_d] if self.net_d else []),
         ]
-        ts = [
-            t
-            for n in nets
-            for t in (*n.parameters(), *n.buffers())
-            if t.is_floating_point()
-        ]
-        bad = (~torch.stack(torch._foreach_norm(ts)).isfinite().all()).int()
+        ts, ranges = [], []
+        for n in nets:
+            obs = {
+                id(b)
+                for m in n.modules()
+                if isinstance(m, ObserverBase)
+                for b in m.buffers()
+            }
+            for t in (*n.parameters(), *n.buffers()):
+                if t.is_floating_point():
+                    (ranges if id(t) in obs else ts).append(t)
+        bad = ~torch.stack(torch._foreach_norm(ts)).isfinite().all()
+        if ranges:  # QAT observer min/max: +-inf is their reset (nothing observed yet), NaN poison
+            bad |= torch.stack(torch._foreach_norm(ranges)).isnan().any()
+        bad = bad.int()
         # buffers are rank-local: one bad rank stops every rank
         if torch.distributed.is_initialized():
             torch.distributed.all_reduce(bad, op=torch.distributed.ReduceOp.MAX)
@@ -284,7 +399,7 @@ class image(base):
             raise FloatingPointError(msg)
 
     def current_lr(self) -> list[float]:
-        return [g["lr"] for g in self.g.opt.param_groups]
+        return [step_lr(g) for g in self.g.opt.param_groups]
 
     # ---------------------------------------------------------------- evaluation
     @contextmanager
@@ -302,7 +417,10 @@ class image(base):
         try:
             if phase is not None and phase.sf:
                 flags = [g["train_mode"] for g in phase.opt.param_groups]
-                snap = [p.detach().clone() for p in net.parameters()]
+                params = list(net.parameters())
+                snap = [torch.empty_like(p) for p in params]
+                with torch.no_grad():
+                    torch._foreach_copy_(snap, params)
                 phase.opt.eval()  # p <- x
             net.eval()
             self._evaluating = True
@@ -396,12 +514,28 @@ class image(base):
         return out
 
     def run_record(self) -> dict[str, Any]:
-        o = self.opt
+        """What a resume compares (each change warns): nets, precision, objective, optimisation."""
+        o, tr, ds = self.opt, self.opt["train"], self.opt["datasets"]["train"]
         return {
             "network_g": o["network_g"],
             "network_d": o.get("network_d"),
             "use_amp": o.get("use_amp", False),
             "bfloat16": o.get("bfloat16", False),
-            "ema": (o.get("train") or {}).get("ema", 0),
+            "ema": tr.get("ema", 0),
             "world_size": self.rt.world_size,
+            "optim_g": tr["optim_g"],
+            "optim_d": tr.get("optim_d"),
+            "scheduler": tr.get("scheduler"),
+            "losses": {k: v for k, v in tr.items() if k.endswith("_opt")},
+            "train": {
+                "clamp": self.clamp,
+                "grad_clip": tr.get("grad_clip", True),
+                "ema_power": tr.get("ema_power"),
+                **{k: tr.get(k) for k in QAT_KEYS},
+            },
+            "data": {
+                "accumulate": self.accumulate,
+                "batch_size": ds.get("batch_size"),
+                "patch_size": ds.get("patch_size"),
+            },
         }

@@ -13,7 +13,7 @@ reproducible research.
   (Real-ESRGAN) degradations and batch augmentations, all selected from a TOML file.
 - **Stable**: correct adversarial training, exact gradient accumulation, AMP (fp16/bf16) with non-finite update
   skipping, EMA, and atomic, self-contained checkpoints.
-- **Reproducible**: `manual_seed` turns on deterministic kernels. A resume is a stochastic continuation: weights,
+- **Reproducible**: `manual_seed` seeds every RNG; `deterministic = true` also turns on deterministic kernels. A resume is a stochastic continuation: weights,
   optimizer, EMA, scheduler, scaler and counters are restored exactly, model-side RNG on rank 0 only; data order
   and augmentations are not order-exact.
 - **Simple**: plain Python, no registries or import-time magic; each package has one lookup table. Managed with
@@ -101,7 +101,11 @@ Configs are TOML (`.toml` only). Required keys: `name`, `model_type` (`image` or
 - **Cross-key rules** (errors): `network_d` needs `train.optim_d` and `train.gan_opt`, and the reverse;
   `bfloat16` needs `use_amp`; `val.tile > 2 * val.tile_overlap`; `datasets.train.accumulate >= 1`;
   `train.max_skip_streak >= 1`; `persistent_workers` needs `num_worker_per_gpu > 0`; `num_gpu > 1` needs a
-  launcher; `test_*` datasets belong in an inference config.
+  launcher; `test_*` datasets belong in an inference config. Training configs also need `0 <= train.ema < 1`,
+  `val.val_freq >= 1`, `val.metrics.*.better` in `"higher"`/`"lower"`, `num_worker_per_gpu` an integer >= 0 or
+  `"auto"`, `dataset_enlarge_ratio >= 1`, `logger.total_iter`/`print_freq` >= 1 and a `save_checkpoint_freq >= 1`,
+  unique val dataset names, no dataset `mean`/`std` (nothing inverts a normalisation for the losses, outputs and
+  metrics), and CUDA for `use_amp`. Each is checked before the model is built.
 - **Paths** expand `~`. A relative `path.resume_state` is relative to the repository root. Quote Windows paths
   with single quotes.
 - **Removed keys** are errors that name the replacement:
@@ -110,12 +114,13 @@ Configs are TOML (`.toml` only). Required keys: `name`, `model_type` (`image` or
 |---|---|
 | `train.sam`, `train.sam_init` | none (SAM/FSAM removed) |
 | `train.eco`, `train.eco_init`, `train.eco_iters`, `train.eco_schedule` | none (ECO removed) |
-| `train.warmup_iter` | `warmup_steps` of `adamw_sf`/`adan_sf`; none for the other optimizers |
+| `train.warmup_iter` | `warmup_steps` in `train.optim_*` (every optimizer) |
 | `train.gw_opt`, `train.color_opt`, `train.luma_opt` | none (losses removed) |
 | `path.ignore_resume_networks` | `pretrain_network_*` for a new run |
 
-Top-level keys: `num_gpu` (`"auto"`), `manual_seed`, `use_amp`, `bfloat16`, `fast_matmul` (TF32 and reduced
-matmul precision), `compile` and `compile_mode` (training only, not on Windows; `test.py` runs eager),
+Top-level keys: `num_gpu` (`"auto"`), `manual_seed`, `deterministic` (default false), `use_amp`, `bfloat16`,
+`fast_matmul` (TF32 and reduced matmul precision), `fp16_accumulation` (default false: fp16 GEMMs accumulate in
+fp16, faster, overflow above 65504; fp16 AMP only), `compile` and `compile_mode` (training only, not on Windows; `test.py` runs eager),
 `find_unused_parameters` (DDP),
 `input_size`/`in_chans` (log MACs if `torchprofile` is installed), `print_network`.
 
@@ -130,8 +135,10 @@ matmul precision), `compile` and `compile_mode` (training only, not on Windows; 
 Training keys: `patch_size` (the lq patch), `batch_size` and `num_worker_per_gpu` (default 4, `"auto"`) per
 process, `accumulate`, `dataset_enlarge_ratio`, `use_hflip`/`use_rot` (default on), `pin_memory` (default on with CUDA) and
 `persistent_workers` (default on with workers), `queue_size` (OTF pair pool), and the batch augmentations
-`augmentation = ["none", "mixup", "cutmix", "resizemix", "cutblur"]` with `aug_prob`.
-Validation sets are `[datasets.val]`, `[datasets.val_1]`, ...; inference sets are `[datasets.test_1]`, ....
+`augmentation = ["none", "mixup", "cutmix", "resizemix", "cutblur"]` with `aug_prob` (relative weights) and
+`aug_multi_prob` (default 0.3: the chance that a batch combines several of them instead of drawing one).
+Validation sets are `[datasets.val]`, `[datasets.val_1]`, ... (`name` defaults to the section key); inference
+sets are `[datasets.test_1]`, ....
 
 ## losses
 
@@ -158,7 +165,9 @@ target = "lq"         # reference: "gt" (default) or "lq" = bicubic-upscaled lq 
   always in train mode, and the adversarial term reaches only the generator's parameters.
 - **Log keys** (means over the logging window): `l_g_<slot>`, `l_g_total`, `l_d_total`, `l_d_real`, `l_d_fake`,
   `out_d_real`, `out_d_fake` (mean D logits), `grad_norm_g`/`grad_norm_d` (before clipping, successful updates
-  only), `skipped_g`/`skipped_d`.
+  only), `clipped_g`/`clipped_d` (share of clipped updates), `skipped_g`/`skipped_d`, and `nonfinite_<key>`
+  (count of left-out non-finite values) when there were any. The performance field also shows the share of the
+  window spent waiting for training batches (`data 12%`).
 
 | loss | `type` |
 |---|---|
@@ -181,23 +190,34 @@ target = "lq"         # reference: "gt" (default) or "lq" = bicubic-upscaled lq 
 - **Updates.** An update is one optimizer step over `datasets.train.accumulate` micro-batches (default 1; the
   loss is divided by it, and DDP reduces once per window). `logger.total_iter` (default 1000000),
   `logger.print_freq` (100), `logger.save_checkpoint_freq` and `val.val_freq` all count updates.
-- **Output clamp.** `train.clamp` (default true) clamps the generator output to [1/255, 1] before the losses.
+- **Output clamp.** `train.clamp` sets what the losses see of the generator output: `true` (default) clamps to
+  [1/255, 1], which also zeroes the gradient of every out-of-range pixel; `false` passes it unclamped;
+  `"restore"` clamps to [0, 1] but keeps the gradient that moves an out-of-range pixel back into range.
 - **AMP.** `use_amp = true` runs fp16 autocast with a GradScaler; adding `bfloat16 = true` runs bf16 (no
   scaler). Under AMP the nets and inputs use channels-last.
-- **Clipping.** `train.grad_clip` (default true) clips each network's total gradient norm to 1.0.
+- **Clipping.** `train.grad_clip` bounds each network's total gradient norm: `true` (default) clips to 1.0, a
+  number clips to that norm, `false` turns clipping off, and `"spike"` clips only norms above 3x a running mean
+  (EMA over ~50 updates) of the applied norms; the first update only starts the mean, which a resume restores.
 - **Non-finite updates.** If a network's gradient norm is inf/NaN, its optimizer step is skipped (the fp16
-  scaler backs off), the skip is counted in `skipped_g`/`skipped_d`, and the scheduler still advances.
-  `train.max_skip_streak` (default 10) consecutive skips stop the run. A non-finite logged loss, or non-finite
-  weights before a save or validation, also stops the run before anything is written (exit 1).
+  scaler backs off), the buffers its forwards wrote (BatchNorm statistics, spectral-norm vectors, QAT observers)
+  are put back, the EMA is not updated, the skip is counted in `skipped_g`/`skipped_d`, and the scheduler still
+  advances. The skipped update's non-finite losses are left out of the logged means and counted as
+  `nonfinite_<key>`. `train.max_skip_streak` (default 10) consecutive skips stop the run; so do non-finite weights
+  or buffers before a save or validation, and a non-finite loss of a network whose step was applied (finite
+  gradients: a broken loss), before anything is written (exit 1). The fp16 scaler starts at 2^5 and doubles after 200 clean updates.
 - **EMA.** `train.ema = 0.999` keeps an exponential moving average of the generator. The first successful update
   copies the generator; later updates average. Validation and the exported `net_g` use the EMA.
   `train.ema_power` (optional) ramps the decay up over the first updates (ema_pytorch-style warmup); without it
   the decay is constant. The templates set `ema_power = 0.75`.
 - **Optimizers** (`[train.optim_g]`, `[train.optim_d]`, `type` is case-insensitive): `adam`, `adamw`, `nadam`,
-  `adan`, and schedule-free `adamw_sf` and `adan_sf` (`schedule_free = true`, `warmup_steps`). With a
+  `adan`, and schedule-free `adamw_sf` and `adan_sf` (`schedule_free = true`). `warmup_steps = N` ramps the lr
+  linearly over the first N updates for every optimizer (a trainer `LinearLR` for the plain ones, before the
+  configured scheduler; the schedule-free ones count their applied steps); the logged lr includes it. With a
   schedule-free optimizer and no EMA, validation and exports use the evaluation (x) weights; training resumes
   from the training weights. `[train.scheduler]` (`multisteplr` or `cosineannealing`) applies to every optimizer.
-- **Seeds.** `manual_seed` enables deterministic algorithms; without it a random seed is drawn and logged.
+- **Seeds.** `manual_seed` seeds the RNGs; without it a random seed is drawn and logged. `deterministic = true`
+  selects deterministic algorithms (cuDNN benchmark off, `use_deterministic_algorithms`, filled uninitialised
+  memory), which is often slower. Expandable allocator segments are on unless `PYTORCH_ALLOC_CONF` is set.
 
 ## checkpoints and resume
 
@@ -205,18 +225,23 @@ Files under `experiments/<name>/`:
 
 | file | content |
 |---|---|
-| `models/net_g_<u>.pth`, `models/net_d_<u>.pth` | `{"params": state_dict}` at update `u`; `net_g` is the EMA if enabled. Never pruned |
+| `models/net_g_<u>.pth`, `models/net_d_<u>.pth` | `{"params": state_dict}` at update `u`; `net_g` is the EMA if enabled. Kept unless `logger.keep_exports` |
 | `models/net_*_latest.pth` | copies written at the end of training or on a Ctrl-C stop |
 | `training_states/<u>.state` | format 2: nets, EMA, optimizers, schedulers, scalers, counters, RNG, best metrics, run record; loads with `torch.load(weights_only=True)` |
 
 - A save writes the state first, then the exports, each atomically. `logger.keep_states` (default 3; 0 keeps
-  all) keeps the newest states.
+  all) keeps the newest states; `logger.keep_exports` (default 0 = all) keeps the newest numbered exports per
+  network (`*_latest` stays). The first save logs the size of one export set. If a periodic validation fails, the
+  state of that update is saved before the run stops.
 - **Resume**: an explicit `path.resume_state` wins; else `--auto_resume` takes the newest `<u>.state` in
   `training_states/` (none: a fresh start). A fresh run renames an existing run folder to
   `<name>_archived_<time>`; a resume never does. Resume is strict: a changed set of networks, optimizer type or
   schedule-free mode, trainable parameter list or scheduler list is a configuration error ("use
-  pretrain_network_* for a new run"). Other differences in the run record (network options, AMP, EMA, world
-  size) are warnings. A resume continues stochastically, not order-exactly: nets, EMA, optimizers, schedulers,
+  pretrain_network_* for a new run"), and so is a changed optimizer state version. Other differences in the
+  run record (network options, AMP, EMA, world size, optimizers, scheduler, loss sections, clamp, clip,
+  `ema_power`, accumulation, batch and patch size, QAT keys) are warnings. The optimizer hyper-parameters come
+  from the state; each one that differs from the config is reported (`restored lr 0.001 from the state (config
+  0.0001)`). A resume continues stochastically, not order-exactly: nets, EMA, optimizers, schedulers,
   scalers and counters are exact; the model-side RNG (dropout, DropPath) is restored on rank 0 only (other DDP
   ranks start fresh streams); data order, augmentations and the OTF pool restart.
 - **Pretrained weights**: `path.pretrain_network_g`/`_d` (ignored while resuming), `param_key_g`/`_d` (default:
@@ -224,7 +249,8 @@ Files under `experiments/<name>/`:
   shape mismatches and logs missing and unexpected keys). Pre-refactor `net_g_*.pth` files load this way;
   pre-refactor `.state` files cannot be resumed, and a `.state` is not accepted as a pretrain.
 - **Ctrl-C**: the first one stops at the next update boundary, saves state, exports and `*_latest`, and exits 0
-  without the final validation. A second one exits 130 at once. Under DDP all ranks stop together.
+  without the final validation. A second one exits 130 at once. Under DDP all ranks stop together, one update
+  after the signal.
 
 ## validation
 
@@ -238,7 +264,8 @@ tiles are stitched on the CPU) and `suffix` (inference file name suffix, default
 type = "calculate_psnr"   # calculate_psnr, calculate_ssim (crop_border, test_y_channel), calculate_dists, calculate_topiq
 [val.metrics.dists]
 type = "calculate_dists"
-better = "lower"          # default "higher"; used for the best-value tracking
+better = "lower"          # default "higher" ("lower" for calculate_dists); best-value tracking (a resumed best
+                          # tracked the other way starts over, with a warning)
 ```
 
 Validation runs on rank 0 with the EMA (or evaluation) weights and leaves the training RNG streams untouched.
@@ -415,6 +442,11 @@ Ultra light).
   `simple_otf`, `eqr_otf`, `pancam_otf` with their datasets and the `pancam`/`eqrsrgan` archs.
 - **Checkpoints**: training states are format 2 (old `.state` files cannot be resumed; old `net_*.pth` load as
   pretrained weights); only the newest `logger.keep_states` states are kept.
+- **Stage 2**: `manual_seed` no longer implies deterministic kernels (add `deterministic = true`); `fast_matmul`
+  no longer enables fp16 GEMM accumulation (`fp16_accumulation = true`); a skipped update restores the buffers its
+  forwards wrote and a non-finite loss in it is counted (`nonfinite_<key>`) instead of stopping the run; the fp16
+  scaler grows every 200 updates (was 2000); new `train.clamp = "restore"`, `train.grad_clip = <norm> | "spike"`,
+  `warmup_steps` for every optimizer, `aug_multi_prob`, `logger.keep_exports`.
 - **Configuration**: unknown keys warn instead of being silently ignored, removed keys are errors, and
   `match_lq_colors` became the per-loss `target = "lq"`.
 - **`blur_kernel_size`, `blur_kernel_size2`** (OTF) were removed: they were never read. Kernel sizes are sampled

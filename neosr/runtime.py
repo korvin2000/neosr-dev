@@ -64,13 +64,18 @@ def setup_runtime(cfg: dict[str, Any], *, launcher: str = "none") -> Runtime:
     if launcher == "none" and isinstance(num_gpu, int) and num_gpu > 1:
         msg = f"num_gpu={num_gpu} needs a launcher (torchrun --nproc_per_node={num_gpu} ... --launcher pytorch); DataParallel was removed"
         raise ConfigError(msg)
+    if cfg.get("use_amp") and cfg.get("is_train") and not torch.cuda.is_available():
+        msg = "use_amp needs CUDA (autocast and the GradScaler run on cuda); remove use_amp for a CPU run"
+        raise ConfigError(msg)
     seed = cfg.get("manual_seed")
-    deterministic = seed is not None
+    deterministic = bool(cfg.get("deterministic"))  # T-06: a seed alone only seeds
     if deterministic:
         os.environ.setdefault(
             "CUBLAS_WORKSPACE_CONFIG", ":4096:8"
         )  # before the first cuBLAS handle
-    else:
+    # the allocation layout does not change results; a user's setting (also the deprecated
+    # PYTORCH_CUDA_ALLOC_CONF, which PYTORCH_ALLOC_CONF would override) wins
+    if "PYTORCH_CUDA_ALLOC_CONF" not in os.environ:
         os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
     distributed = launcher != "none"
@@ -80,6 +85,11 @@ def setup_runtime(cfg: dict[str, Any], *, launcher: str = "none") -> Runtime:
             launcher, **{k: params[k] for k in ("backend", "port") if k in params}
         )
     rank, world_size = get_dist_info()
+    if seed is not None and not deterministic:
+        logger.info(
+            "manual_seed seeds the RNGs only; deterministic = true also selects deterministic "
+            "(often slower) kernels"
+        )
     if seed is None:  # rank 0 picks, every rank uses it
         box = [random.SystemRandom().randint(1024, 10000) if rank == 0 else None]
         if world_size > 1:
@@ -98,7 +108,10 @@ def setup_runtime(cfg: dict[str, Any], *, launcher: str = "none") -> Runtime:
         # get_float32_matmul_precision() raise (mixed APIs, torch 2.9), which breaks inductor
         torch.set_float32_matmul_precision("medium")
         torch.backends.cudnn.allow_tf32 = True
-        torch.backends.cuda.matmul.allow_fp16_accumulation = True
+    # fp16 GEMMs accumulating in fp16 (overflow above 65504): an explicit opt-in (ST-09)
+    torch.backends.cuda.matmul.allow_fp16_accumulation = bool(
+        cfg.get("fp16_accumulation")
+    )
 
     if torch.cuda.is_available():
         _check_gpu(cfg)

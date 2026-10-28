@@ -1,12 +1,33 @@
 import datetime
 import logging
 import time
+from collections.abc import Callable
 from typing import Any
 
 from neosr.utils.dist_util import get_dist_info, master_only
 from neosr.utils.misc import tc
 
 initialized_logger: dict[Any, Any] = {}
+
+
+class DataWait:
+    """Share of wall time spent inside `fn` (the loader) since the last share() (D-13)."""
+
+    def __init__(self) -> None:
+        self.waited, self.since = 0.0, time.perf_counter()
+
+    def __call__(self, fn: Callable[[], Any]) -> Any:
+        t = time.perf_counter()
+        try:
+            return fn()
+        finally:
+            self.waited += time.perf_counter() - t
+
+    def share(self) -> float:
+        now = time.perf_counter()
+        out = self.waited / max(now - self.since, 1e-9)
+        self.waited, self.since = 0.0, now
+        return out
 
 
 class AvgTimer:
@@ -98,6 +119,8 @@ class MessageLogger:
         )
         if "time" in log_vars:
             iter_time = log_vars.pop("time")
+            # share of the window spent waiting for batches
+            data = log_vars.pop("data", None)
             done = current_iter - self.start_iter
             time_sec_avg = (time.time() - self.start_time) / done if done > 0 else 0
             eta = datetime.timedelta(
@@ -105,8 +128,9 @@ class MessageLogger:
             )
             speed = 1 / iter_time if iter_time > 0 else 0.0
             lr = " ".join(f"{v:.2e}" for v in lrs)
+            wait = "" if data is None else f", data {100 * data:.0f}%"
             message += (
-                f" [ performance: {speed:.3f} it/s ] [ lr: {lr} ] [ eta: {eta} ] "
+                f" [ performance: {speed:.3f} it/s{wait} ] [ lr: {lr} ] [ eta: {eta} ] "
             )
         for k, v in log_vars.items():
             message += f"[ {k}: {v:.4e} ] "

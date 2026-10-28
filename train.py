@@ -34,6 +34,7 @@ from neosr.utils import (
     mkdir_and_rename,
 )
 from neosr.utils.dist_util import master_only
+from neosr.utils.logger import DataWait
 from neosr.utils.stop import StopFlag
 
 ROOT = Path(__file__).resolve().parent
@@ -176,20 +177,13 @@ def log_macs(model: Any, cfg: dict[str, Any]) -> None:
             log.info(f"{label} MACs: {macs:,d}")
 
 
-def _freq(lg: dict[str, Any], key: str, default: int | None) -> int:
-    val = lg.get(key, default)
-    if val is None or val < 1:
-        msg = f"logger.{key} must be set to a positive number of updates"
-        raise ConfigError(msg)
-    return val
-
-
 def train(cfg: dict[str, Any], rt: Runtime) -> None:
-    """T2 §5.1. Call prepare_run() first. Every frequency counts completed updates (model.update)."""
+    """T2 §5.1. Call validate_train() and prepare_run() first. Every frequency counts completed
+    updates (model.update)."""
     lg, val = cfg.setdefault("logger", {}), cfg.get("val") or {}
-    total = _freq(lg, "total_iter", 1000000)
-    print_freq = _freq(lg, "print_freq", 100)
-    save_freq = _freq(lg, "save_checkpoint_freq", None)
+    total = lg.get("total_iter", 1000000)
+    print_freq = lg.get("print_freq", 100)
+    save_freq = lg["save_checkpoint_freq"]
     val_freq = val.get("val_freq")
     save_img = val.get("save_img", True)
 
@@ -199,8 +193,10 @@ def train(cfg: dict[str, Any], rt: Runtime) -> None:
         else ""
     )
     log.info(f"PyTorch {torch.__version__}, device {rt.device}{gpu}")
-    model = build_model(cfg, rt)  # resumes inside (T2 §3 step 7)
+    # loaders first: a wrong dataset fails before the slow model build; building them draws no
+    # global RNG, so the model init and restore_rng() are unchanged
     loader, sampler, val_loaders = build_loaders(cfg, rt)
+    model = build_model(cfg, rt)  # resumes inside (T2 §3 step 7)
     model.data_generator = loader.generator  # part of the RNG state (T3 D18)
     log_macs(model, cfg)
     if model.update >= total:
@@ -219,13 +215,14 @@ def train(cfg: dict[str, Any], rt: Runtime) -> None:
     stop.install()
     try:
         prefetcher = CUDAPrefetcher(loader, rt.device)
+        data_wait = DataWait()  # host time blocked on the loader, per print window
         model.restore_rng()  # the last call before the loop
         epoch = model.epoch
         while True:
             model.epoch = epoch
             sampler.set_epoch(epoch)
-            prefetcher.reset()  # iter(loader) under sigint_ignored() (T2 D19)
-            while (batch := prefetcher.next()) is not None:
+            data_wait(prefetcher.reset)  # iter(loader) under sigint_ignored() (T2 D19)
+            while (batch := data_wait(prefetcher.next)) is not None:
                 model.feed_data(batch)
                 if not model.optimize_parameters():  # inside a window
                     continue
@@ -238,6 +235,7 @@ def train(cfg: dict[str, Any], rt: Runtime) -> None:
                     log_vars = {"epoch": epoch, "iter": u, "lrs": model.current_lr()}
                     log_vars |= {
                         "time": timer.get_avg_time(),
+                        "data": data_wait.share(),
                         **model.get_current_log(),
                     }
                     msg_logger(log_vars)
@@ -258,8 +256,15 @@ def train(cfg: dict[str, Any], rt: Runtime) -> None:
                 if val_due or save_due:
                     model.check_finite()  # all ranks
                 if val_due:
-                    for vl in val_loaders:
-                        model.validation(vl, u, tb_logger, save_img)
+                    try:
+                        for vl in val_loaders:
+                            model.validation(vl, u, tb_logger, save_img)
+                    except Exception:
+                        # keep this update before the run dies
+                        if model.saved_update != u:
+                            log.error(f"validation failed: saving update {u} first")
+                            model.save()
+                        raise
                 if save_due:
                     log.info(f"saving update {u}")
                     model.save()
