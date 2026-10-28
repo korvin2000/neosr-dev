@@ -81,3 +81,10 @@
 - Review fixes merged (09a9e71): all 11 cross-lane findings fixed, Codex re-verified, its 3 partial points completed
   (split metric net on CPU retry, reused DySample scopes in fp16 ONNX, older-state resume warnings). Full CPU suite on
   09a9e71: 1883 passed / 370 skipped / 0 failed (5:45). Acceptance snapshot ab/s2_acc at 09a9e71.
+- GPU benchmark (BASE f360edd vs NEW 63e03f9, identical old-template objectives, clean trials, median ms/update):
+  realplksr 115.4 -> 94.9 (1.22x); compact L1 6.3 -> 6.2; esrgan 159.0 -> 137.0 (1.16x); dat 269.5 -> 249.0 (1.08x,
+  -333 MiB); compact_otf 94.9 -> 73.8 (1.29x); spanplus 99.0 -> 82.4 (1.20x, -249 MiB); esc 337.0 -> 115.5 (2.92x).
+  First validation (realplksr, 7 images): 2.53 s / 4793 MiB peak -> 0.16 s / 582 MiB. compile=true: realplksr
+  111.6 -> 85.2 (1.31x), dat 190.2 -> 165.9 (1.15x). Logs: scratchpad/bench/.
+- End-to-end acceptance launched (s2_acc 09a9e71, new templates): realplksr GAN 1500 + resume to 2000, compact_otf
+  600, dat compile 400.
