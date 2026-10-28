@@ -110,8 +110,10 @@ class adamw_sf(Optimizer):
     def train(self) -> None:
         swap_sf_weights(self, train=True)
 
+    @torch.no_grad()
     def step(self, closure: Callable[..., Any] | None = None) -> float:  # type: ignore[reportIncompatibleMethodOverride,override]
-        """Performs a single optimization step.
+        """Performs a single optimization step. Writes go through the parameters (not `.data`), so
+        each step bumps their version counters (span_arch.param_key).
 
         Arguments:
         ---------
@@ -119,7 +121,10 @@ class adamw_sf(Optimizer):
                 and returns the loss.
 
         """
-        loss = closure() if closure is not None else 0.0
+        loss = 0.0
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
 
         for group in self.param_groups:
             eps = group["eps"]
@@ -153,14 +158,14 @@ class adamw_sf(Optimizer):
 
             for p in active_p:
                 if "z" not in self.state[p]:
-                    self.state[p]["z"] = torch.clone(p.data)
-                    self.state[p]["exp_avg_sq"] = torch.zeros_like(p.data)
+                    self.state[p]["z"] = torch.clone(p)
+                    self.state[p]["exp_avg_sq"] = torch.zeros_like(p)
 
             if group["foreach"] and len(active_p) > 0:
                 y, grad, exp_avg_sq, z = zip(
                     *[
                         (
-                            p.data,
+                            p,
                             p.grad,
                             self.state[p]["exp_avg_sq"],
                             self.state[p]["z"],
@@ -192,8 +197,8 @@ class adamw_sf(Optimizer):
                 torch._foreach_sub_(z, grad, alpha=lr)
             else:
                 for p in active_p:
-                    y = p.data  # Notation to match theory
-                    grad = p.grad.data
+                    y = p  # Notation to match theory
+                    grad = p.grad
 
                     state = self.state[p]
 
