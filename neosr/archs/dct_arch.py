@@ -181,8 +181,14 @@ class Window_Attention(nn.Module):
         self.H_sp = H_sp
         self.W_sp = W_sp
 
+        self.pos_const = False
         if self.position_bias:
             self.pos = DynamicPosBias(self.dim // 4, self.num_heads, residual=False)
+            # pos_dim 1: LayerNorm(1) outputs its bias, so the MLP yields one constant per head, a
+            # softmax no-op. Skip it; the frozen parameters stay for state_dict compatibility.
+            self.pos_const = self.pos.pos_dim == 1
+            if self.pos_const:
+                self.pos.requires_grad_(False)
 
             position_bias_h = torch.arange(1 - self.H_sp, self.H_sp)
             position_bias_w = torch.arange(1 - self.W_sp, self.W_sp)
@@ -232,7 +238,7 @@ class Window_Attention(nn.Module):
         attn = q @ k.transpose(-2, -1)  # B head N C @ B head C N --> B head N N
 
         # calculate drpe
-        if self.position_bias:
+        if self.position_bias and not self.pos_const:
             pos = self.pos(self.rpe_biases)
             # select position bias
             relative_position_bias = pos[self.relative_position_index.view(-1)].view(
@@ -334,11 +340,11 @@ class Adaptive_Window_Attention(nn.Module):
             self.register_buffer("attn_mask_0", None)
             self.register_buffer("attn_mask_1", None)
 
-    def calculate_mask(self, H, W):
+    def calculate_mask(self, H, W, device=None):
         # The implementation builds on Swin Transformer code https://github.com/microsoft/Swin-Transformer/blob/main/models/swin_transformer.py
         # calculate attention mask for shift window
-        img_mask_0 = torch.zeros((1, H, W, 1))  # 1 H W 1 idx=0
-        img_mask_1 = torch.zeros((1, H, W, 1))  # 1 H W 1 idx=1
+        img_mask_0 = torch.zeros((1, H, W, 1), device=device)  # 1 H W 1 idx=0
+        img_mask_1 = torch.zeros((1, H, W, 1), device=device)  # 1 H W 1 idx=1
         h_slices_0 = (
             slice(0, -self.split_size[0]),
             slice(-self.split_size[0], -self.shift_size[0]),
@@ -413,9 +419,9 @@ class Adaptive_Window_Attention(nn.Module):
 
         return attn_mask_0, attn_mask_1
 
-    def forward(self, x, H, W):
+    def forward(self, x, H, W, masks=None):
         """
-        Input: x: (B, H*W, C), H, W
+        Input: x: (B, H*W, C), H, W; masks: per-forward cache of the shift masks by padded size
         Output: x: (B, H*W, C)
         """
         B, L, C = x.shape
@@ -457,9 +463,13 @@ class Adaptive_Window_Attention(nn.Module):
             qkv_1 = qkv_1.view(3, B, _L, C // 2)
 
             if self.patches_resolution != _H or self.patches_resolution != _W:
-                mask_tmp = self.calculate_mask(_H, _W)
-                x1_shift = self.attns[0](qkv_0, _H, _W, mask=mask_tmp[0].to(x.device))
-                x2_shift = self.attns[1](qkv_1, _H, _W, mask=mask_tmp[1].to(x.device))
+                # every shifted block of a net shares split_size/shift_size: build once
+                masks = {} if masks is None else masks
+                if (_H, _W) not in masks:
+                    masks[_H, _W] = self.calculate_mask(_H, _W, x.device)
+                mask_tmp = masks[_H, _W]
+                x1_shift = self.attns[0](qkv_0, _H, _W, mask=mask_tmp[0])
+                x2_shift = self.attns[1](qkv_1, _H, _W, mask=mask_tmp[1])
             else:
                 x1_shift = self.attns[0](qkv_0, _H, _W, mask=self.attn_mask_0)
                 x2_shift = self.attns[1](qkv_1, _H, _W, mask=self.attn_mask_1)
@@ -631,7 +641,7 @@ class DCTB(nn.Module):
         )
         self.norm2 = norm_layer(dim)
 
-    def forward(self, x, x_size, prev_attention=None):  #
+    def forward(self, x, x_size, prev_attention=None, masks=None):  #
         """
         Input: x: (B, H*W, C), x_size: (H, W)
         Output: x: (B, H*W, C)
@@ -639,7 +649,7 @@ class DCTB(nn.Module):
         H, W = x_size
         _, _, C = x.shape
         if prev_attention is None:
-            swsa_x = self.swsa(self.norm1(x[:, :, : C // 2]), H, W)
+            swsa_x = self.swsa(self.norm1(x[:, :, : C // 2]), H, W, masks)
             lla_x = self.norm1(x[:, :, C // 2 :])
             lla_x = self.lla(lla_x)
             out_x = torch.cat([swsa_x, lla_x], dim=-1)
@@ -739,7 +749,7 @@ class ResidualGroup(nn.Module):
                 nn.Conv2d(dim // 4, dim, 3, 1, 1),
             )
 
-    def forward(self, x, x_size):
+    def forward(self, x, x_size, masks=None):
         """
         Input: x: (B, H*W, C), x_size: (H, W)
         Output: x: (B, H*W, C)
@@ -752,7 +762,7 @@ class ResidualGroup(nn.Module):
         for blk in self.blocks:
             # print('**0**')
             if r_idx % 2 == 0:
-                x, prev_attention = blk(x, x_size, None)
+                x, prev_attention = blk(x, x_size, None, masks)
             else:
                 x, _ = blk(x, x_size, prev_attention)
                 prev_attention = None
@@ -874,9 +884,11 @@ class dct(nn.Module):
         self.img_range = img_range
         if in_chans == 3:
             rgb_mean = (0.5, 0.5, 0.5)
-            self.mean = torch.Tensor(rgb_mean).view(1, 3, 1, 1)
+            mean = torch.Tensor(rgb_mean).view(1, 3, 1, 1)
         else:
-            self.mean = torch.zeros(1, 1, 1, 1)
+            mean = torch.zeros(1, 1, 1, 1)
+        # a buffer follows .to(device) (the attribute was copied to the device in forward)
+        self.register_buffer("mean", mean, persistent=False)
         self.upscale = upscale
         self.upsampler = upsampler
 
@@ -954,14 +966,15 @@ class dct(nn.Module):
         _, _, H, W = x.shape
         x_size = [H, W]
         x = self.before_RG(x)
+        masks = {}  # shift masks of this input size, built on its device once per forward
         for layer in self.layers:
-            x = layer(x, x_size)
+            x = layer(x, x_size, masks)
         x = self.norm(x)
         return rearrange(x, "b (h w) c -> b c h w", h=H, w=W).contiguous()
 
     def forward(self, x):
-        self.mean = self.mean.type_as(x)
-        x = (x - self.mean) * self.img_range
+        mean = self.mean.type_as(x)
+        x = (x - mean) * self.img_range
 
         if self.upsampler == "pixelshuffle":
             x = self.conv_first(x)
@@ -973,4 +986,4 @@ class dct(nn.Module):
             x = self.conv_after_body(self.forward_features(x)) + x
             x = self.upsample(x)
 
-        return x / self.img_range + self.mean
+        return x / self.img_range + mean

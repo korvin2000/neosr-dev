@@ -4,8 +4,36 @@ import torch
 from einops import rearrange
 from torch import Tensor, nn
 from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint
 
 from neosr.archs.arch_util import DropPath, to_2tuple
+
+
+def _sdpa(q, k, v, attn_mask=None, dropout_p=0.0, scale=None):
+    """F.scaled_dot_product_attention; on CUDA head dims are zero-padded to a multiple of 8, the
+    memory-efficient kernel's requirement (else the math fallback saves the probabilities).
+    Exact: q.k is unchanged and the padded output columns are zero and cut."""
+    d, dv = q.shape[-1], v.shape[-1]
+    scale = d**-0.5 if scale is None else scale
+    if attn_mask is not None:  # fused kernels need a unit last-dim stride; permuted biases have h
+        attn_mask = attn_mask.contiguous()
+    if not q.is_cuda or (d % 8 == 0 and dv % 8 == 0):
+        return F.scaled_dot_product_attention(q, k, v, attn_mask, dropout_p, scale=scale)
+    q, k, v = F.pad(q, (0, -d % 8)), F.pad(k, (0, -d % 8)), F.pad(v, (0, -dv % 8))
+    return F.scaled_dot_product_attention(q, k, v, attn_mask, dropout_p, scale=scale)[..., :dv]
+
+
+def _window_sdpa(q, k, v, bias, mask=None, scale=None, dropout_p=0.0):
+    """softmax(q k^T * scale + bias [+ mask]) v as one fused SDPA call (the probabilities are not
+    saved for backward). q: (b*nw, heads, n, d); k, v: (b*nw, heads, m, d); bias: (heads, n, m);
+    mask: (nw, n, m)."""
+    if mask is None:
+        return _sdpa(q, k, v, bias.unsqueeze(0).to(q.dtype), dropout_p, scale)
+    b_, h, n = q.shape[:3]
+    nw, m = mask.shape[0], k.shape[2]
+    q, k, v = (t.reshape(b_ // nw, nw * h, t.shape[2], -1) for t in (q, k, v))
+    am = (bias.unsqueeze(0) + mask.unsqueeze(1)).reshape(1, nw * h, n, m).to(q.dtype)
+    return _sdpa(q, k, v, am, dropout_p, scale).reshape(b_, h, n, -1)
 
 
 class ChannelAttention(nn.Module):
@@ -147,7 +175,6 @@ class WindowAttention(nn.Module):
         self.proj_drop = nn.Dropout(proj_drop)
 
         nn.init.trunc_normal_(self.relative_position_bias_table, std=0.02)
-        self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, x, rpi, mask=None):
         """
@@ -161,38 +188,17 @@ class WindowAttention(nn.Module):
             .reshape(b_, n, 3, self.num_heads, c // self.num_heads)
             .permute(2, 0, 3, 1, 4)
         )
-        q, k, v = (
-            qkv[0],
-            qkv[1],
-            qkv[2],
-        )  # make torchscript happy (cannot use tensor as tuple)
-
-        q = q * self.scale
-        attn = q @ k.transpose(-2, -1)
+        q, k, v = qkv[0], qkv[1], qkv[2]
 
         relative_position_bias = self.relative_position_bias_table[rpi.view(-1)].view(
             self.window_size[0] * self.window_size[1],
             self.window_size[0] * self.window_size[1],
             -1,
         )  # Wh*Ww,Wh*Ww,nH
-        relative_position_bias = relative_position_bias.permute(
-            2, 0, 1
-        ).contiguous()  # nH, Wh*Ww, Wh*Ww
-        attn = attn + relative_position_bias.unsqueeze(0)
-
-        if mask is not None:
-            nw = mask.shape[0]
-            attn = attn.view(b_ // nw, nw, self.num_heads, n, n) + mask.unsqueeze(
-                1
-            ).unsqueeze(0)
-            attn = attn.view(-1, self.num_heads, n, n)
-            attn = self.softmax(attn)
-        else:
-            attn = self.softmax(attn)
-
-        attn = self.attn_drop(attn)
-
-        x = (attn @ v).transpose(1, 2).reshape(b_, n, c)
+        relative_position_bias = relative_position_bias.permute(2, 0, 1)  # nH, N, N
+        p = self.attn_drop.p if self.training else 0.0
+        x = _window_sdpa(q, k, v, relative_position_bias, mask, self.scale, p)
+        x = x.transpose(1, 2).reshape(b_, n, c)
         x = self.proj(x)
         return self.proj_drop(x)
 
@@ -408,7 +414,6 @@ class OCAB(nn.Module):
         )  # 2*Wh-1 * 2*Ww-1, nH
 
         nn.init.trunc_normal_(self.relative_position_bias_table, std=0.02)
-        self.softmax = nn.Softmax(dim=-1)
         self.proj = nn.Linear(dim, dim)
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
@@ -460,21 +465,14 @@ class OCAB(nn.Module):
             0, 2, 1, 3
         )  # nw*b, nH, n, d
 
-        q = q * self.scale
-        attn = q @ k.transpose(-2, -1)
-
         relative_position_bias = self.relative_position_bias_table[rpi.view(-1)].view(
             self.window_size * self.window_size,
             self.overlap_win_size * self.overlap_win_size,
             -1,
         )  # ws*ws, wse*wse, nH
-        relative_position_bias = relative_position_bias.permute(
-            2, 0, 1
-        ).contiguous()  # nH, ws*ws, wse*wse
-        attn = attn + relative_position_bias.unsqueeze(0)
-
-        attn = self.softmax(attn)
-        attn_windows = (attn @ v).transpose(1, 2).reshape(b_, nq, self.dim)
+        relative_position_bias = relative_position_bias.permute(2, 0, 1)  # nH, ws*ws, wse*wse
+        attn_windows = _window_sdpa(q, k, v, relative_position_bias, scale=self.scale)
+        attn_windows = attn_windows.transpose(1, 2).reshape(b_, nq, self.dim)
 
         # merge windows
         attn_windows = attn_windows.view(
@@ -789,24 +787,16 @@ class Upsample(nn.Sequential):
 
 class DualRouting(nn.Module):
     """
-    Dual Routing expert selection.
+    Dual Routing expert selection (top-1 group, then top-1 expert within it).
     - Group 0: num_experts / 2 experts
     - Group 1: num_experts / 2 experts
     - group_idx is encoded and added to the input for expert selection.
     """
 
-    def __init__(
-        self,
-        dim: int,
-        num_experts: int,
-        capacity_factor: float = 1.0,
-        epsilon: float = 1e-6,
-    ):
+    def __init__(self, dim: int, num_experts: int):
         super().__init__()
         self.dim = dim
         self.num_experts = num_experts
-        self.capacity_factor = capacity_factor
-        self.epsilon = epsilon
 
         # Group sizes
         self.group_size = num_experts // 2
@@ -825,64 +815,37 @@ class DualRouting(nn.Module):
             2, dim
         )  # 2 groups, each with a dim-dimensional embedding
 
-    def forward(self, x: Tensor):
+    def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
         """
-        Forward pass of the modified DualRouting module.
-
         Args:
-            x (Tensor): Input tensor of shape (B, C, H, W).
+            x (Tensor): routing features of shape (B, C, H, W).
 
         Returns:
-            Tensor: Gate scores of shape (B, H, W, num_experts).
+            (idx, w): the selected global expert (B, 1, H, W) and its gate weight (B, 1, H, W).
+            w equals 1 exactly (the one-hot forward of the original), but carries the gradient of
+            the selected probability p_group * p_expert (straight-through), so the router and the
+            routing-feature branch learn.
         """
-        B, C, H, W = x.shape
-        x = rearrange(x, "b c h w -> (b h w) c", b=B, h=H, w=W, c=C)
-
-        # First-stage: select a group
-        group_scores = F.softmax(self.w_group_gate(x), dim=-1)  # (B*H*W, 2)
-        _, top_group_indices = group_scores.topk(1, dim=-1)  # (B*H*W, 1)
-
-        # Initialize one-hot encoding
-        one_hot = torch.zeros(
-            x.size(0), self.num_experts, device=x.device
-        )  # (B*H*W, num_experts)
-
-        # Handle all groups
-        for group_idx in range(2):  # Groups 0-1
-            group_mask = (top_group_indices == group_idx).squeeze(
-                -1
-            )  # Mask for current group
-            if group_mask.any():
-                # Get group_idx embedding and add it to x[group_mask]
-                group_idx_tensor = torch.tensor(
-                    group_idx, device=x.device
-                ).long()  # Convert to tensor
-                group_embed = self.group_embedding(group_idx_tensor)  # (1, dim)
-                group_embed = group_embed.expand(x[group_mask].size(0), -1)  # (N, dim)
-
-                # Add group embedding to the input
-                x_group = x[group_mask] + group_embed  # (N, dim)
-
-                # Get expert scores for the current group
-                expert_scores = F.softmax(
-                    self.w_expert_gates[group_idx](x_group), dim=-1
-                )  # (N, group_size)
-                _, expert_indices = expert_scores.topk(1, dim=-1)  # (N, 1)
-
-                # Map to global expert indices
-                global_expert_indices = (
-                    group_idx * self.group_size + expert_indices.squeeze(-1)
-                )
-                one_hot[group_mask, global_expert_indices] = (
-                    1  # Set the selected experts
-                )
-
-        # Reshape back to (B, H, W, num_experts)
-        one_hot = rearrange(
-            one_hot, "(b h w) n -> b h w n", b=B, h=H, w=W, n=self.num_experts
+        B, _C, H, W = x.shape
+        # routing in the gate dtype (fp32 under autocast): bf16 logits flip near-tied top-1 choices
+        # between training (bf16) and validation (fp32)
+        with torch.autocast(x.device.type, enabled=False):
+            x = rearrange(x.to(self.w_group_gate.weight.dtype), "b c h w -> (b h w) c")
+            p_group, g = F.softmax(self.w_group_gate(x), dim=-1).topk(1, dim=-1)
+            x = x + self.group_embedding(g.squeeze(-1))
+            scores = torch.where(
+                g == 0,
+                F.softmax(self.w_expert_gates[0](x), dim=-1),
+                F.softmax(self.w_expert_gates[1](x), dim=-1),
+            )
+            p_expert, e = scores.topk(1, dim=-1)
+            p = p_group * p_expert
+            w = p - p.detach() + 1  # exactly 1.0 forward, d w / d p = 1
+        idx = g * self.group_size + e
+        return (
+            idx.view(B, H, W).unsqueeze(1),
+            w.view(B, H, W).unsqueeze(1),
         )
-
-        return one_hot, None
 
 
 class HMoE(nn.Module):
@@ -892,36 +855,19 @@ class HMoE(nn.Module):
 
     Args:
         dim (int): The input dimension.
-        hidden_dim (int): The hidden dimension of the feedforward network.
         output_dim (int): The output dimension.
         num_experts (int): The number of experts in the MoE.
-        capacity_factor (float, optional): The capacity factor that controls the capacity of the MoE. Defaults to 1.0.
-        mult (int, optional): The multiplier for the hidden dimension of the feedforward network. Defaults to 4.
 
     Attributes:
-        dim (int): The input dimension.
-        hidden_dim (int): The hidden dimension of the feedforward network.
-        output_dim (int): The output dimension.
-        num_experts (int): The number of experts in the MoE.
-        capacity_factor (float): The capacity factor that controls the capacity of the MoE.
-        mult (int): The multiplier for the hidden dimension of the feedforward network.
-        experts (nn.ModuleList): The list of feedforward networks representing the experts.
+        experts (nn.ModuleList): 1x1 convs (first half) and 3x3 convs (second half).
         gate (DualRouting): The switch gate module.
-
     """
 
-    def __init__(
-        self,
-        dim: int,
-        output_dim: int,
-        num_experts: int,
-        capacity_factor: float = 1.0,
-    ):
+    def __init__(self, dim: int, output_dim: int, num_experts: int):
         super().__init__()
         self.dim = dim
         self.output_dim = output_dim
         self.num_experts = num_experts
-        self.capacity_factor = capacity_factor
         self.experts = nn.ModuleList()
 
         for _ in range(int(num_experts / 2)):
@@ -934,54 +880,17 @@ class HMoE(nn.Module):
                 nn.Conv2d(dim, output_dim, kernel_size=3, stride=1, padding=1)
             )
 
-        self.gate = DualRouting(dim, num_experts, capacity_factor)
+        self.gate = DualRouting(dim, num_experts)
 
-    def forward(self, x: Tensor, x_t: Tensor):
-        """
-        Forward pass of the HMoE module.
-
-        Args:
-            x (Tensor): The input tensor.
-
-        Returns:
-            Tensor: The output tensor of the MoE.
-
-        """
-        # (batch_size, seq_len, num_experts)
-        B, _N, H, W = x.shape
-        gate_scores, _loss = self.gate(x_t)
-
-        # Dispatch to experts
-        expert_outputs = [
-            rearrange(
-                expert(x), "b c h w -> (b h w) c", b=B, h=H, w=W, c=self.output_dim
-            )
-            for expert in self.experts
-        ]
-
-        # Check if any gate scores are nan and handle
-        if torch.isnan(gate_scores).any():
-            print("NaN in gate scores")
-            gate_scores[torch.isnan(gate_scores)] = 0
-
-        # Stack and weight outputs
-        stacked_expert_outputs = torch.stack(
-            expert_outputs, dim=-1
-        )  # (batch_size, seq_len, output_dim, num_experts)
-        if torch.isnan(stacked_expert_outputs).any():
-            stacked_expert_outputs[torch.isnan(stacked_expert_outputs)] = 0
-
-        # Combine expert outputs and gating scores
-        moe_output = torch.sum(
-            rearrange(
-                gate_scores, "b h w n -> (b h w) n", b=B, h=H, w=W, n=self.num_experts
-            ).unsqueeze(-2)
-            * stacked_expert_outputs,
-            dim=-1,
-        )
-        return rearrange(
-            moe_output, "(b h w) c -> b c h w ", b=B, h=H, w=W, c=self.output_dim
-        )
+    def forward(self, x: Tensor, x_t: Tensor) -> Tensor:
+        """Top-1 dispatch: each pixel takes its selected expert's output, scaled by the gate weight."""
+        idx, w = self.gate(x_t)
+        # per-pixel selection: autograd keeps the boolean masks, not 16 expert outputs, and an
+        # unselected expert's inf/nan never reaches the output
+        out = self.experts[0](x)
+        for i in range(1, self.num_experts):
+            out = torch.where(idx == i, self.experts[i](x), out)
+        return out * w.to(out.dtype)
 
 
 class MoEUpsample(nn.Sequential):
@@ -1079,6 +988,7 @@ class mfghmoe(nn.Module):
         self.window_size = window_size
         self.shift_size = window_size // 2
         self.overlap_ratio = overlap_ratio
+        self.use_checkpoint = use_checkpoint
 
         num_in_ch = in_chans
         num_out_ch = in_chans
@@ -1171,7 +1081,6 @@ class mfghmoe(nn.Module):
 
         # MultiLevel Feature Aggregation
         self.mfg = nn.ModuleList()
-        self.text_locals = []
         for _i_layer in range(self.num_layers):
             norm = nn.LayerNorm(embed_dim)
             conv_after_group = nn.Sequential(
@@ -1255,10 +1164,10 @@ class mfghmoe(nn.Module):
         relative_coords[:, :, 0] *= window_size_ori + window_size_ext - 1
         return relative_coords.sum(-1)
 
-    def calculate_mask(self, x_size):
+    def calculate_mask(self, x_size, device=None):
         # calculate attention mask for SW-MSA
         h, w = x_size
-        img_mask = torch.zeros((1, h, w, 1))  # 1 h w 1
+        img_mask = torch.zeros((1, h, w, 1), device=device)  # 1 h w 1
         h_slices = (
             slice(0, -self.window_size),
             slice(-self.window_size, -self.shift_size),
@@ -1297,7 +1206,7 @@ class mfghmoe(nn.Module):
 
         # Calculate attention mask and relative position index in advance to speed up inference.
         # The original code is very time-cosuming for large window size.
-        attn_mask = self.calculate_mask(x_size).to(x.device)
+        attn_mask = self.calculate_mask(x_size, x.device)
         params = {
             "attn_mask": attn_mask,
             "rpi_sa": self.relative_position_index_SA,
@@ -1311,7 +1220,10 @@ class mfghmoe(nn.Module):
 
         x_t = torch.zeros_like(x)
         for idx, layer in enumerate(self.layers):
-            x = layer(x, x_size, params)
+            if self.use_checkpoint and self.training:
+                x = checkpoint(layer, x, x_size, params, use_reentrant=False)
+            else:
+                x = layer(x, x_size, params)
             x = self.mfg[2 * idx](x)
             x = self.patch_unembed(x, x_size)
             y = self.mfg[2 * idx + 1](x)
@@ -1327,7 +1239,18 @@ class mfghmoe(nn.Module):
 
         return x, x_t
 
+    def check_image_size(self, x):
+        # pad to a multiple of window_size (reflect needs pad < size)
+        _, _, h, w = x.size()
+        ph, pw = (-h) % self.window_size, (-w) % self.window_size
+        if ph or pw:
+            mode = "reflect" if ph < h and pw < w else "replicate"
+            x = F.pad(x, (0, pw, 0, ph), mode)
+        return x
+
     def forward(self, x):
+        h, w = x.shape[2:]
+        x = self.check_image_size(x)
         if self.upsampler == "pixelshuffle":
             # for classical SR
             x = self.conv_first(x)
@@ -1336,4 +1259,4 @@ class mfghmoe(nn.Module):
             x = self.conv_before_upsample(x)
             x = self.conv_last(self.upsample(x, x_t))
 
-        return x
+        return x[:, :, : h * self.upscale, : w * self.upscale]

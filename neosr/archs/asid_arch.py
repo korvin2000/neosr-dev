@@ -21,7 +21,7 @@ class LayerNormFunction(torch.autograd.Function):
         eps = ctx.eps
 
         _N, C, _H, _W = grad_output.size()
-        y, var, weight = ctx.saved_variables
+        y, var, weight = ctx.saved_tensors
         g = grad_output * weight.view(1, C, 1, 1)
         mean_g = g.mean(dim=1, keepdim=True)
 
@@ -150,10 +150,7 @@ class Dropsample(nn.Module):
         if self.prob == 0.0 or (not self.training):
             return x
 
-        keep_mask = (
-            torch.FloatTensor((x.shape[0], 1, 1, 1), device=device).uniform_()
-            > self.prob
-        )
+        keep_mask = torch.rand((x.shape[0], 1, 1, 1), device=device) > self.prob
         return x * keep_mask / (1 - self.prob)
 
 
@@ -313,7 +310,42 @@ class SelfAttentionB(nn.Module):
         return rearrange(out, "(b x y) ... -> b x y ...", x=height, y=width)
 
 
-class Channel_Attention(nn.Module):
+def _channel_attention(q, k, v, temperature, flash_attn):
+    # softmax(t * cos(q, k)) v over the last axis; (b, n, heads, d, E) -> 4-D for fused SDPA
+    q = F.normalize(q, dim=-1)
+    k = F.normalize(k, dim=-1)
+    if flash_attn:
+        s = q.shape
+        return F.scaled_dot_product_attention(
+            (q * temperature).flatten(0, 1), k.flatten(0, 1), v.flatten(0, 1), scale=1.0
+        ).view(s)
+    attn = (q @ k.transpose(-2, -1)) * temperature
+    return attn.softmax(dim=-1) @ v
+
+
+class _LegacyTemperature(nn.Module):
+    """The old flash path ran SDPA under no_grad with its default 1/sqrt(E) scale, so its
+    temperature never trained and stays exactly 1. Such checkpoints load as t = 1/ps: the old
+    local attention exactly, the old grid attention exactly at an input of 8 * ps (the 64 px
+    training patch); the grid scale no longer depends on the input size. In-process state dicts
+    carry `_version` 2 (an EMA copy of an untrained net keeps t = 1); weight files lose the
+    metadata and count as legacy."""
+
+    _version = 2
+
+    def _load_from_state_dict(
+        self, state_dict, prefix, local_metadata, *args, **kwargs
+    ):
+        t = state_dict.get(prefix + "temperature")
+        legacy = local_metadata.get("version", 1) < 2
+        if legacy and self.flash_attn and t is not None and bool((t == 1).all()):
+            state_dict[prefix + "temperature"] = t / self.ps
+        super()._load_from_state_dict(
+            state_dict, prefix, local_metadata, *args, **kwargs
+        )
+
+
+class Channel_Attention(_LegacyTemperature):
     def __init__(self, dim, heads, bias=False, window_size=7, flash_attn=True):
         super().__init__()
         self.heads = heads
@@ -346,16 +378,7 @@ class Channel_Attention(nn.Module):
             )
             for t in qkv
         )
-        q = F.normalize(q, dim=-1)
-        k = F.normalize(k, dim=-1)
-        if self.flash_attn:
-            with torch.no_grad():
-                out = nn.functional.scaled_dot_product_attention(q, k, v)
-        else:
-            attn = (q @ k.transpose(-2, -1)) * self.temperature
-            attn = attn.softmax(dim=-1)
-            out = attn @ v
-
+        out = _channel_attention(q, k, v, self.temperature, self.flash_attn)
         out = rearrange(
             out,
             "b (h w) head d (ph pw) -> b (head d) (h ph) (w pw)",
@@ -369,7 +392,7 @@ class Channel_Attention(nn.Module):
         return self.project_out(out)
 
 
-class Channel_Attention_grid(nn.Module):
+class Channel_Attention_grid(_LegacyTemperature):
     def __init__(self, dim, heads, bias=False, window_size=7, flash_attn=True):
         super().__init__()
         self.heads = heads
@@ -405,17 +428,7 @@ class Channel_Attention_grid(nn.Module):
             for t in qkv
         )
 
-        q = F.normalize(q, dim=-1)
-        k = F.normalize(k, dim=-1)
-
-        if self.flash_attn:
-            with torch.no_grad():
-                out = nn.functional.scaled_dot_product_attention(q, k, v)
-        else:
-            attn = (q @ k.transpose(-2, -1)) * self.temperature
-            attn = attn.softmax(dim=-1)
-            out = attn @ v
-
+        out = _channel_attention(q, k, v, self.temperature, self.flash_attn)
         out = rearrange(
             out,
             "b (ph pw) head d (h w) -> b (head d) (h ph) (w pw)",
@@ -703,6 +716,9 @@ class IDSG_A(nn.Module):
         flash_attn=True,
     ):
         super().__init__()
+        if block_num != 1:  # the blocks return (x, *attn maps) and cannot be chained
+            msg = f"asid supports block_num = 1 only, got {block_num}"
+            raise ValueError(msg)
 
         group_list = []
         for _ in range(block_num):
@@ -817,9 +833,12 @@ class asid(nn.Module):
         self.up = pixelshuffle_block(num_feat, num_out_ch, self.up_scale, bias=bias)
 
     def check_image_size(self, x):
+        # pad to the window lattice, and to >= 15 px: ESA's stride-2 conv + max_pool2d(7, 3)
         _, _, h, w = x.size()
-        mod_pad_h = (self.window_size - h % self.window_size) % self.window_size
-        mod_pad_w = (self.window_size - w % self.window_size) % self.window_size
+        ws = self.window_size
+        m = -(-15 // ws)
+        mod_pad_h = max(-(-h // ws), m) * ws - h
+        mod_pad_w = max(-(-w // ws), m) * ws - w
         return F.pad(x, (0, mod_pad_w, 0, mod_pad_h), "constant", 0)
 
     def forward(self, x):

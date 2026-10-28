@@ -413,62 +413,6 @@ class AdaGuidedFilter(nn.Module):
         return x * m
 
 
-class AdaConvGuidedFilter(nn.Module):
-    def __init__(
-        self, esa_channels, n_feats, conv=nn.Conv2d, kernel_expand=1, bias=True
-    ):
-        super(AdaConvGuidedFilter, self).__init__()
-        f = esa_channels
-
-        self.conv_f = conv(f, f, kernel_size=1)
-
-        kernel_size = 17
-        kernel_expand = kernel_expand
-        padding = kernel_size // 2
-
-        self.vec_conv = nn.Conv2d(
-            in_channels=f,
-            out_channels=f,
-            kernel_size=(1, kernel_size),
-            padding=(0, padding),
-            groups=f,
-            bias=bias,
-        )
-
-        self.hor_conv = nn.Conv2d(
-            in_channels=f,
-            out_channels=f,
-            kernel_size=(kernel_size, 1),
-            padding=(padding, 0),
-            groups=f,
-            bias=bias,
-        )
-
-        self.gap = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Conv2d(
-            in_channels=channel,
-            out_channels=channel,
-            kernel_size=1,
-            padding=0,
-            stride=1,
-            groups=1,
-            bias=True,
-        )
-
-    def forward(self, x):
-        y = self.vec_conv(x)
-        y = self.hor_conv(y)
-
-        sigma = torch.pow(y, 2)
-        epsilon = self.fc(self.gap(y))
-
-        weight = sigma / (sigma + epsilon)
-
-        m = weight * x + (1 - weight)
-
-        return x * m
-
-
 # helpers
 
 
@@ -1085,10 +1029,12 @@ class omnisr_net(nn.Module):
         self.up_scale = up_scale
 
     def check_image_size(self, x):
+        # pad to the window lattice, and to >= 15 px: ESA's stride-2 conv + max_pool2d(7, 3)
         _, _, h, w = x.size()
-        # import pdb; pdb.set_trace()
-        mod_pad_h = (self.window_size - h % self.window_size) % self.window_size
-        mod_pad_w = (self.window_size - w % self.window_size) % self.window_size
+        ws = self.window_size
+        m = -(-15 // ws)
+        mod_pad_h = max(-(-h // ws), m) * ws - h
+        mod_pad_w = max(-(-w // ws), m) * ws - w
         # x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), 'reflect')
         x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), "constant", 0)
         return x
