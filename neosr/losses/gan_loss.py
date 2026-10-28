@@ -23,15 +23,15 @@ class gan_loss(Loss):
 
     Args:
     ----
-        gan_type (str): 'bce', 'mse' (l2), 'huber' or 'rpgan' (relativistic pairing, R3GAN's RpGAN:
-            D scores each fake against its own real; no labels).
+        gan_type (str): 'bce', 'mse' (l2), 'huber', 'hinge' (D: relu(1 - real) + relu(1 + fake),
+            G: -fake; no labels) or 'rpgan' (relativistic pairing, R3GAN's RpGAN: D scores each fake
+            against its own real; no labels).
         real_label_val (float): The value for real label. Default: 1.0.
         fake_label_val (float): The value for fake label. Default: 0.0.
         wavelet_init (int | None): D sees the SWT high-frequency view from this update on;
             None: D always sees RGB.
-        start_iter (int): the G term and D's update are off through this update. Default: 0.
-        ramp_iters (int): after start_iter the G term's weight rises linearly to 1 over this
-            many updates; 0: full weight at once. Default: 0.
+        start_iter / ramp_iters / end_iter: the generic schedule of every term (Loss.schedule);
+            D trains exactly while the G term is active, and D's term is never ramped.
         r1_gamma, r2_gamma (float): lazy R1 (real) / R2 (fake) penalty
             gamma / 2 * ||grad_x D(x)||^2 on D's input, per sample. Default: 0 (off).
         reg_every (int): the penalty runs on every reg_every-th update, scaled by reg_every.
@@ -47,34 +47,26 @@ class gan_loss(Loss):
         real_label_val: float = 1.0,
         fake_label_val: float = 0.0,
         wavelet_init: int | None = None,
-        start_iter: int = 0,
-        ramp_iters: int = 0,
         r1_gamma: float = 0.0,
         r2_gamma: float = 0.0,
         reg_every: int = 16,
     ) -> None:
         super().__init__()
         crits = {"bce": nn.BCEWithLogitsLoss, "mse": nn.MSELoss, "huber": nn.HuberLoss}
-        if gan_type not in {*crits, "rpgan"}:
-            msg = (
-                f"gan_type must be one of {sorted({*crits, 'rpgan'})}, got {gan_type!r}"
-            )
+        if gan_type not in {*crits, "hinge", "rpgan"}:
+            msg = f"gan_type must be one of {sorted({*crits, 'hinge', 'rpgan'})}, got {gan_type!r}"
             raise ValueError(msg)
-        if gan_type == "rpgan" and (real_label_val, fake_label_val) != (1.0, 0.0):
-            msg = "gan_type 'rpgan' takes no labels: leave real_label_val/fake_label_val unset"
+        if gan_type not in crits and (real_label_val, fake_label_val) != (1.0, 0.0):
+            msg = f"gan_type {gan_type!r} takes no labels: leave real_label_val/fake_label_val unset"
             raise ValueError(msg)
-        if min(start_iter, ramp_iters, r1_gamma, r2_gamma) < 0 or reg_every < 1:
-            msg = "gan_loss: start_iter, ramp_iters, r1_gamma and r2_gamma must be >= 0, reg_every >= 1"
+        if min(r1_gamma, r2_gamma) < 0 or reg_every < 1:
+            msg = "gan_loss: r1_gamma and r2_gamma must be >= 0, reg_every >= 1"
             raise ValueError(msg)
-        self.rp = gan_type == "rpgan"
-        self.crit = None if self.rp else crits[gan_type]()
+        self.rp, self.hinge = gan_type == "rpgan", gan_type == "hinge"
+        self.crit = crits[gan_type]() if gan_type in crits else None
         self.labels = (fake_label_val, real_label_val)
         self.view = None if wavelet_init is None else AdvView(wavelet_init)
-        self.start_iter, self.ramp_iters = start_iter, ramp_iters
         self.gammas, self.reg_every = (r1_gamma, r2_gamma), reg_every
-
-    def active(self, it: int) -> bool:
-        return it > self.start_iter  # ctx.it is 1-based: start_iter 0 is always on
 
     def adv(self, x: Tensor, it: int) -> Tensor:
         return x if self.view is None else self.view(x, it)
@@ -89,13 +81,9 @@ class gan_loss(Loss):
             with torch.no_grad():  # the pair's real side is a constant for G
                 real = d(self.adv(ctx.gt, it))  # type: ignore[reportOptionalCall]
             fake = d(self.adv(ctx.sr, it))  # type: ignore[reportOptionalCall]
-            value = F.softplus(real.float() - fake.float()).mean()
-        else:
-            value = self.term(d(self.adv(ctx.sr, it)), real=True)  # type: ignore[reportOptionalCall]
-        if self.ramp_iters <= 0 or (ramp := it - self.start_iter) >= self.ramp_iters:
-            return value  # full weight: bitwise the unramped term
-        # the ramp is a host float of ctx.it (no sync); active() keeps ramp > 0
-        return value * (ramp / self.ramp_iters)
+            return F.softplus(real.float() - fake.float()).mean()
+        fake = d(self.adv(ctx.sr, it))  # type: ignore[reportOptionalCall]
+        return -fake.float().mean() if self.hinge else self.term(fake, real=True)
 
     def expand(self) -> list[Loss]:
         return [self, gan_d_loss(self)]
@@ -162,7 +150,14 @@ class gan_d_loss(Loss):
             value = F.softplus(fake.float() - real.float()).mean()
             logs = {"out_d_margin": (real.float() - fake.float()).mean()}
         else:
-            l_real, l_fake = self.g.term(real, real=True), self.g.term(fake, real=False)
+            if self.g.hinge:
+                l_real = F.relu(1 - real.float()).mean()
+                l_fake = F.relu(1 + fake.float()).mean()
+            else:
+                l_real, l_fake = (
+                    self.g.term(real, real=True),
+                    self.g.term(fake, real=False),
+                )
             value, logs = l_real + l_fake, {"l_d_real": l_real, "l_d_fake": l_fake}
         logs |= {"out_d_real": real.mean(), "out_d_fake": fake.mean()}
         for key, v in logs.items():

@@ -25,6 +25,7 @@ __all__ = [
 LOSSES: dict[str, tuple[str, str | None]] = {
     "L1Loss": ("basic_loss", None),
     "MSELoss": ("basic_loss", None),
+    "psnr_loss": ("basic_loss", None),
     "HuberLoss": ("basic_loss", None),
     "chc_loss": ("basic_loss", None),
     "consistency_loss": ("consistency_loss", None),
@@ -54,6 +55,11 @@ RESERVED = {
     "l_d_reg",
 }
 RESERVED_PREFIX = ("grad_norm_", "skipped_")
+SCHEDULE_KEYS = (
+    "start_iter",
+    "ramp_iters",
+    "end_iter",
+)  # Loss.schedule, for every term
 
 
 def build_loss(
@@ -90,7 +96,13 @@ def build_losses(
         if not isinstance(target, str) or target not in TARGETS:
             msg = f"[{section}] target must be one of {sorted(TARGETS)}, got {target!r}"
             raise ConfigError(msg)
+        sched = {k: spec.pop(k) for k in SCHEDULE_KEYS if k in spec}
         loss = build_loss(spec, scale=scale, section=section)
+        try:
+            loss.schedule(**sched)
+        except ValueError as e:
+            msg = f"[{section}] {e}"
+            raise ConfigError(msg) from e
         loss.loss_weight = float(type(loss).loss_weight if weight is None else weight)
         loss.target, loss.log_key = TARGETS[target], f"l_g_{SLOT_KEY.get(name, name)}"
         terms += [t for t in loss.expand() if t.phase == "d" or t.loss_weight]

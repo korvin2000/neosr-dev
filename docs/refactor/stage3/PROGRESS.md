@@ -89,3 +89,20 @@ worktree `.venv` has no torch), each file in its own capped scope (`systemd-run 
   peak memory are unverified offline (GPU/owner).
 - Test changes: metric-cache tests use the tuple key and variant-taking builders (internal API changed).
 - Verified: test_s3_metrics (13), test_metrics, test_s2_metrics, test_s2_review, test_config, test_imports: green.
+
+### A4 loss schedule, hinge, psnr_loss
+- Done: `start_iter`/`ramp_iters` moved from `gan_loss` into `Loss` with a new `end_iter`; `build_losses` pops the
+  three keys from any `train.<slot>_opt` and calls `Loss.schedule()` (ValueError -> ConfigError naming the section).
+  `active()` = `start_iter < it <= end_iter`; the linear ramp is a host float in `compute()` applied before the weight
+  (the old gan order, so a full-weight term is bitwise unscaled). gan_d_loss still follows the G term's `active()` and
+  is never ramped. `gan_type = "hinge"` (D `relu(1 - r) + relu(1 + f)` in fp32, logged as l_d_real/l_d_fake; G
+  `-f.mean()`; no labels). `psnr_loss` (LOSSES row): `10 log10(mse_i + eps)` per image, mean|sum, fp32 (kept: the
+  owner made 1x restoration a goal, DECISIONS 2026-10-28).
+- Codex review: 4 findings, fixed: `psnr_loss` `reduction = "none"` could not train (a term is a scalar) -> mean|sum
+  only; `eps` must be a finite non-bool number > 0; a falsy non-numeric `end_iter` leaked TypeError -> ConfigError;
+  added coverage: exact resume just before and at an `end_iter` (logs, weights, optimizer moments), hinge D with
+  R1/R2 double backward.
+- Test changes (obsolete by design): `test_s2_losses` builds the GAN schedule via `Loss.schedule` (the ctor no longer
+  takes it); the two ctor-validation cases moved to builder-level ConfigError tests.
+- Verified: test_s3_losses (16), test_s2_losses, test_gan, test_losses, test_losses_pipeline (10 GB cap; it exceeds
+  4 GB at HEAD), test_s2_integration, test_s2_review, test_registry, test_resume, test_model: green.

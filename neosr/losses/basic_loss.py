@@ -1,3 +1,5 @@
+import math
+
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
@@ -19,6 +21,31 @@ def huber_loss(
     pred: torch.Tensor, target: torch.Tensor, reduction: str, delta: float = 1.0
 ) -> Tensor:
     return F.huber_loss(pred, target, reduction=reduction, delta=delta)
+
+
+class psnr_loss(Loss):
+    """-PSNR (peak 1) as a loss: 10 * log10(MSE_i + eps) per image in dB, then `reduction` over the
+    images ('mean' | 'sum': a training term is a scalar); fp32 (the log of small MSEs)."""
+
+    fp32 = True
+
+    def __init__(self, reduction: str = "mean", eps: float = 1e-8) -> None:
+        super().__init__()
+        if reduction not in {"mean", "sum"}:
+            msg = f"psnr_loss: reduction must be 'mean' or 'sum', got {reduction!r}"
+            raise ValueError(msg)
+        if (
+            isinstance(eps, bool)
+            or not isinstance(eps, int | float)
+            or not 0 < eps < math.inf
+        ):
+            msg = f"psnr_loss: eps must be a finite number > 0, got {eps!r}"
+            raise ValueError(msg)
+        self.reduction, self.eps = reduction, float(eps)
+
+    def forward(self, pred: Tensor, target: Tensor) -> Tensor:
+        db = 10 * torch.log10((pred - target).square().flatten(1).mean(1) + self.eps)
+        return getattr(db, self.reduction)()
 
 
 class L1Loss(Loss):

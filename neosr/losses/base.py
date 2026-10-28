@@ -69,14 +69,37 @@ class Loss(nn.Module):
     phase: str = "g"  # objective this term joins: "g" | "d"
     log_key: str = ""  # set by the builder; "" = not logged on its own
     fp32: bool = False  # run outside autocast with fp32 inputs (was custom_fwd(cast_inputs=float32))
+    # the term's schedule (builder keys of every train.<slot>_opt; see schedule())
+    start_iter: int = 0
+    ramp_iters: int = 0
+    end_iter: int | None = None
 
     def expand(self) -> list["Loss"]:
         return [self]
 
-    def active(self, it: int) -> bool:  # noqa: ARG002
+    def schedule(
+        self, start_iter: int = 0, ramp_iters: int = 0, end_iter: int | None = None
+    ) -> None:
+        """Off through update `start_iter`, then the weight rises linearly to full over `ramp_iters`
+        updates (0: at once); off again after `end_iter` (None: never). Pure functions of the update:
+        resume- and DDP-safe, nothing adapts."""
+        ints = (start_iter, ramp_iters, 0 if end_iter is None else end_iter)
+        ok = all(
+            isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in ints
+        )
+        if not ok or (end_iter is not None and end_iter <= start_iter):
+            msg = (
+                f"start_iter={start_iter!r}, ramp_iters={ramp_iters!r}, end_iter={end_iter!r}: "
+                "need integers >= 0 and end_iter > start_iter"
+            )
+            raise ValueError(msg)
+        self.start_iter, self.ramp_iters = start_iter, ramp_iters
+        self.end_iter = end_iter
+
+    def active(self, it: int) -> bool:
         """Whether this term joins the objective at update `it` (1-based); a phase without an
         active term idles for that update (no forward through its nets, no step, no skip)."""
-        return True
+        return self.start_iter < it and (self.end_iter is None or it <= self.end_iter)
 
     def evaluate(self, ctx: Context) -> Tensor:
         sr, ref = ctx.sr, getattr(ctx, self.target)
@@ -85,7 +108,11 @@ class Loss(nn.Module):
     def compute(self, ctx: Context) -> Tensor:
         fp32 = torch.autocast(ctx.sr.device.type, enabled=False)
         with fp32 if self.fp32 else nullcontext():
-            value = self.evaluate(ctx) * self.loss_weight  # the only weighting
+            value = self.evaluate(ctx)
+            ramp = ctx.it - self.start_iter  # host ints: no sync
+            if ramp < self.ramp_iters:  # full weight: bitwise unscaled
+                value = value * (ramp / self.ramp_iters)
+            value = value * self.loss_weight  # the only weighting
         if value.ndim:
             msg = f"{type(self).__name__} returned shape {tuple(value.shape)}, expected a scalar"
             raise ValueError(msg)

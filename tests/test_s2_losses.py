@@ -352,7 +352,10 @@ def test_fdl_checkpoint_needs_dinov2():
 
 
 def _gan(**kw):
-    g_term, d_term = gan_loss(**kw).to(DEV).expand()
+    sched = {k: kw.pop(k) for k in ("start_iter", "ramp_iters", "end_iter") if k in kw}
+    loss = gan_loss(**kw).to(DEV)
+    loss.schedule(**sched)  # stage 3 A4: the generic Loss schedule (the builder's keys)
+    g_term, d_term = loss.expand()
     g_term.loss_weight = 0.1
     return g_term, d_term
 
@@ -449,8 +452,6 @@ def test_gan_start_keeps_d_idle_under_phase_filtering():
 @pytest.mark.parametrize(
     "kw",
     [
-        {"start_iter": -1},
-        {"ramp_iters": -2},
         {"r1_gamma": -1.0},
         {"reg_every": 0},
         {"gan_type": "rpgan", "real_label_val": 0.9},
