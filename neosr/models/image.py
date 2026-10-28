@@ -461,6 +461,26 @@ class image(base):
             )
         return infer_tiled(net, lq, self.scale, tile, self.tile_overlap)
 
+    @staticmethod
+    def _metric(f, q: Tensor, gt: Tensor, warned: list[bool]) -> Tensor:
+        """f(q, gt). A learned metric (DISTS/TOPIQ: bound to a `device`) moves full-size images to
+        that device whatever the inference tiling, so an OOM there computes this image's value on
+        the CPU after emptying the caching allocator (warned once per event); others propagate."""
+        if "device" not in getattr(f, "keywords", {}):
+            return f(q, gt)
+        try:
+            return f(q, gt)
+        except torch.OutOfMemoryError:
+            pass  # retried outside the handler: the traceback no longer pins the failed activations
+        torch.cuda.empty_cache()
+        if not warned[1]:
+            warned[1] = True
+            get_root_logger().warning(
+                f"a learned validation metric ran out of memory on a {tuple(q.shape[-2:])} image: "
+                "computing it on the CPU for such images (slower)"
+            )
+        return f(q, gt, device="cpu")
+
     def validate(self, loader, current_iter, tb_logger, save_img: bool) -> None:
         """Output contract of the old nondist_validation (T2 §6.3); rank 0, called by validation().
         Metrics run on the quantised images (the values tensor2img writes, MT-04) where the output is:
@@ -490,7 +510,7 @@ class image(base):
             dtype=torch.bfloat16 if self.opt.get("bfloat16") else torch.float16,
             enabled=amp and self.device.type == "cuda",
         )
-        warned = [False]
+        warned = [False, False]  # tiled-inference retry, learned metric on the CPU
         writer, pending = (
             ThreadPoolExecutor(1, thread_name_prefix="val_imwrite"),
             deque(),
@@ -522,7 +542,9 @@ class image(base):
                             gt = quantize(data["gt"].to(q.device, non_blocking=True))
                             for k, f in metrics.items():
                                 values[k].append(
-                                    f(q, gt).to(self.device, non_blocking=True)
+                                    self._metric(f, q, gt, warned).to(
+                                        self.device, non_blocking=True
+                                    )
                                 )
                             del gt
                     if save_img or save_tb:  # the one host copy: uint8 HWC RGB

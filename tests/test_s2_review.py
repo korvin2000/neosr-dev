@@ -4,6 +4,7 @@ import importlib.util
 import logging
 import math
 import weakref
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,7 @@ from neosr.optimizers import adamw_sf, adan, adan_sf
 from neosr.optimizers.adan import clip_grad_norm_
 from neosr.utils import get_root_logger
 from tests.test_config import BASE, HEAD, write
-from tests.test_model import batches, build, make_opt, run
+from tests.test_model import batches, build, loader, make_opt, run
 from tests.test_s2_trainer import Log, _phase, _update
 
 
@@ -299,3 +300,41 @@ def test_fp16_export_keeps_dysample_in_fp32_at_a_wide_input(tmp_path, onnx_deps)
     grid = [n for n in graph.node if n.op_type == "GridSample"]
     assert grid
     assert all(n.name.startswith("/1/1.0/") for n in grid)
+
+
+# ---------------------------------------------------------------------------- 2 learned metric OOM
+def test_learned_metric_oom_falls_back_to_the_cpu_per_image(
+    tmp_path, monkeypatch, caplog
+):
+    monkeypatch.setattr(get_root_logger(), "propagate", True)
+    calls, emptied = [], []
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: emptied.append(1))
+
+    def learned(img, img2, device):  # DISTS/TOPIQ's signature: bound to the run device
+        calls.append(torch.device(device).type)
+        if torch.device(device).type != "cpu":
+            raise torch.OutOfMemoryError("CUDA out of memory (test)")
+        return (img - img2).abs().mean()
+
+    opt = make_opt(tmp_path, is_train=False)
+    opt["val"]["metrics"]["learned"] = {"type": "calculate_dists", "better": "lower"}
+    m = build(opt)
+    m.metrics = {
+        "psnr": m.metrics["psnr"],
+        "learned": partial(learned, device=torch.device("cuda")),
+    }
+    logged = []
+    m.log_metrics = lambda name, results, *a: logged.append(results)
+    with caplog.at_level(logging.WARNING, logger="neosr"):
+        m.validation(loader(n=2), "x", None, False)
+    assert calls == ["cuda", "cpu", "cuda", "cpu"]  # each image tries the device first
+    assert len(emptied) == 2
+    warns = [r for r in caplog.records if "learned validation metric" in r.getMessage()]
+    assert len(warns) == 1  # once per validation event
+    assert logged[0]["learned"] > 0
+    # a non-learned metric's OOM still propagates
+    m.metrics = {
+        "psnr": lambda q, gt: (_ for _ in ()).throw(torch.OutOfMemoryError("x"))
+    }
+    with pytest.raises(torch.OutOfMemoryError):
+        m.validation(loader(n=1), "x", None, False)
