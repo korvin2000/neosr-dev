@@ -104,9 +104,9 @@ class Phase:
         # a fixed max-norm (true = 1.0, false = 0.0 = off) or "spike"
         self.spike = grad_clip == "spike"
         self.grad_clip = 0.0 if self.spike else float(grad_clip)
-        self.norm_ema: Tensor | None = (
-            None  # "spike": None until the first applied update
-        )
+        # "spike": None until the first applied update; while it is 0 (zero gradients) nothing is
+        # clipped and the next applied norm re-seeds it, so a zero start cannot freeze training
+        self.norm_ema: Tensor | None = None
         self.max_skip_streak, self.schedulers = max_skip_streak, list(schedulers)
         # host ints: skipped in the log window, consecutive skips
         self.skipped = self.streak = 0
@@ -118,9 +118,12 @@ class Phase:
         # T-10: list parameters without a gradient once; DDP without find_unused_parameters raises
         self.check_unused, self.strict_unused = True, strict_unused
 
+    def active(self, it: int) -> bool:
+        """Any term active in update `it`: a pure function of it, so every micro-batch and rank agree."""
+        return any(t.active(it) for t in self.terms)
+
     def backward(self, ctx: Context) -> None:
         terms = [t for t in self.terms if t.active(ctx.it)]
-        # a pure function of ctx.it: every micro-batch and rank agree
         self.idle = not terms
         if self.idle:
             return
@@ -145,7 +148,7 @@ class Phase:
         if thr is not None:
             clip_grads_with_norm_(self.params, thr, norm, foreach=True)
         elif self.norm_ema is not None:  # "spike"; the first applied update seeds it
-            thr = self.norm_ema * SPIKE_K
+            thr = torch.where(self.norm_ema > 0, self.norm_ema * SPIKE_K, torch.inf)
             # clip_grads_with_norm_'s formula; it would float() a tensor threshold (a host sync)
             torch._foreach_mul_(grads, (thr / (norm + 1e-6)).clamp_(max=1.0))
         # the one host sync per update; rank-identical under DDP
@@ -157,10 +160,11 @@ class Phase:
             self.clipped = None if thr is None else (norm > thr).float()
             if self.spike:  # EMA of the norms as applied (post-clip)
                 n = norm if thr is None else torch.minimum(norm, thr)
+                e = self.norm_ema
                 self.norm_ema = (
                     n.clone()
-                    if self.norm_ema is None
-                    else self.norm_ema.lerp_(n, 1 - SPIKE_BETA)
+                    if e is None
+                    else torch.where(e > 0, e.lerp(n, 1 - SPIKE_BETA), n)
                 )
         self.scaler.update()  # fp16: halves the scale after an inf/NaN window
         self.opt.zero_grad(set_to_none=True)
@@ -337,26 +341,28 @@ class Ema:
 class LossMeter:
     """Window means of detached device scalars: masked device sums and finite counts, no host sync
     until read() (one cat + all_reduce + tolist). A micro-batch's values wait for its update
-    (`commit`). A non-finite value is left out of the mean and counted as `nonfinite_<key>`; in a
-    skipped update that is all (ST-02: the step was already refused). In an applied update the
-    gradients were finite, so the objective itself is broken: read() raises (T1 D15)."""
+    (`commit`), tagged with the phase whose step decides about them. A non-finite value is left out
+    of the mean and counted as `nonfinite_<key>`; in a skipped step that is all (ST-02: the step was
+    already refused). In an applied step the gradients were finite, so the objective itself is
+    broken: read() raises (T1 D15)."""
 
     def __init__(self) -> None:
-        self.pending: list[Mapping[str, Tensor]] = []
+        self.pending: list[tuple[str | None, Mapping[str, Tensor]]] = []
         # (keys, applied) -> [device sums, device finite counts, host number of adds]
         self.groups: dict[tuple[tuple[str, ...], bool], list] = {}
 
-    def add(self, logs: Mapping[str, Tensor]) -> None:
+    def add(self, logs: Mapping[str, Tensor], phase: str | None = None) -> None:
         if logs:
-            self.pending.append(logs)
+            self.pending.append((phase, logs))
 
-    def commit(self, applied: bool) -> None:
-        """At an update boundary: were the update's steps applied (no phase skipped)?"""
-        for logs in self.pending:
+    def commit(self, applied: bool | Mapping[str | None, bool]) -> None:
+        """At an update boundary: was the step of each value's phase applied (a bool: of all)?"""
+        for phase, logs in self.pending:
+            a = applied if isinstance(applied, bool) else applied.get(phase, True)
             vec = torch.stack([v.float() for v in logs.values()])
             ok = vec.isfinite()
             val = torch.where(ok, vec, 0.0)
-            g = self.groups.get(key := (tuple(logs), applied))
+            g = self.groups.get(key := (tuple(logs), a))
             if g is None:
                 self.groups[key] = [val, ok.float(), 1]
             else:

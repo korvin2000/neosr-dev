@@ -178,6 +178,24 @@ def test_spike_clip_ema_and_threshold():
     assert torch.equal(p.norm_ema, before)
 
 
+def test_spike_zero_first_norm_does_not_freeze_training():
+    names = ["0.weight", "0.bias", "1.weight", "1.bias"]
+    net, opt, p = _phase("spike", opt=lambda ps: torch.optim.SGD(ps, lr=0.1), names=names)
+    seen = _grads_seen(opt)
+    assert _update(p, 0.0)  # zero gradients seed a zero EMA
+    assert p.norm_ema.item() == 0.0
+    w0 = clone(net)
+    assert _update(p, 2.0)  # unclipped, re-seeds the EMA
+    assert torch.equal(seen[1], p.grad_norm) and p.clipped.item() == 0.0
+    assert torch.equal(p.norm_ema, p.grad_norm) and not same(w0, clone(net))
+    ema = p.norm_ema.clone()
+    assert _update(p, 100.0)  # from here on the usual 3x threshold
+    assert seen[2].item() == pytest.approx(SPIKE_K * ema.item(), rel=1e-4)
+    _, _, q = _phase("spike", opt=lambda ps: torch.optim.SGD(ps, lr=0.1), names=names)
+    q.load_state_dict(p.state_dict() | {"clip_ema": torch.tensor(0.0)}, Log())
+    assert _update(q, 2.0) and torch.equal(q.norm_ema, q.grad_norm)
+
+
 def test_spike_state_roundtrip_and_old_state():
     _, _, a = _phase("spike", names=["0.weight", "0.bias", "1.weight", "1.bias"])
     _update(a, 1.0)
@@ -249,6 +267,32 @@ def test_loss_meter_masks_and_counts():
     with pytest.raises(FloatingPointError, match="'a'.*applied"):
         m.read()
     assert m.read() == {}
+
+
+def test_loss_meter_judges_each_phase_by_its_own_step():
+    t, m = torch.tensor, LossMeter()
+    m.add({"l_g": t(math.nan)}, "g")
+    m.add({"l_d": t(math.nan)}, "d")
+    m.commit({"g": False, "d": True})  # D applied with a non-finite D loss: broken
+    with pytest.raises(FloatingPointError, match="'l_d'"):
+        m.read()
+    m.add({"l_g": t(math.nan)}, "g")
+    m.add({"l_d": t(math.nan)}, "d")
+    m.commit({"g": True, "d": False})
+    with pytest.raises(FloatingPointError, match=r"\['l_g'\]"):
+        m.read()
+
+
+def test_applied_g_with_broken_loss_raises_although_d_skipped(tmp_path):
+    m = build(make_opt(tmp_path, d=True))
+    pix = m.g.terms[0]
+    orig, step = pix.compute, m.d.step
+    pix.compute = lambda ctx: ctx.log("l_g_probe", torch.tensor(math.nan)) or orig(ctx)
+    m.d.step = lambda: step() and False  # D skips, G's gradients stay finite
+    run(m, batches(1))
+    assert m.g.skipped == 0
+    with pytest.raises(FloatingPointError, match="l_g_probe"):
+        m.get_current_log()
 
 
 def _gan_bn(tmp, **kw):
@@ -380,6 +424,40 @@ def test_idle_discriminator_in_the_model(tmp_path):
     assert log["skipped_d"] == 0 and "grad_norm_d" not in log and "l_d_total" not in log
     run(m, batches(1))
     assert calls and m.d.opt.state
+
+
+def test_all_idle_update_runs_no_forward(tmp_path):
+    opt = make_opt(tmp_path)
+    opt["network_g"] = {"type": "compact", "num_feat": 8, "num_conv": 2}
+    m = build(opt)
+    m.net_g.add_module("bn", nn.BatchNorm2d(3))  # counts every training forward
+    m.buffers["net_g"] = Buffers(m.net_g)
+    fwd = m.net_g_fwd
+    m.net_g_fwd = lambda x: m.net_g.bn(fwd(x))
+    for t in m.g.terms:
+        t.active = lambda it: it > 1
+    lr0 = m.g.opt.param_groups[0]["lr"]
+    g0 = clone(m.net_g)
+    assert run(m, batches(1)) == [True]
+    assert m.net_g.bn.num_batches_tracked == 0 and same(g0, clone(m.net_g))
+    assert m.update == 1 and not m.g.opt.state and m.g.skipped == 0
+    assert m.g.opt.param_groups[0]["lr"] == lr0
+    run(m, batches(1))
+    assert m.net_g.bn.num_batches_tracked == 1 and m.g.opt.state
+
+
+def test_idle_generator_feeds_d_without_a_graph(tmp_path):
+    m = build(make_opt(tmp_path, d=True))
+    for t in m.g.terms:
+        t.active = lambda it: it > 1
+    seen = []
+    d_term = m.d.terms[0]
+    orig = d_term.compute
+    d_term.compute = lambda ctx: seen.append(ctx.sr.requires_grad) or orig(ctx)
+    run(m, batches(1))
+    assert seen == [False] and m.d.opt.state and not m.g.opt.state
+    run(m, batches(1))
+    assert seen == [False, True]
 
 
 # ---------------------------------------------------------------------------- T-10 unused parameters
@@ -642,6 +720,19 @@ def test_metric_direction_default(tmp_path, kind, better):
     assert m.best_metric_results["valset"]["x"]["val"] == (
         0.2 if better == "lower" else 0.9
     )
+
+
+def test_resumed_best_with_the_old_direction_starts_over(tmp_path, caplog):
+    m = build(make_opt(tmp_path))
+    m.opt["val"]["metrics"] = {"d": {"type": "calculate_dists"}}
+    # a state saved while DISTS defaulted to "higher"
+    m.best_metric_results = {"valset": {"d": {"better": "higher", "val": 0.5, "iter": 3}}}
+    with caplog.at_level(logging.WARNING, logger="neosr"):
+        m.update_best("valset", "d", 0.2, 7)
+    assert m.best_metric_results["valset"]["d"] == {"better": "lower", "val": 0.2, "iter": 7}
+    assert any("starts over" in r.getMessage() for r in caplog.records)
+    m.update_best("valset", "d", 0.3, 8)  # reconciled once: kept from here on
+    assert m.best_metric_results["valset"]["d"]["iter"] == 7
 
 
 # ---------------------------------------------------------------------------- T-06, ST-09, use_amp

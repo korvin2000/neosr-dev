@@ -203,8 +203,8 @@ target = "lq"         # reference: "gt" (default) or "lq" = bicubic-upscaled lq 
   are put back, the EMA is not updated, the skip is counted in `skipped_g`/`skipped_d`, and the scheduler still
   advances. The skipped update's non-finite losses are left out of the logged means and counted as
   `nonfinite_<key>`. `train.max_skip_streak` (default 10) consecutive skips stop the run; so do non-finite weights
-  or buffers before a save or validation, and a non-finite loss in an update whose gradients were finite (a broken
-  loss), before anything is written (exit 1). The fp16 scaler starts at 2^5 and doubles after 200 clean updates.
+  or buffers before a save or validation, and a non-finite loss of a network whose step was applied (finite
+  gradients: a broken loss), before anything is written (exit 1). The fp16 scaler starts at 2^5 and doubles after 200 clean updates.
 - **EMA.** `train.ema = 0.999` keeps an exponential moving average of the generator. The first successful update
   copies the generator; later updates average. Validation and the exported `net_g` use the EMA.
   `train.ema_power` (optional) ramps the decay up over the first updates (ema_pytorch-style warmup); without it
@@ -264,7 +264,8 @@ tiles are stitched on the CPU) and `suffix` (inference file name suffix, default
 type = "calculate_psnr"   # calculate_psnr, calculate_ssim (crop_border, test_y_channel), calculate_dists, calculate_topiq
 [val.metrics.dists]
 type = "calculate_dists"
-better = "lower"          # default "higher" ("lower" for calculate_dists); used for the best-value tracking
+better = "lower"          # default "higher" ("lower" for calculate_dists); best-value tracking (a resumed best
+                          # tracked the other way starts over, with a warning)
 ```
 
 Validation runs on rank 0 with the EMA (or evaluation) weights and leaves the training RNG streams untouched.

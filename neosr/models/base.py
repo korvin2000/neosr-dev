@@ -211,9 +211,17 @@ class base:
             "lower" if cfg.get("type") in METRIC_LOWER else "higher"
         )
         init = float("-inf") if better == "higher" else float("inf")
-        rec = self.best_metric_results.setdefault(dataset, {}).setdefault(
-            metric, {"better": better, "val": init, "iter": -1}
-        )
+        recs = self.best_metric_results.setdefault(dataset, {})
+        rec = recs.get(metric)
+        if rec is not None and rec.get("better") != better:
+            # a resumed record kept the other direction (DISTS was "higher" before M-14)
+            get_root_logger().warning(
+                f"val.metrics.{metric} ({dataset}): better = {better!r} now; the saved best "
+                f"{rec['val']:.4f} @ {rec['iter']} ({rec.get('better')!r}) starts over"
+            )
+            rec = None
+        if rec is None:
+            rec = recs[metric] = {"better": better, "val": init, "iter": -1}
         if (val >= rec["val"]) if rec["better"] == "higher" else (val <= rec["val"]):
             rec["val"], rec["iter"] = float(val), current_iter
 

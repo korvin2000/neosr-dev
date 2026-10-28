@@ -300,26 +300,37 @@ class image(base):
             for b in self.buffers.values():
                 b.save()
         boundary = (self.micro + 1) % self.accumulate == 0
-        with no_sync(self.net_g_fwd, boundary):  # forward + losses + backward
-            with torch.autocast(**self.g.autocast):
-                sr = self.net_g_fwd(self.lq)
-                if self.clamp == "restore":
-                    sr = restoring_clamp(sr)
-                elif self.clamp:
-                    sr = sr.clamp(1 / 255, 1)
-            ctx = Context(
-                sr=sr,
-                gt=self.gt,
-                lq=self.lq,
-                it=self.update + 1,  # the update being computed
-                net_d=self.net_d_fwd,
-                net_d_adv=self.net_d_adv,
-            )
-            self.g.backward(ctx)
-        if self.d is not None:
-            with no_sync(self.net_d_fwd, boundary):
-                self.d.backward(ctx)
-        self.meter.add(ctx.logs)
+        it = self.update + 1  # the update being computed
+        g_on = self.g.active(it)
+        if g_on or (self.d is not None and self.d.active(it)):
+            # forward + losses + backward; an idle G only makes D's fake samples (no graph)
+            with no_sync(self.net_g_fwd, boundary), torch.set_grad_enabled(g_on):
+                with torch.autocast(**self.g.autocast):
+                    sr = self.net_g_fwd(self.lq)
+                    if self.clamp == "restore":
+                        sr = restoring_clamp(sr)
+                    elif self.clamp:
+                        sr = sr.clamp(1 / 255, 1)
+                ctx = Context(
+                    sr=sr,
+                    gt=self.gt,
+                    lq=self.lq,
+                    it=it,
+                    net_d=self.net_d_fwd,
+                    net_d_adv=self.net_d_adv,
+                )
+                self.g.backward(ctx)
+            g_logs = dict(ctx.logs)
+            self.meter.add(g_logs, "g")
+            if self.d is not None:
+                with no_sync(self.net_d_fwd, boundary):
+                    self.d.backward(ctx)
+                self.meter.add(
+                    {k: v for k, v in ctx.logs.items() if k not in g_logs}, "d"
+                )
+        else:  # every phase idle: no forward (compute, RNG, buffer writes); the clocks still run
+            for p in self.phases.values():
+                p.idle = True
         self.micro += 1
         if not boundary:
             return False
@@ -339,14 +350,14 @@ class image(base):
             ok[self.d] = self.d.step()
             if ok[self.d] is False:
                 self.buffers["net_d"].restore()
-        # means over applied updates: a skipped or idle one adds nothing
-        self.meter.add({f"grad_norm_{p.name}": p.grad_norm for p, s in ok.items() if s})
-        self.meter.add({
-            f"clipped_{p.name}": p.clipped
-            for p, s in ok.items()
-            if s and p.clipped is not None
-        })
-        self.meter.commit(applied=False not in ok.values())
+        # means over applied steps: a skipped or idle one adds nothing
+        for p, s in ok.items():
+            if s:
+                clipped = {} if p.clipped is None else {f"clipped_{p.name}": p.clipped}
+                self.meter.add({f"grad_norm_{p.name}": p.grad_norm, **clipped}, p.name)
+        # each phase's values by its own step: an applied G with a broken loss raises (T1 D15)
+        # even when D skipped
+        self.meter.commit({p.name: s is not False for p, s in ok.items()})
         self.update += 1
         return True
 
