@@ -32,11 +32,12 @@ class LocalModule(nn.Sequential):
 
 
 def window_reverse(windows, window_size, H, W):
-    B = int(windows.shape[0] / (H * W / window_size / window_size))
+    # -1 for the batch: int(windows.shape[0] / ...) freezes it in an ONNX trace
+    C = windows.shape[-1]
     x = windows.view(
-        B, H // window_size, W // window_size, window_size, window_size, -1
+        -1, H // window_size, W // window_size, window_size, window_size, C
     )
-    x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
+    x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, H, W, C)
     return x
 
 

@@ -125,11 +125,12 @@ def window_reverse(windows, window_size, h, w):
     Returns:
         x: (b, h, w, c)
     """
-    b = int(windows.shape[0] / (h * w / window_size / window_size))
+    # -1 for the batch: int(windows.shape[0] / ...) freezes it in an ONNX trace
+    c = windows.shape[-1]
     x = windows.view(
-        b, h // window_size, w // window_size, window_size, window_size, -1
+        -1, h // window_size, w // window_size, window_size, window_size, c
     )
-    return x.permute(0, 1, 3, 2, 4, 5).contiguous().view(b, h, w, -1)
+    return x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, h, w, c)
 
 
 class WindowAttention(nn.Module):

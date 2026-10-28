@@ -227,7 +227,7 @@ class UFONE(nn.Module):
         self.patch_size = patch_size
 
     def forward(self, x):
-        B, C, H, W = x.data.shape
+        B, C, H, W = x.shape
         local_features = x.view(
             B,
             C,

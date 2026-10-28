@@ -1032,9 +1032,16 @@ class omnisr_net(nn.Module):
         # pad to the window lattice, and to >= 15 px: ESA's stride-2 conv + max_pool2d(7, 3)
         _, _, h, w = x.size()
         ws = self.window_size
-        m = -(-15 // ws)
-        mod_pad_h = max(-(-h // ws), m) * ws - h
-        mod_pad_w = max(-(-w // ws), m) * ws - w
+        # ceil division as (n + ws - 1) // ws: -(-h // ws) exports as a truncating Div
+        m = (15 + ws - 1) // ws
+        nh, nw = (h + ws - 1) // ws, (w + ws - 1) // ws
+        # traced (ONNX export): the sizes are tensors, and clamp keeps the floor in the graph
+        if isinstance(nh, torch.Tensor):
+            nh, nw = nh.clamp(min=m), nw.clamp(min=m)
+        else:
+            nh, nw = max(nh, m), max(nw, m)
+        mod_pad_h = nh * ws - h
+        mod_pad_w = nw * ws - w
         # x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), 'reflect')
         x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), "constant", 0)
         return x
