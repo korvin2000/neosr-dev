@@ -266,3 +266,10 @@ Tests as in session 4 (main checkout venv, `PYTHONPATH` = worktree, `CUDA_VISIBL
 - Codex review: no functional or configuration defect; 1 wording fix (gamma guidance stated as a grid, not a law).
 - Verified: test_config shipped-config sweep (183), test_losses_pipeline shipped dry-run and real-constructor sweeps
   (92, 12 GB), test_hygiene + test_s3_hygiene. The `adam` (0, 0.99) build + exact resume is test_s3_r3gan's resume test.
+
+### R5 round 0 (data)
+- Done: held-out split by recovered source group (content hashing of all 16x16 blocks at any offset + edge adjacency):
+  10,144 groups; dev 300 / confirmation 300 / train 10,007 tiles (`r3gan/split/*.txt`); no tile shares a block with
+  `val8`; visual set of 16 dev tiles + 4 real-LQ crops (`split/visual.txt`). Margins and decision rules predeclared in
+  `r3gan/RESULTS.md` section 1 before any A/B run. Harness: `experiments/r3gan_ab/harness` (gitignored; per-image metric
+  capture for paired differences). Shared non-GAN pretrain P0 (20k) launched.
