@@ -10,7 +10,8 @@ from torch.nn import functional as F
 from torch.nn.init import trunc_normal_
 from torch.utils import checkpoint
 
-from neosr.archs.arch_util import DropPath
+from neosr.archs.arch_util import DropPath, shift_mask, window_sdpa
+from neosr.archs.dat_arch import calculate_mask
 
 
 def img2windows(img, H_sp, W_sp):
@@ -30,11 +31,9 @@ def windows2img(img_splits_hw, H_sp, W_sp, H, W):
     """Input: Window Partition (B', N, C).
     Output: Image (B, H, W, C)
     """
-    B = int(img_splits_hw.shape[0] / (H * W / H_sp / W_sp))
-
-    img = img_splits_hw.view(B, H // H_sp, W // W_sp, H_sp, W_sp, -1)
-    img = img.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
-    return img
+    C = img_splits_hw.shape[-1]
+    img = img_splits_hw.view(-1, H // H_sp, W // W_sp, H_sp, W_sp, C)
+    return img.permute(0, 1, 3, 2, 4, 5).reshape(-1, H, W, C)
 
 
 class Gate(nn.Module):
@@ -151,6 +150,7 @@ class WindowAttention(nn.Module):
         proj_drop=0.0,
         qk_scale=None,
         position_bias=True,
+        flash_attn=True,
     ):
         super().__init__()
         self.dim = dim
@@ -159,6 +159,7 @@ class WindowAttention(nn.Module):
         self.num_heads = num_heads
         self.idx = idx
         self.position_bias = position_bias
+        self.flash_attn = flash_attn
 
         head_dim = dim // num_heads
         self.scale = qk_scale or head_dim**-0.5
@@ -224,10 +225,8 @@ class WindowAttention(nn.Module):
         k = self.im2win(k, H, W)
         v = self.im2win(v, H, W)
 
-        q = q * self.scale
-        attn = q @ k.transpose(-2, -1)  # B head N C @ B head C N --> B head N N
-
         # calculate drpe
+        relative_position_bias = None
         if self.position_bias:
             pos = self.pos(self.rpe_biases)
             # select position bias
@@ -237,22 +236,33 @@ class WindowAttention(nn.Module):
             relative_position_bias = relative_position_bias.permute(
                 2, 0, 1
             ).contiguous()
-            attn = attn + relative_position_bias.unsqueeze(0)
 
-        N = attn.shape[3]
+        if self.flash_attn:  # exact SDPA: bias + shift mask as one float mask
+            x = window_sdpa(
+                q, k, v, relative_position_bias, mask, scale=self.scale,
+                dropout_p=self.attn_drop.p if self.training else 0.0,
+            )  # fmt: skip
+        else:
+            q = q * self.scale
+            attn = q @ k.transpose(-2, -1)  # B head N C @ B head C N --> B head N N
+            if relative_position_bias is not None:
+                attn = attn + relative_position_bias.unsqueeze(0)
 
-        # use mask for shift window
-        if mask is not None:
-            nW = mask.shape[0]
-            attn = attn.view(B, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(
-                0
-            )
-            attn = attn.view(-1, self.num_heads, N, N)
+            N = attn.shape[3]
 
-        attn = nn.functional.softmax(attn, dim=-1, dtype=attn.dtype)
-        attn = self.attn_drop(attn)
+            # use mask for shift window
+            if mask is not None:
+                nW = mask.shape[0]
+                attn = attn.view(B, nW, self.num_heads, N, N) + mask.unsqueeze(
+                    1
+                ).unsqueeze(0)
+                attn = attn.view(-1, self.num_heads, N, N)
 
-        x = attn @ v
+            # no dtype=: autocast keeps the softmax in fp32 (an explicit dtype pinned it to bf16)
+            attn = nn.functional.softmax(attn, dim=-1)
+            attn = self.attn_drop(attn)
+            x = attn @ v
+
         x = x.transpose(1, 2).reshape(
             -1, self.H_sp * self.W_sp, C
         )  # B head N N @ B head N C
@@ -278,6 +288,7 @@ class L_SA(nn.Module):
         idx=0,
         reso=64,
         rs_id=0,
+        flash_attn=True,
     ):
         super().__init__()
         self.dim = dim
@@ -312,6 +323,7 @@ class L_SA(nn.Module):
                 attn_drop=attn_drop,
                 proj_drop=drop,
                 position_bias=True,
+                flash_attn=flash_attn,
             )
             for i in range(self.branch_num)
         ])
@@ -335,84 +347,8 @@ class L_SA(nn.Module):
             dim, dim, kernel_size=3, stride=1, padding=1, groups=dim
         )  # DW Conv
 
-    def calculate_mask(self, H, W):
-        # The implementation builds on Swin Transformer code https://github.com/microsoft/Swin-Transformer/blob/main/models/swin_transformer.py
-        # calculate attention mask for Rwin
-        img_mask_0 = torch.zeros((1, H, W, 1))  # 1 H W 1 idx=0
-        img_mask_1 = torch.zeros((1, H, W, 1))  # 1 H W 1 idx=1
-        h_slices_0 = (
-            slice(0, -self.split_size[0]),
-            slice(-self.split_size[0], -self.shift_size[0]),
-            slice(-self.shift_size[0], None),
-        )
-        w_slices_0 = (
-            slice(0, -self.split_size[1]),
-            slice(-self.split_size[1], -self.shift_size[1]),
-            slice(-self.shift_size[1], None),
-        )
-
-        h_slices_1 = (
-            slice(0, -self.split_size[1]),
-            slice(-self.split_size[1], -self.shift_size[1]),
-            slice(-self.shift_size[1], None),
-        )
-        w_slices_1 = (
-            slice(0, -self.split_size[0]),
-            slice(-self.split_size[0], -self.shift_size[0]),
-            slice(-self.shift_size[0], None),
-        )
-        cnt = 0
-        for h in h_slices_0:
-            for w in w_slices_0:
-                img_mask_0[:, h, w, :] = cnt
-                cnt += 1
-        cnt = 0
-        for h in h_slices_1:
-            for w in w_slices_1:
-                img_mask_1[:, h, w, :] = cnt
-                cnt += 1
-
-        # calculate mask for H-Shift
-        img_mask_0 = img_mask_0.view(
-            1,
-            H // self.split_size[0],
-            self.split_size[0],
-            W // self.split_size[1],
-            self.split_size[1],
-            1,
-        )
-        img_mask_0 = (
-            img_mask_0.permute(0, 1, 3, 2, 4, 5)
-            .contiguous()
-            .view(-1, self.split_size[0], self.split_size[1], 1)
-        )  # nW, sw[0], sw[1], 1
-        mask_windows_0 = img_mask_0.view(-1, self.split_size[0] * self.split_size[1])
-        attn_mask_0 = mask_windows_0.unsqueeze(1) - mask_windows_0.unsqueeze(2)
-        attn_mask_0 = attn_mask_0.masked_fill(attn_mask_0 != 0, -100.0).masked_fill(
-            attn_mask_0 == 0, 0.0
-        )
-
-        # calculate mask for V-Shift
-        img_mask_1 = img_mask_1.view(
-            1,
-            H // self.split_size[1],
-            self.split_size[1],
-            W // self.split_size[0],
-            self.split_size[0],
-            1,
-        )
-        img_mask_1 = (
-            img_mask_1.permute(0, 1, 3, 2, 4, 5)
-            .contiguous()
-            .view(-1, self.split_size[1], self.split_size[0], 1)
-        )  # nW, sw[1], sw[0], 1
-        mask_windows_1 = img_mask_1.view(-1, self.split_size[1] * self.split_size[0])
-        attn_mask_1 = mask_windows_1.unsqueeze(1) - mask_windows_1.unsqueeze(2)
-        attn_mask_1 = attn_mask_1.masked_fill(attn_mask_1 != 0, -100.0).masked_fill(
-            attn_mask_1 == 0, 0.0
-        )
-
-        return attn_mask_0, attn_mask_1
+    def calculate_mask(self, H, W, device=None):
+        return calculate_mask(H, W, tuple(self.split_size), tuple(self.shift_size), device)
 
     def forward(self, x, H, W):
         """Input: x: (B, H*W, C), x_size: (H, W)
@@ -460,11 +396,14 @@ class L_SA(nn.Module):
             qkv_1 = qkv_1.view(3, B, _L, C // 2)
 
             if self.patches_resolution != _H or self.patches_resolution != _W:
-                mask_tmp = self.calculate_mask(_H, _W)
+                # one mask pair per forward, built on device (no host copy)
+                mask_tmp = shift_mask(
+                    calculate_mask, _H, _W, tuple(self.split_size), tuple(self.shift_size), x.device
+                )
                 # H-Rwin
-                x1_shift = self.attns[0](qkv_0, _H, _W, mask=mask_tmp[0].to(x.device))
+                x1_shift = self.attns[0](qkv_0, _H, _W, mask=mask_tmp[0])
                 # V-Rwin
-                x2_shift = self.attns[1](qkv_1, _H, _W, mask=mask_tmp[1].to(x.device))
+                x2_shift = self.attns[1](qkv_1, _H, _W, mask=mask_tmp[1])
 
             else:
                 # H-Rwin
@@ -653,6 +592,7 @@ class Block(nn.Module):
         reso=64,
         c_ratio=0.5,
         layerscale_value=1e-4,
+        flash_attn=True,
     ):
         super().__init__()
         self.norm1 = norm_layer(dim)
@@ -669,6 +609,7 @@ class Block(nn.Module):
                 idx=idx,
                 reso=reso,
                 rs_id=rs_id,
+                flash_attn=flash_attn,
             )
         else:
             self.attn = RG_SA(
@@ -730,6 +671,7 @@ class ResidualGroup(nn.Module):
         rs_id=0,
         split_size=[8, 8],
         c_ratio=0.5,
+        flash_attn=True,
     ):
         super().__init__()
         self.use_chk = use_chk
@@ -752,6 +694,7 @@ class ResidualGroup(nn.Module):
                 split_size=split_size,
                 shift_size=[split_size[0] // 2, split_size[1] // 2],
                 c_ratio=c_ratio,
+                flash_attn=flash_attn,
             )
             for i in range(depth)
         ])
@@ -774,7 +717,7 @@ class ResidualGroup(nn.Module):
         H, W = x_size
         res = x
         for blk in self.blocks:
-            if self.use_chk:
+            if self.use_chk and self.training:
                 x = checkpoint.checkpoint(blk, x, x_size, use_reentrant=False)
             else:
                 x = blk(x, x_size)
@@ -846,6 +789,7 @@ class rgt(nn.Module):
         resi_connection="1conv",
         split_size=[8, 32],
         c_ratio=0.5,
+        flash_attn=True,
     ):
         super().__init__()
 
@@ -853,11 +797,10 @@ class rgt(nn.Module):
         num_out_ch = in_chans
         num_feat = 64
         self.img_range = img_range
-        if in_chans == 3:
-            rgb_mean = (0.5, 0.5, 0.5)
-            self.mean = torch.Tensor(rgb_mean).view(1, 3, 1, 1)
-        else:
-            self.mean = torch.zeros(1, 1, 1, 1)
+        mean = (
+            torch.full((1, 3, 1, 1), 0.5) if in_chans == 3 else torch.zeros(1, 1, 1, 1)
+        )
+        self.register_buffer("mean", mean, persistent=False)  # moves with .to(), not in state_dict
         self.upscale = upscale
 
         # ------------------------- 1, Shallow Feature Extraction ------------------------- #
@@ -900,6 +843,7 @@ class rgt(nn.Module):
                 rs_id=i,
                 split_size=split_size,
                 c_ratio=c_ratio,
+                flash_attn=flash_attn,
             )
             self.layers.append(layer)
 
@@ -939,16 +883,24 @@ class rgt(nn.Module):
 
     def forward(self, x):
         """Input: x: (B, C, H, W)"""
-        self.mean = self.mean.type_as(x)
-        x = (x - self.mean) * self.img_range
+        h, w = x.shape[2:]
+        # the RG-SA recursion depth is log4(H // 16) in eval, max over sides of log4(H // 4) in training: pad
+        # sides below that (which used to raise a math domain error), crop after. A training input that used to
+        # raise is padded so the recursion runs at least once (depth 0 leaves reduction1 without a gradient)
+        m = 16 if not self.training or (min(h, w) < 4 and max(h, w) < 16) else 4
+        ph, pw = max(m - h, 0), max(m - w, 0)
+        if ph or pw:
+            x = F.pad(x, (0, pw, 0, ph), "replicate")
+        mean = self.mean.to(x)
+        x = (x - mean) * self.img_range
 
         x = self.conv_first(x)
         x = self.conv_after_body(self.forward_features(x)) + x
         x = self.conv_before_upsample(x)
         x = self.conv_last(self.upsample(x))
 
-        x = x / self.img_range + self.mean
-        return x
+        x = x / self.img_range + mean
+        return x[..., : h * self.upscale, : w * self.upscale]
 
 
 def rgt_s(**kwargs):

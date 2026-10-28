@@ -7,7 +7,7 @@ from torch import nn
 from torch.nn.init import trunc_normal_
 from torch.utils.checkpoint import checkpoint
 
-from neosr.archs.arch_util import DropPath, to_2tuple
+from neosr.archs.arch_util import DropPath, to_2tuple, window_sdpa
 
 
 class ChannelAttention(nn.Module):
@@ -108,12 +108,9 @@ def window_reverse(windows, window_size, h, w):
         x: (b, h, w, c)
 
     """
-    b = int(windows.shape[0] / (h * w / window_size / window_size))
-    x = windows.view(
-        b, h // window_size, w // window_size, window_size, window_size, -1
-    )
-    x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(b, h, w, -1)
-    return x
+    c = windows.shape[-1]
+    x = windows.view(-1, h // window_size, w // window_size, window_size, window_size, c)
+    return x.permute(0, 1, 3, 2, 4, 5).reshape(-1, h, w, c)
 
 
 class WindowAttention(nn.Module):
@@ -141,11 +138,13 @@ class WindowAttention(nn.Module):
         qk_scale=None,
         attn_drop=0.0,
         proj_drop=0.0,
+        flash_attn=True,
     ):
         super().__init__()
         self.dim = dim
         self.window_size = window_size  # Wh, Ww
         self.num_heads = num_heads
+        self.flash_attn = flash_attn
         head_dim = dim // num_heads
         self.scale = qk_scale or head_dim**-0.5
 
@@ -182,9 +181,6 @@ class WindowAttention(nn.Module):
             qkv[2],
         )  # make torchscript happy (cannot use tensor as tuple)
 
-        q = q * self.scale
-        attn = q @ k.transpose(-2, -1)
-
         relative_position_bias = self.relative_position_bias_table[rpi.view(-1)].view(
             self.window_size[0] * self.window_size[1],
             self.window_size[0] * self.window_size[1],
@@ -193,6 +189,16 @@ class WindowAttention(nn.Module):
         relative_position_bias = relative_position_bias.permute(
             2, 0, 1
         ).contiguous()  # nH, Wh*Ww, Wh*Ww
+        if self.flash_attn:  # exact SDPA: bias + shift mask as one float mask
+            x = window_sdpa(
+                q, k, v, relative_position_bias, mask, scale=self.scale,
+                dropout_p=self.attn_drop.p if self.training else 0.0,
+            )  # fmt: skip
+            x = self.proj(x.transpose(1, 2).reshape(b_, n, c))
+            return self.proj_drop(x)
+
+        q = q * self.scale
+        attn = q @ k.transpose(-2, -1)
         attn = attn + relative_position_bias.unsqueeze(0)
 
         if mask is not None:
@@ -252,6 +258,7 @@ class HAB(nn.Module):
         drop_path=0.0,
         act_layer=nn.GELU,
         norm_layer=nn.LayerNorm,
+        flash_attn=True,
     ):
         super().__init__()
         self.dim = dim
@@ -277,6 +284,7 @@ class HAB(nn.Module):
             qk_scale=qk_scale,
             attn_drop=attn_drop,
             proj_drop=drop,
+            flash_attn=flash_attn,
         )
 
         self.conv_scale = conv_scale
@@ -402,12 +410,14 @@ class OCAB(nn.Module):
         qk_scale=None,
         mlp_ratio=2,
         norm_layer=nn.LayerNorm,
+        flash_attn=True,
     ):
         super().__init__()
         self.dim = dim
         self.input_resolution = input_resolution
         self.window_size = window_size
         self.num_heads = num_heads
+        self.flash_attn = flash_attn
         head_dim = dim // num_heads
         self.scale = qk_scale or head_dim**-0.5
         self.overlap_win_size = int(window_size * overlap_ratio) + window_size
@@ -484,9 +494,6 @@ class OCAB(nn.Module):
             0, 2, 1, 3
         )  # nw*b, nH, n, d
 
-        q = q * self.scale
-        attn = q @ k.transpose(-2, -1)
-
         relative_position_bias = self.relative_position_bias_table[rpi.view(-1)].view(
             self.window_size * self.window_size,
             self.overlap_win_size * self.overlap_win_size,
@@ -495,10 +502,15 @@ class OCAB(nn.Module):
         relative_position_bias = relative_position_bias.permute(
             2, 0, 1
         ).contiguous()  # nH, ws*ws, wse*wse
-        attn = attn + relative_position_bias.unsqueeze(0)
-
-        attn = self.softmax(attn)
-        attn_windows = (attn @ v).transpose(1, 2).reshape(b_, nq, self.dim)
+        if self.flash_attn:  # exact SDPA with the bias as a float mask
+            attn_windows = window_sdpa(q, k, v, relative_position_bias, scale=self.scale)
+        else:
+            q = q * self.scale
+            attn = q @ k.transpose(-2, -1)
+            attn = attn + relative_position_bias.unsqueeze(0)
+            attn = self.softmax(attn)
+            attn_windows = attn @ v
+        attn_windows = attn_windows.transpose(1, 2).reshape(b_, nq, self.dim)
 
         # merge windows
         attn_windows = attn_windows.view(
@@ -553,11 +565,14 @@ class AttenBlocks(nn.Module):
         drop_path=0.0,
         norm_layer=nn.LayerNorm,
         downsample=None,
+        flash_attn=True,
+        use_checkpoint=False,
     ):
         super().__init__()
         self.dim = dim
         self.input_resolution = input_resolution
         self.depth = depth
+        self.use_checkpoint = use_checkpoint
 
         # build blocks
         self.blocks = nn.ModuleList([
@@ -577,6 +592,7 @@ class AttenBlocks(nn.Module):
                 attn_drop=attn_drop,
                 drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
                 norm_layer=norm_layer,
+                flash_attn=flash_attn,
             )
             for i in range(depth)
         ])
@@ -592,6 +608,7 @@ class AttenBlocks(nn.Module):
             qk_scale=qk_scale,
             mlp_ratio=mlp_ratio,
             norm_layer=norm_layer,
+            flash_attn=flash_attn,
         )
 
         # patch merging layer
@@ -603,10 +620,18 @@ class AttenBlocks(nn.Module):
             self.downsample = None
 
     def forward(self, x, x_size, params):
+        # per-block checkpointing: the recompute peak is one HAB/OCAB, not the whole group
+        ckpt = self.use_checkpoint and self.training
         for blk in self.blocks:
-            x = blk(x, x_size, params["rpi_sa"], params["attn_mask"])
+            args = (x, x_size, params["rpi_sa"], params["attn_mask"])
+            x = checkpoint(blk, *args, use_reentrant=False) if ckpt else blk(*args)
 
-        x = self.overlap_attn(x, x_size, params["rpi_oca"])
+        args = (x, x_size, params["rpi_oca"])
+        x = (
+            checkpoint(self.overlap_attn, *args, use_reentrant=False)
+            if ckpt
+            else self.overlap_attn(*args)
+        )
 
         if self.downsample is not None:
             x = self.downsample(x)
@@ -742,6 +767,8 @@ class RHAG(nn.Module):
         img_size=224,
         patch_size=4,
         resi_connection="1conv",
+        flash_attn=True,
+        use_checkpoint=False,
     ):
         super(RHAG, self).__init__()
 
@@ -766,6 +793,8 @@ class RHAG(nn.Module):
             drop_path=drop_path,
             norm_layer=norm_layer,
             downsample=downsample,
+            flash_attn=flash_attn,
+            use_checkpoint=use_checkpoint,
         )
 
         if resi_connection == "1conv":
@@ -853,7 +882,8 @@ class hat(nn.Module):
         img_range: Image range. 1. or 255.
         upsampler: The reconstruction reconstruction module. 'pixelshuffle'/'pixelshuffledirect'/'nearest+conv'/None
         resi_connection: The convolutional block before residual connection. '1conv'/'3conv'
-        use_checkpoint (bool): Activation checkpointing per RHAG while training. Default: False
+        use_checkpoint (bool): Activation checkpointing per HAB/OCAB while training. Default: False
+        flash_attn (bool): Exact SDPA attention (memory-efficient kernel); False = the manual reference path. Default: True
 
     """
 
@@ -893,6 +923,7 @@ class hat(nn.Module):
         upsampler="",
         resi_connection="1conv",
         use_checkpoint=False,
+        flash_attn=True,
     ):
         super(hat, self).__init__()
         self.use_checkpoint = use_checkpoint
@@ -990,6 +1021,8 @@ class hat(nn.Module):
                 img_size=img_size,
                 patch_size=patch_size,
                 resi_connection=resi_connection,
+                flash_attn=flash_attn,
+                use_checkpoint=use_checkpoint,
             )
             self.layers.append(layer)
         self.norm = norm_layer(self.num_features)
@@ -1123,10 +1156,7 @@ class hat(nn.Module):
         x = self.pos_drop(x)
 
         for layer in self.layers:
-            if self.use_checkpoint and self.training:
-                x = checkpoint(layer, x, x_size, params, use_reentrant=False)
-            else:
-                x = layer(x, x_size, params)
+            x = layer(x, x_size, params)
 
         x = self.norm(x)  # b seq_len c
         x = self.patch_unembed(x, x_size)
@@ -1137,7 +1167,7 @@ class hat(nn.Module):
         # pad to a multiple of window_size (reflect needs pad < size)
         _, _, h, w = x.size()
         ph, pw = (-h) % self.window_size, (-w) % self.window_size
-        if ph or pw:
+        if ph or pw or torch.jit.is_tracing():  # a trace must keep the pad
             mode = "reflect" if ph < h and pw < w else "replicate"
             x = nn.functional.pad(x, (0, pw, 0, ph), mode)
         return x
