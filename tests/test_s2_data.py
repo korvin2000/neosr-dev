@@ -459,8 +459,22 @@ def test_extract_subimages(tmp_path):
     assert ex.tile(str(tmp_path / "im.png"), tmp_path / "out", 4, 3, 1) == 12
     t = cv2.imread(str(tmp_path / "out" / "im_s012.png"))
     assert np.array_equal(t, img[7:11, 6:10])
-    with pytest.raises(OSError, match="x.png"):
+    with pytest.raises(OSError, match=r"x\.png"):
         ex.tile(str(tmp_path / "x.png"), tmp_path / "out", 4, 3, 1)
+
+
+# D-14: 16-bit sources stored as the 8 bit the loaders decode: bit-identical training input
+def test_extract_subimages_bits8(pairs, tmp_path):
+    from scripts import extract_subimages as ex  # noqa: PLC0415
+
+    src = pairs / "GT" / "p1.png"  # 16-bit
+    assert cv2.imread(str(src), cv2.IMREAD_UNCHANGED).dtype == np.uint16
+    out = tmp_path / "out8"
+    out.mkdir()
+    assert ex.tile(str(src), out, 0, 0, 1, bits8=True) == 1
+    stored = cv2.imread(str(out / "p1.png"), cv2.IMREAD_UNCHANGED)
+    assert stored.dtype == np.uint8
+    assert np.array_equal(du.imfrombytes(src.read_bytes()), du.imfrombytes((out / "p1.png").read_bytes()))
 
 
 # D-20: no cudnn autotuning per image size inside the Degrader

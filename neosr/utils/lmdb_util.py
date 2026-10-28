@@ -1,5 +1,6 @@
 import os
 import shutil
+from collections import Counter
 from itertools import batched
 from multiprocessing import Pool
 from pathlib import Path
@@ -103,7 +104,7 @@ def make_lmdb_from_imgs(
         msg = f"Folder {lmdb_path} already exists."
         raise FileExistsError(msg)
     if len(set(keys)) != len(keys):
-        dup = sorted({k for k in keys if keys.count(k) > 1})[:5]
+        dup = sorted(k for k, n in Counter(keys).items() if n > 1)[:5]
         msg = f"Duplicate lmdb keys (two images map to one record): {dup}"
         raise ValueError(msg)
     print(f"Create lmdb for {data_path}, save to {lmdb_path}...")
@@ -117,7 +118,14 @@ def make_lmdb_from_imgs(
     items = [(p, k, compress_level) for p, k in zip(paths, keys, strict=True)]
     env = lmdb.open(str(tmp), map_size=map_size)
     try:
-        _write(env, tmp, items, batch, n_thread or os.process_cpu_count() or 1, multiprocessing_read)
+        _write(
+            env,
+            tmp,
+            items,
+            batch,
+            n_thread or os.process_cpu_count() or 1,
+            multiprocessing_read,
+        )
     except BaseException:
         env.close()
         shutil.rmtree(tmp, ignore_errors=True)
@@ -139,7 +147,9 @@ def _write(env, tmp: Path, items: list, batch: int, n_thread: int, pool: bool) -
             chunk = list(workers.imap(_encode, window, chunksize=chunksize))
             _put_all(env, chunk)
             level = window[0][2]
-            meta.writelines(f"{k}.png ({h},{w},{c}) {level}\n" for k, _, (h, w, c) in chunk)
+            meta.writelines(
+                f"{k}.png ({h},{w},{c}) {level}\n" for k, _, (h, w, c) in chunk
+            )
             pbar.update(len(chunk))
 
 
