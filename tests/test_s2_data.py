@@ -461,3 +461,23 @@ def test_extract_subimages(tmp_path):
     assert np.array_equal(t, img[7:11, 6:10])
     with pytest.raises(OSError, match="x.png"):
         ex.tile(str(tmp_path / "x.png"), tmp_path / "out", 4, 3, 1)
+
+
+# D-20: no cudnn autotuning per image size inside the Degrader
+def test_degrader_disables_cudnn_benchmark(monkeypatch):
+    from neosr.data import otf_degradation as od  # noqa: PLC0415
+
+    seen, conv = [], od.filter2D
+    monkeypatch.setattr(od, "filter2D", lambda *a: seen.append(torch.backends.cudnn.benchmark) or conv(*a))
+    monkeypatch.setattr(torch.backends.cudnn, "benchmark", True)
+    d = Degrader({**{k: v for k, v in DEG.items() if not k.startswith("jpeg")}, "jpeg_compress": False},
+                 scale=4, device="cpu")  # fmt: skip
+    ks = [torch.full((1, n, n), 1 / n**2) for n in (7, 9, 21)]
+    _seed(0)
+    d(torch.rand(1, 3, 96, 96), *ks)
+    assert seen
+    assert not any(seen)
+    assert torch.backends.cudnn.benchmark
+    with pytest.raises(ValueError, match="kernel size"):
+        d(torch.rand(1, 3, 96, 96), *ks[:2], torch.ones(1, 4, 4))  # restored on errors too
+    assert torch.backends.cudnn.benchmark

@@ -6,6 +6,8 @@ probabilities and scales, torch's RNG the per-sample noise and JPEG qualities.
 
 import logging
 import random
+from collections.abc import Generator
+from contextlib import contextmanager
 from typing import Any
 
 import torch
@@ -36,6 +38,20 @@ _LUMA = (0.299, 0.587, 0.114)
 
 def _quantize(x: Tensor) -> Tensor:
     return torch.clamp((x * 255.0).round(), 0, 255) / 255.0
+
+
+@contextmanager
+def _no_cudnn_autotune() -> Generator[None]:
+    """cudnn.benchmark off inside the Degrader: the second blur sees a new image size almost every
+    batch (275 distinct conv shapes in 3000 batches at canvas 288, 413 at 512). At batch 1 filter2D
+    takes the cuDNN path, where benchmark_limit=0 autotuned each new shape (~300 ms); batches >= 2
+    run the native depthwise kernel and are unaffected."""
+    cudnn = torch.backends.cudnn
+    prev, cudnn.benchmark = cudnn.benchmark, False
+    try:
+        yield
+    finally:
+        cudnn.benchmark = prev
 
 
 class Degrader:
@@ -71,6 +87,12 @@ class Degrader:
         self, gt: Tensor, kernel1: Tensor, kernel2: Tensor, sinc_kernel: Tensor
     ) -> Tensor:
         """`gt` (b,c,h,w) in [0, 1] -> LQ (b,c,h/scale,w/scale), quantised to 8 bit."""
+        with _no_cudnn_autotune():
+            return self._degrade(gt, kernel1, kernel2, sinc_kernel)
+
+    def _degrade(
+        self, gt: Tensor, kernel1: Tensor, kernel2: Tensor, sinc_kernel: Tensor
+    ) -> Tensor:
         k1, k2, sinc = (
             k.to(gt.device, non_blocking=True) for k in (kernel1, kernel2, sinc_kernel)
         )
