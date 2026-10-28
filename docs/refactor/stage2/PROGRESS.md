@@ -69,3 +69,10 @@
   saved, window_sdpa nW=1 trace, fp16 ONNX DySample grid, SSIM peak, adamw_sf .data writes, resume across GAN start)
   -> workflow wf_0deb80fd-c5d on s2/review. Q4-Q6 @4k: FDL 0.02 29.22/0.1915, GAN start 28.77/0.1928, AdamW G
   28.75/0.1881 (Q1 ref 28.62/0.1959).
+- Q-set final @8k (PSNR/SSIM/DISTS): SF-Adan b2=0 FDL 0.02 29.24/0.718/0.1890; GAN start 28.69/0.694/0.1900; AdamW
+  FDL 0.05 28.58/0.680/0.1829; SF-Adan lr 2e-4 28.83/0.701/0.1950; AdamW FDL 0.02 29.36/0.721/0.1787 (best on all,
+  28.84 dB at 1k). Templates updated (63e03f9): G AdamW 2e-4, L1, FDL 0.02, no aug (D unchanged); all 84 validate.
+- Export fixes merged (4ada015): asid/omnisr/ditn/dctlsa/grformer/microsr/mfghmoe export dynamically, eager
+  bit-identical; ESC (dynamic per-sample conv kernels) and lmlt (adaptive pooling) remain refused.
+- Running: review-fix workflow (s2/review, 12 commits so far), full CUDA suite (capped), GPU benchmark agent
+  (BASE f360edd vs NEW 63e03f9, identical old-template objectives, workloads a,b,c,d,e,g,h).
