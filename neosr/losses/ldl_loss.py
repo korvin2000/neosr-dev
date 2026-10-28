@@ -55,17 +55,15 @@ class ldl_loss(Loss):
             Tensor: weight for each pixel to be discriminated as an artifact pixel
 
         """
-        pad = (self.ksize - 1) // 2
-        residual_pad = F.pad(residual, pad=[pad, pad, pad, pad], mode="reflect")
-
-        unfolded_residual = residual_pad.unfold(2, self.ksize, 1).unfold(
-            3, self.ksize, 1
-        )
-        return (
-            torch.var(unfolded_residual, dim=(-1, -2), unbiased=True, keepdim=True)
-            .squeeze(-1)
-            .squeeze(-1)
-        )
+        # unbiased variance of each reflect-padded k x k window from box-filter moments: the same
+        # value as unfold + var, without the k^2-times unfolded copy in the backward
+        k = self.ksize
+        pad = (k - 1) // 2
+        r = F.pad(residual, pad=[pad, pad, pad, pad], mode="reflect")
+        m1 = F.avg_pool2d(r, k, stride=1)
+        m2 = F.avg_pool2d(r * r, k, stride=1)
+        n = k * k
+        return ((m2 - m1 * m1) * (n / (n - 1))).clamp_min(0)
 
     def get_refined_artifact_map(self, img_gt: Tensor, img_output: Tensor) -> Tensor:
         """Calculate the artifact map of LDL

@@ -117,16 +117,17 @@ def test_compute_applies_weight(name):
 def test_compute_weights_kernel(name, target):
     """compute(ctx) at weight 0.5 == 0.5 * forward(sr, ref) at weight 1, in value and sr.grad.
 
-    A kernel that still weights itself fails; msswd is reseeded per call; ff (fp32) is also
-    checked under bf16 autocast against the fp32 kernel on the upcast input.
+    A kernel that still weights itself fails; msswd is reseeded per call; the fp32 kernels (ff,
+    consistency since stage 2 L-02) are also checked under bf16 autocast against the fp32 kernel on
+    the upcast input.
     """
     loss_fn = build(name)
     loss_fn.target = target
-    assert loss_fn.fp32 is (name == "ff_loss")  # only ff had custom_fwd(cast_inputs=float32)
+    assert loss_fn.fp32 is (name in {"ff_loss", "consistency_loss"})
     pred, gt = make_pair("random")
     lq = torch.rand(2, 3, 32, 32, device=DEV, generator=torch.Generator(DEV).manual_seed(1))
     ref_in = gt if target == "gt" else Context(sr=pred, gt=gt, lq=lq, it=0).lq_up
-    for amp in (False, True) if name == "ff_loss" else (False,):
+    for amp in (False, True) if loss_fn.fp32 else (False,):
         base = pred.bfloat16() if amp else pred
         x = base.detach().float().requires_grad_()
         loss_fn.loss_weight = 1.0
@@ -312,7 +313,12 @@ def test_b1_w1_matches_pre_b1(case, amp):
     name, (file, kw), w = case.split("-")[0], B1_W1[case], 0.37
     old = pre_b1_loss(name, file, loss_weight=w, **kw).to(DEV)
     new = build_loss({"type": name, **kw}).to(DEV)
-    new.load_state_dict(old.state_dict())
+    if name == "mssim_loss":  # B1 mechanics only: the separable window has its own test (test_s2_losses)
+        from tests.test_s2_losses import Gaussian2D  # ruff: ignore[import-outside-top-level]
+
+        new.gaussian_filter = Gaussian2D().to(DEV)
+    else:
+        new.load_state_dict(old.state_dict())
     new.loss_weight = w
     pred, target = make_pair("random")
     x_old, x_new = pred.clone().requires_grad_(), pred.clone().requires_grad_()

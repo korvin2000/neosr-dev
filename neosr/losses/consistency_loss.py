@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING
 
 import torch
 from torch import Tensor, nn
-from torchvision.transforms import GaussianBlur
+from torch.nn import functional as F
 
 from neosr.losses.base import Loss
 from neosr.losses.basic_loss import chc_loss
@@ -22,6 +22,8 @@ class consistency_loss(Loss):
         cosim (bool): add the luma/chroma cosine-similarity term near convergence. Default: True
 
     """
+
+    fp32 = True  # bf16 blur/luma matmul: 37-60 % sr-gradient error under AMP (losses.md L-02)
 
     def __init__(
         self,
@@ -45,8 +47,10 @@ class consistency_loss(Loss):
         )
         self.similarity = nn.CosineSimilarity(dim=1)
 
-        if self.use_blur:
-            self.blur = GaussianBlur(21, 3)
+        # torchvision GaussianBlur(21, 3) as fixed separable taps: no per-call kernel build, no RNG draw
+        x = torch.linspace(-10, 10, 21)
+        k = torch.exp(-0.5 * (x / 3).pow(2))
+        self.register_buffer("blur_k", k / k.sum(), persistent=False)
 
         self.criterion_type = criterion
         self.criterion: nn.L1Loss | nn.HuberLoss | Callable
@@ -58,6 +62,13 @@ class consistency_loss(Loss):
         else:
             msg = f"{criterion} criterion has not been supported."
             raise NotImplementedError(msg)
+
+    def blur(self, img: Tensor) -> Tensor:
+        """Depthwise 21-tap Gaussian (sigma 3), reflect padded: a row then a column pass."""
+        c, k = img.shape[1], self.blur_k.to(img.dtype)
+        img = F.pad(img, (10, 10, 10, 10), mode="reflect")
+        img = F.conv2d(img, k.view(1, 1, 1, 21).expand(c, 1, 1, 21), groups=c)
+        return F.conv2d(img, k.view(1, 1, 21, 1).expand(c, 1, 21, 1), groups=c)
 
     def lin_rgb(self, img: Tensor) -> Tensor:
         """Transforms sRGB gamma 2.4 to linear

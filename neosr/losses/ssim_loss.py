@@ -8,17 +8,15 @@ from neosr.losses.base import Loss
 
 
 class GaussianFilter2D(nn.Module):
+    """Depthwise 2D Gaussian as a (1, k) then a (k, 1) zero-padded conv: the separable form of the
+    k x k window (fp32 rounding apart), 2k instead of k^2 MACs per pixel. Takes up to
+    3 * in_channels channels, so several moments can share one call."""
+
     def _get_gaussian_window1d(self) -> Tensor:
         sigma2 = self.sigma * self.sigma
         x = torch.arange(-(self.window_size // 2), self.window_size // 2 + 1)
         w = torch.exp(-0.5 * x**2 / sigma2)
-        w = w / w.sum()
-        return w.reshape(1, 1, 1, self.window_size)
-
-    def _get_gaussian_window2d(self, gaussian_window_1d) -> Tensor:
-        return torch.matmul(
-            gaussian_window_1d.transpose(dim0=-1, dim1=-2), gaussian_window_1d
-        )
+        return w / w.sum()
 
     def __init__(
         self,
@@ -46,20 +44,14 @@ class GaussianFilter2D(nn.Module):
         self.padding = padding if padding is not None else window_size // 2
         self.sigma = sigma
 
-        kernel = self._get_gaussian_window1d()
-        kernel = self._get_gaussian_window2d(kernel)
-        self.register_buffer(
-            name="gaussian_window", tensor=kernel.repeat(in_channels, 1, 1, 1)
-        )
+        k = self._get_gaussian_window1d().repeat(3 * in_channels, 1)
+        self.register_buffer("row", k.view(-1, 1, 1, window_size), persistent=False)
+        self.register_buffer("col", k.view(-1, 1, window_size, 1), persistent=False)
 
     def forward(self, x: Tensor) -> Tensor:
-        return F.conv2d(
-            input=x,
-            weight=self.gaussian_window,
-            stride=1,
-            padding=self.padding,
-            groups=x.shape[1],
-        )
+        c, p = x.shape[1], self.padding
+        x = F.conv2d(x, self.row[:c], padding=(0, p), groups=c)
+        return F.conv2d(x, self.col[:c], padding=(p, 0), groups=c)
 
 
 class mssim_loss(Loss):
@@ -113,19 +105,20 @@ class mssim_loss(Loss):
         assert x.shape == y.shape, f"x: {x.shape} and y: {y.shape} must be the same"
         assert x.ndim == y.ndim == 4, f"x: {x.ndim} and y: {y.ndim} must be 4"
 
-        if x.type() != self.gaussian_filter.gaussian_window.type():
-            x = x.type_as(self.gaussian_filter.gaussian_window)
-        if y.type() != self.gaussian_filter.gaussian_window.type():
-            y = y.type_as(self.gaussian_filter.gaussian_window)
+        if x.type() != self.gaussian_filter.row.type():
+            x = x.type_as(self.gaussian_filter.row)
+        if y.type() != self.gaussian_filter.row.type():
+            y = y.type_as(self.gaussian_filter.row)
 
         return 1.0 - self.msssim(x, y)
 
     def _ssim(self, x: Tensor, y: Tensor) -> tuple[Tensor, Tensor]:
-        mu_x = self.gaussian_filter(x)  # equ 14
-        mu_y = self.gaussian_filter(y)  # equ 14
-        sigma2_x = self.gaussian_filter(x * x) - mu_x * mu_x  # equ 15
-        sigma2_y = self.gaussian_filter(y * y) - mu_y * mu_y  # equ 15
-        sigma_xy = self.gaussian_filter(x * y) - mu_x * mu_y  # equ 16
+        # one filter call per side: the gt-only moments stay out of the graph (and its saved memory)
+        mu_x, xx, xy = self.gaussian_filter(torch.cat([x, x * x, x * y], 1)).chunk(3, 1)
+        mu_y, yy = self.gaussian_filter(torch.cat([y, y * y], 1)).chunk(2, 1)
+        sigma2_x = xx - mu_x * mu_x  # equ 15
+        sigma2_y = yy - mu_y * mu_y  # equ 15
+        sigma_xy = xy - mu_x * mu_y  # equ 16
 
         A1 = 2 * mu_x * mu_y + self.C1
         A2 = 2 * sigma_xy + self.C2
