@@ -333,12 +333,16 @@ class _LegacyTemperature(nn.Module):
 
     _version = 2
 
-    def _load_from_state_dict(self, state_dict, prefix, local_metadata, *args, **kwargs):
+    def _load_from_state_dict(
+        self, state_dict, prefix, local_metadata, *args, **kwargs
+    ):
         t = state_dict.get(prefix + "temperature")
         legacy = local_metadata.get("version", 1) < 2
         if legacy and self.flash_attn and t is not None and bool((t == 1).all()):
             state_dict[prefix + "temperature"] = t / self.ps
-        super()._load_from_state_dict(state_dict, prefix, local_metadata, *args, **kwargs)
+        super()._load_from_state_dict(
+            state_dict, prefix, local_metadata, *args, **kwargs
+        )
 
 
 class Channel_Attention(_LegacyTemperature):
