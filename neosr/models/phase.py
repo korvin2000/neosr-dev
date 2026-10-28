@@ -220,6 +220,7 @@ class Phase:
                 for s in self.schedulers
             ],
             "clip_ema": self.norm_ema,  # "spike" only
+            "streak": self.streak,  # the skip guard spans a resume
         }
 
     def load_state_dict(self, sd: Mapping, log: Logger) -> None:
@@ -263,6 +264,7 @@ class Phase:
         self.opt.load_state_dict(o["state"])  # restores SF train_mode group flags
         for s, ss in zip(self.schedulers, sd["schedulers"], strict=True):
             s.load_state_dict(ss["state"])
+        self.streak = sd.get("streak", 0)  # absent: saved before it was recorded
         if self.spike and (ema := sd.get("clip_ema")) is not None:
             self.norm_ema = ema.to(self.params[0].device)
         if self.scaler.is_enabled():

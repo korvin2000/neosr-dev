@@ -1,6 +1,7 @@
 """Stage 2 review fixes (two Codex reviews of the merged branch): one regression test per finding."""
 
 import logging
+import math
 
 import pytest
 import torch
@@ -13,6 +14,7 @@ from neosr.optimizers.adan import clip_grad_norm_
 from neosr.utils import get_root_logger
 from tests.test_config import BASE, HEAD, write
 from tests.test_model import batches, build, make_opt, run
+from tests.test_s2_trainer import Log, _phase, _update
 
 
 # ---------------------------------------------------------------------------- 1 consistency clamp
@@ -110,3 +112,19 @@ def test_validate_train_rejects_identity_normalisation_like_the_datasets(tmp_pat
     body = BASE.replace("batch_size = 2", "batch_size = 2\nmean = [0, 0, 0]\nstd = [1, 1, 1]", 1)
     with pytest.raises(ConfigError, match=r"\[datasets.train\] 'mean' is not supported"):
         validate_train(load_config(write(tmp_path, body, HEAD), is_train=True, root=tmp_path))
+
+
+# ---------------------------------------------------------------------------- 6 skip streak
+def test_skip_streak_survives_a_resume():
+    _, _, a = _phase(True, names=["0.weight", "0.bias", "1.weight", "1.bias"], max_skip_streak=3)
+    assert _update(a, math.nan) is False
+    assert _update(a, math.nan) is False
+    sd = a.state_dict()
+    assert sd["streak"] == 2
+    _, _, b = _phase(True, names=["0.weight", "0.bias", "1.weight", "1.bias"], max_skip_streak=3)
+    b.load_state_dict(sd, Log())
+    with pytest.raises(FloatingPointError, match="3 consecutive"):
+        _update(b, math.nan)
+    del sd["streak"]  # a state saved before the key existed
+    b.load_state_dict(sd, Log())
+    assert b.streak == 0

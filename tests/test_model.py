@@ -440,7 +440,7 @@ def test_state_format_and_exports(tmp_path):
     assert sd_equal(st["nets"]["net_g"], m.net_g.state_dict())
     assert sd_equal(st["ema"], m.ema.module.state_dict())
     ph = st["phases"]["net_g"]
-    assert set(ph) == {"optimizer", "scaler", "schedulers", "clip_ema"}
+    assert set(ph) == {"optimizer", "scaler", "schedulers", "clip_ema", "streak"}
     assert ph["scaler"] == {}
     assert ph["clip_ema"] is None  # grad_clip = "spike" only
     assert set(ph["optimizer"]) == {"type", "version", "sf", "names", "state"}
