@@ -2,13 +2,17 @@
 
 import logging
 import math
+import weakref
 
 import pytest
 import torch
+from torch.nn import functional as F
+from torch.utils._python_dispatch import TorchDispatchMode
 
 from neosr.config import ConfigError, load_config, validate_train
 from neosr.losses.base import restoring_clamp
 from neosr.losses.consistency_loss import consistency_loss
+from neosr.metrics.calculate import _ssim_kernel, calculate_ssim_pt
 from neosr.optimizers import adamw_sf, adan, adan_sf
 from neosr.optimizers.adan import clip_grad_norm_
 from neosr.utils import get_root_logger
@@ -142,3 +146,58 @@ def test_skip_streak_survives_a_resume():
     del sd["streak"]  # a state saved before the key existed
     b.load_state_dict(sd, Log())
     assert b.streak == 0
+
+
+# ---------------------------------------------------------------------------- 9 SSIM channel scope
+class LivePeak(TorchDispatchMode):
+    """Peak bytes of the op outputs alive at once (freed when their last reference goes)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.live = self.peak = 0
+
+    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        out = func(*args, **(kwargs or {}))
+        for t in out if isinstance(out, tuple | list) else (out,):
+            if isinstance(t, torch.Tensor) and not t._is_view():
+                n = t.untyped_storage().nbytes()
+                self.live += n
+                weakref.finalize(t, self._free, n)
+        self.peak = max(self.peak, self.live)
+        return out
+
+    def _free(self, n: int) -> None:
+        self.live -= n
+
+
+def _ssim_loop_before_the_fix(img, img2):
+    """calculate_ssim_pt's channel loop as merged (crop 0, no Y): the reference score and memory."""
+    n, c, h, w = img.shape
+    k, c1, c2 = _ssim_kernel(img.device), (0.01 * 255) ** 2, (0.03 * 255) ** 2
+    ssims = []
+    for i in range(c):
+        x, y = img[:, i].double(), img2[:, i].double()
+        stats = torch.stack((x, y, x * x, y * y, x * y), 1).view(n * 5, 1, h, w)
+        stats = F.conv2d(F.conv2d(stats, k), k.view(1, 1, 1, 11))
+        mu1, mu2, xx, yy, xy = stats.view(n, 5, h - 10, w - 10).unbind(1)
+        mu1_sq, mu2_sq, mu1_mu2 = mu1**2, mu2**2, mu1 * mu2
+        ssim_map = ((2 * mu1_mu2 + c1) * (2 * (xy - mu1_mu2) + c2)) / (
+            (mu1_sq + mu2_sq + c1) * ((xx - mu1_sq) + (yy - mu2_sq) + c2)
+        )
+        ssims.append(ssim_map.mean((-2, -1)))
+    return torch.stack(ssims, -1).mean()
+
+
+def test_ssim_frees_each_channel_before_the_next_with_an_identical_score():
+    g = torch.Generator().manual_seed(0)
+    a = torch.randint(0, 256, (1, 3, 96, 96), generator=g).float()
+    b = (a + torch.randint(-20, 21, a.shape, generator=g)).clamp(0, 255)
+    with LivePeak() as old:
+        ref = _ssim_loop_before_the_fix(a, b)
+    with LivePeak() as new:
+        got = calculate_ssim_pt(a, b, crop_border=0)
+    assert torch.equal(got, ref)
+    channel_stats = 5 * 96 * 96 * 8  # one channel's fp64 statistics
+    assert (
+        old.peak - new.peak > channel_stats
+    )  # the previous channel's maps no longer overlap
