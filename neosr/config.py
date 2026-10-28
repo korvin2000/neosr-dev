@@ -408,6 +408,19 @@ def validate_train(cfg: dict[str, Any]) -> None:
     if "optim_d" in train and "network_d" not in cfg:
         msg = "train.optim_d is set but network_d is not: add a discriminator or remove optim_d"
         raise ConfigError(msg)
+    dunet = (cfg.get("network_d") or {}).get("type") == "dunet"
+    for key, spec in train.items() if dunet else ():  # any slot may hold the gan_loss
+        if (
+            key.endswith("_opt")
+            and isinstance(spec, dict)
+            and spec.get("type") == "gan_loss"
+            and any(spec.get(k) for k in ("r1_gamma", "r2_gamma"))
+        ):
+            msg = (
+                f"train.{key}.r1_gamma/r2_gamma need a D with a double backward; dunet has "
+                "none (DySample's grid_sample): set both to 0 or use another network_d (r3gan)"
+            )
+            raise ConfigError(msg)
     if train.get("max_skip_streak", 1) < 1:
         msg = "train.max_skip_streak must be >= 1"
         raise ConfigError(msg)

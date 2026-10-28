@@ -50,3 +50,24 @@ Port candidates per area: `analysis/competitor/H1..H4.md`.
   `rpgan_r3gan_scalar_discriminator_arch.py`, with Opus 5.5 and Codex Astra; pick the most workable base, fix and improve
   it, migrate a complete, correct R3GAN (loss + discriminator + recipe) into neosr and test it on the owner's real data.
   Docs: `stage3/r3gan/`.
+
+## R3GAN loss path, 2026-10-28 (stage 3 R2; design `stage3/r3gan/DESIGN.md` 1.2, approved by Opus and Codex)
+Two deliberate behaviour changes of the opt-in R1/R2 path (`train.gan_opt.r1_gamma`/`r2_gamma` > 0; no shipped template
+sets them, so default runs are unchanged):
+1. **Map Ds: the penalty is per position.** Before: `||grad_x mean_p D_p(x)||^2` (the mean logit). Against the per-position
+   mean its ratio is `sum_pq A_pq / (P tr A)` with `A_pq = <grad D_p, grad D_q>`: 1/P when the position gradients are
+   orthogonal (disjoint receptive fields), 1 when they are identical, ~0 when they cancel; measured 0.03-0.05x for the
+   r3gan patch D and ~1/P for metagan, so gamma depended on the patch size and the D. Now each output
+   position is a critic: `gamma/2 * mean_p ||grad_x D_p(x)||^2` per sample, estimated with one backward through
+   `sum_p eps_p D_p / sqrt(P)` (fresh Rademacher signs per sample, position, side and micro-batch from the device RNG;
+   unbiased, extra variance). A scalar D (P = 1) draws nothing and is bitwise the old penalty. Old configs with a map D
+   and a gamma get a stronger penalty at the same gamma; no switch back (one knob fewer; Codex's opt-in proposal not taken).
+2. **The penalty pass follows a bf16 phase.** Before: always fp32 eager. Now: bf16 when the phase autocasts to bf16 (fp32
+   input leaves, squared norms in fp32), fp32 for fp16 and no-AMP runs (fp16's inner `autograd.grad` is not loss-scaled);
+   `penalty_fp32 = true` forces fp32. CPU evidence: norms within 3 %, gradient cosine > 0.999; recipe default only after the
+   CUDA qualification (R4).
+Also new: `gamma_decay`/`gamma_iters` cosine (pure function of the update), raw `r1`/`r2` + weighted `l_d_r1`/`l_d_r2` +
+effective `gamma_r1`/`gamma_r2` logs, `(B,)` outputs accepted, a batch-statistics D with a gamma raises `ConfigError` at
+the first D call, `validate_train` refuses dunet with a gamma (grid_sample has no double backward). Multi-rank runs draw
+rank-specific signs from each rank's RNG, but only rank 0's RNG is saved: resume is bitwise on one GPU only (as the data
+order already is not on several).

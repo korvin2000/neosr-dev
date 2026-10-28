@@ -229,3 +229,30 @@ Tests as in session 4 (main checkout venv, `PYTHONPATH` = worktree, `CUDA_VISIBL
   parameter gradients (-> finite-difference test). "Export tables": no discriminator export table exists (Ds are not
   in `convert.py`'s `NO_ONNX` either); the readme table and the registry's D list are the listings.
 - Verified: test_s3_r3gan (19), test_registry, test_archs (CPU part): 213 passed.
+
+### R2 loss path
+- Done (`neosr/losses/gan_loss.py`, `config.py`, `losses/__init__.py`): `reshape(len(out), -1)` (a `(B,)` D works);
+  per-position Rademacher probe `sum_p eps_p D_p / sqrt(P)` (`signs()` from the device RNG: fresh per sample, position,
+  side and micro-batch; P = 1 draws nothing); penalty pass under the phase autocast when it is bf16 (fp32 leaves, fp32
+  squared norms), fp32 eager otherwise, `penalty_fp32` forces fp32; `gamma_decay`/`gamma_iters` cosine as a pure function
+  of the update from the first GAN update; effective gammas decide the penalty (zero: no graph, no draw); logs raw
+  `r1`/`r2`, `l_d_r1`/`l_d_r2`, effective `gamma_r1`/`gamma_r2` (`torch.full` of a host float: no sync), `l_d_reg`
+  (RESERVED); ctor validation (finite gammas >= 0, integer `reg_every`/`gamma_iters`, decay in [0, 1], no schedule
+  without a gamma, no decay without a length, bool `penalty_fp32`); first-call `ConfigError` for a BatchNorm D with a
+  gamma; `validate_train` refuses dunet with a gamma in any `gan_loss` slot. DECISIONS: the two behaviour changes.
+- Tests (`tests/test_s3_r3gan.py`, R2 part, 34): per-position pairing; disjoint receptive fields exact for any draw;
+  exhaustive sign patterns (P = 2, 3) average to the exact per-position penalty in value and penalty gradients; P = 1
+  (scalar head and a `(B,)` D) bitwise the old penalty for `reg_every` 3 and 4, no RNG use; zero effective gamma bitwise
+  plain; lazy k-scaling; schedule values, monotone, order-free, logged gamma; 13 bad option cases; bf16 vs fp32 with
+  identical signs (norms within 3 %, penalty-gradient cosine > 0.999, `penalty_fp32` and fp16 bitwise fp32); double
+  backward through `r3gan`/`r3gan_scalar128` (CUDA bf16 channels_last variant for R4); dunet grid_sample error and
+  refusal (also via another slot); BatchNorm refusal; log keys; resume parity (accumulate 2, schedule across the
+  resume, Adam (0, 0.99)); DDP 2-rank gloo with the patch head. `test_s2_losses`: the old mean-logit reference became
+  the same-sign per-position reference; the fp32 pin removed (now the precision test).
+- Codex review: estimator normalisation, draw policy, precision path, schedule, syncs, wrappers confirmed; 3 findings
+  fixed: the per-side arithmetic broke P = 1 bitwise compatibility for non-power-of-two `reg_every` (old order restored,
+  k = 3 tested); dunet refusal bypassable through another `*_opt` slot of type `gan_loss`; DECISIONS stated the old
+  penalty as 1/P weaker in general (true only for orthogonal position gradients). Open (accepted): a short decay with
+  lazy regularisation may never run the penalty (follows the formulas); multi-rank resume restores rank 0's RNG only.
+- Verified: test_s3_r3gan (53, 2 CUDA skips), test_s2_losses, test_gan, test_s3_losses, test_config, test_resume,
+  test_s2_trainer, test_losses, test_losses_pipeline (12 GB): green.

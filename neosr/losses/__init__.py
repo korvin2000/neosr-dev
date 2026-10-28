@@ -53,6 +53,7 @@ RESERVED = {
     "out_d_fake",
     "out_d_margin",
     "l_d_reg",
+    *("l_d_r1", "l_d_r2", "r1", "r2", "gamma_r1", "gamma_r2"),  # R1/R2 per side
 }
 RESERVED_PREFIX = ("grad_norm_", "skipped_")
 SCHEDULE_KEYS = (
