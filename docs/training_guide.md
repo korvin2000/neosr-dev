@@ -28,6 +28,16 @@ Measured so far: in the stage-2 set (8k updates, one seed) the arm "GAN from upd
 (28.69 dB, DISTS 0.1900) showed no gain over the arms that start the GAN at update 1 (28.58-29.36 dB); the arms
 differ in more than the start, so this settles nothing. A longer L1 phase on your data is experiment E5.
 
+**R3GAN recipe** (`options/train_realplksr_r3gan.toml`, opt-in, the two-run way): `network_d.type = "r3gan"` (0.87 M
+params, one logit per 16 px; `r3gan_scalar256`/`r3gan_scalar128` = the paper's scalar head, needs exactly that GT size),
+`gan_type = "rpgan"` (each fake against its own real, per position), `r1_gamma = r2_gamma` on every D update
+(`reg_every = 1`), Adam with `betas = [0.0, 0.99]` for D, no `wavelet_guided`. On a map D the gammas are normalised
+per position (each output position is a critic), so the number of positions no longer scales them; the A/B grid is
+{1, 3} for the patch head and {4, 40} for `r3gan_scalar256` at GT 256. Logs: `out_d_margin`, raw `r1`/`r2` (squared input-gradient norms before gamma), `l_d_r1`/`l_d_r2`,
+`gamma_r1`/`gamma_r2`; `gamma_decay`/`gamma_iters` give R3GAN's cosine decay. The penalty pass runs in bf16 when the
+run is bf16 (`penalty_fp32 = true` forces fp32). dunet and BatchNorm discriminators cannot take R1/R2 (refused). Whether
+the recipe beats the template GAN on your data is the A/B in `docs/refactor/stage3/r3gan/RESULTS.md`.
+
 ## 3. Scale change and fine-tuning
 
 - **x2 -> x4** ([paper] EDSR): `pretrain_network_g` = the x2 model, `strict_load_g = false`. Layers whose shapes

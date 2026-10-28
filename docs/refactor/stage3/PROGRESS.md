@@ -256,3 +256,13 @@ Tests as in session 4 (main checkout venv, `PYTHONPATH` = worktree, `CUDA_VISIBL
   lazy regularisation may never run the penalty (follows the formulas); multi-rank resume restores rank 0's RNG only.
 - Verified: test_s3_r3gan (53, 2 CUDA skips), test_s2_losses, test_gan, test_s3_losses, test_config, test_resume,
   test_s2_trainer, test_losses, test_losses_pipeline (12 GB): green.
+
+### R3 recipe template and guide
+- Done: `options/train_realplksr_r3gan.toml` (= `train_realplksr.toml` with `pretrain_network_g`, `network_d.type =
+  "r3gan"` (scalar heads and slim widths as comments), no wavelet_guided, D Adam (0, 0.99) lr 2e-4 eps 1e-8 wd 0, rpgan
+  0.3, `r1_gamma = r2_gamma = 1` per position, `reg_every = 1`, gamma cosine and `penalty_fp32` as comments, template
+  grad_clip); `docs/training_guide.md` section 2: an R3GAN paragraph (settings, per-position gammas, logs, precision,
+  refusals, where the A/B lives).
+- Codex review: no functional or configuration defect; 1 wording fix (gamma guidance stated as a grid, not a law).
+- Verified: test_config shipped-config sweep (183), test_losses_pipeline shipped dry-run and real-constructor sweeps
+  (92, 12 GB), test_hygiene + test_s3_hygiene. The `adam` (0, 0.99) build + exact resume is test_s3_r3gan's resume test.

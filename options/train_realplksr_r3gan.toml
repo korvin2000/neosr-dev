@@ -1,0 +1,146 @@
+
+# R3GAN recipe (opt-in; the metagan template stays the default until the A/B in
+# docs/refactor/stage3/r3gan/RESULTS.md says otherwise): start from a non-GAN run of
+# train_realplksr.toml without [network_d]/[train.optim_d]/[train.gan_opt]/wavelet_guided (export it
+# as pretrain_g.pth); D and both optimizers start fresh.
+name = "train_realplksr_r3gan"
+model_type = "image"
+scale = 4
+use_amp = true
+bfloat16 = true
+fast_matmul = true
+#compile = true
+#manual_seed = 1024
+
+[datasets.train]
+type = "paired"
+dataroot_gt = 'C:\datasets\gt\'
+dataroot_lq = 'C:\datasets\lq\'
+patch_size = 64
+batch_size = 8
+#accumulate = 1
+#augmentation = [ "none", "mixup", "cutmix", "resizemix", "cutblur" ]
+#aug_prob = [ 0.5, 0.1, 0.1, 0.1, 0.5 ]
+
+[datasets.val]
+name = "val"
+type = "paired"
+dataroot_gt = 'C:\datasets\val\gt\'
+dataroot_lq = 'C:\datasets\val\lq\'
+[val]
+val_freq = 1000
+#tile = 200
+#[val.metrics.psnr]
+#type = "calculate_psnr"
+#[val.metrics.ssim]
+#type = "calculate_ssim"
+#[val.metrics.dists]
+#type = "calculate_dists"
+#better = "lower"
+#[val.metrics.topiq]
+#type = "calculate_topiq"
+#dataset = "kadid" # or "pipal" (weights trained on SR/GAN outputs)
+#[val.metrics.lpips]
+#type = "calculate_lpips" # lower is better
+#net = "alex" # or "vgg"
+# judge checkpoints by a metric that is not a training loss here (TOPIQ, LPIPS; DISTS only without dists_opt)
+
+[path]
+pretrain_network_g = 'experiments\pretrain_g.pth'
+
+[network_g]
+type = "realplksr"
+#type = "realplksr_s"
+#type = "realplksr_l"
+#dysample = true
+
+[network_d]
+type = "r3gan" # patch head: one logit per 16 px (any GT multiple of 16)
+# the paper's scalar head (exact 4x4 final map): "r3gan_scalar256" (GT 256) / "r3gan_scalar128" (GT 128)
+#widths = [ 16, 32, 64, 128, 256 ] # half the activation memory
+
+[train]
+ema = 0.999
+ema_power = 0.75
+# no wavelet_guided: the R1/R2 penalty acts on D's RGB input
+#match_lq_colors = true
+
+[train.optim_g]
+type = "adamw"
+lr = 2e-4
+betas = [ 0.9, 0.99 ]
+weight_decay = 0
+# schedule-free option: type = "adan_sf", lr = 5e-4, betas = [ 0.98, 0.0, 0.99 ],
+# weight_decay = 0.01, schedule_free = true, warmup_steps = 1600
+
+[train.optim_d]
+type = "adam" # R3GAN: Adam (0, 0.99) at G's lr
+lr = 2e-4
+betas = [ 0.0, 0.99 ]
+eps = 1e-8
+weight_decay = 0
+
+#  losses
+[train.pixel_opt]
+type = "L1Loss"
+loss_weight = 1.0
+
+[train.mssim_opt]
+type = "mssim_loss"
+loss_weight = 1.0
+
+[train.consistency_opt]
+type = "consistency_loss"
+loss_weight = 1.0
+
+[train.ldl_opt]
+type = "ldl_loss"
+loss_weight = 1.0
+
+[train.fdl_opt]
+type = "fdl_loss"
+model = "dinov2" # "vgg", "resnet", "effnet"
+loss_weight = 0.02
+
+[train.gan_opt]
+type = "gan_loss"
+gan_type = "rpgan" # each fake against its own real (pairwise), per position
+loss_weight = 0.3
+r1_gamma = 1.0 # per position; the scalar heads at GT 256: 4 to 40 (paper / 4 for [0, 1] inputs)
+r2_gamma = 1.0
+reg_every = 1 # R1 + R2 on every D update (the paper; lazy 4/16 is a measured deviation)
+#gamma_decay = 0.1 # R3GAN: cosine to 0.1x over gamma_iters updates from the GAN start
+#gamma_iters = 200000
+#penalty_fp32 = true # the penalty pass follows bf16 by default; true: fp32 (parity checks)
+
+#[train.msswd_opt]
+#type = "msswd_loss"
+#loss_weight = 1.0
+
+#[train.perceptual_opt]
+#type = "vgg_perceptual_loss"
+#loss_weight = 0.5
+#criterion = "huber"
+
+#[train.dists_opt]
+#type = "dists_loss"
+#loss_weight = 0.5
+
+#[train.ff_opt]
+#type = "ff_loss"
+#loss_weight = 0.35
+
+#[train.ncc_opt]
+#type = "ncc_loss"
+#loss_weight = 1.0
+
+#[train.kl_opt]
+#type = "kl_loss"
+#loss_weight = 1.0
+
+[logger]
+total_iter = 1000000
+save_checkpoint_freq = 1000
+use_tb_logger = true
+#save_tb_img = true
+#print_freq = 100
