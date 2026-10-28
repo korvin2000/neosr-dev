@@ -347,8 +347,9 @@ class AC_MSA(nn.Module):
         # a Python bound: no host-to-device copy (same fp32 value as log(1 / 0.01))
         logit_scale = torch.clamp(self.logit_scale, max=math.log(1.0 / 0.01)).exp()
         if self.flash_attn:  # exact SDPA (flash-eligible); the learned scale goes into q
+            q = (q * logit_scale).to(k.dtype)  # rounded once, as autocast would inside SDPA
             y = window_sdpa(
-                (q * logit_scale).flatten(0, 1), k.flatten(0, 1), v.flatten(0, 1), scale=1.0
+                q.flatten(0, 1), k.flatten(0, 1), v.flatten(0, 1), scale=1.0
             ).unflatten(0, (b, ng))
         else:
             # Q @ K^T
