@@ -749,9 +749,10 @@ def test_fp16_without_the_converter_fails_before_writing(
 @pytest.mark.parametrize(
     ("extra", "match"),
     [
-        (["-net", "craft"], "craft.*cannot be exported"),
-        (["-net", "hit_srf"], "2 GiB"),
+        (["-net", "atd"], "atd.*cannot be exported.*Sort"),
+        (["-net", "esc"], "padding cannot be traced"),
         (["-net", "safmn"], "static shape.*-static C H W"),
+        (["-net", "grformer"], "static shape.*batch size"),
         (["-net", "compact", "--fulloptimization"], "fulloptimization"),
     ],
 )
@@ -774,6 +775,21 @@ def test_export_capability_is_checked_up_front(
 
 def test_static_only_arch_exports_with_static(tmp_path, onnx_deps):
     convert_py.check_export(_args(tmp_path, "-static", "3", "16", "16", net="safmn"))
+
+
+@pytest.mark.parametrize(
+    ("net", "static"), [("craft", None), ("hit_srf", None), ("ditn", ["3", "20", "20"])]
+)
+def test_arch_exports_and_verifies_after_the_stage2_fixes(
+    tmp_path, onnx_deps, net, static
+):
+    """MT-17 re-sweep: archs the stage-2 lanes made exportable leave NO_ONNX and verify."""
+    from neosr.archs import build_network  # noqa: PLC0415
+
+    torch.manual_seed(0)
+    extra = ["-static", *static] if static else []
+    args = _args(tmp_path, *extra, net=net)
+    convert_py.to_onnx(args, build_network({"type": net}, scale=2))
 
 
 class QFrozenB(nn.Module):
