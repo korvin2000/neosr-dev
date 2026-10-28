@@ -124,7 +124,7 @@ class Conv3x3GNMish(nn.Module):
         self.upsample = upsample
         self.dysample = DySample(
             in_channels=64, out_ch=64, scale=2, groups=4, end_convolution=True
-        )
+        ).requires_grad_(upsample)  # unused without upsample: frozen for DDP, keys kept
         self.block = nn.Sequential(
             spectral_norm(
                 nn.Conv2d(
@@ -204,6 +204,8 @@ class ea2fpn(nn.Module):
     ) -> None:
         super().__init__()
         self.base_model = models.resnet18(weights=ResNet18_Weights.DEFAULT)
+        # the classifier head never runs: frozen for DDP, its keys stay (checkpoints load)
+        self.base_model.fc.requires_grad_(False)
         self.base_layers = list(self.base_model.children())
         # ==> encoder layers
         self.layer_down0 = nn.Sequential(

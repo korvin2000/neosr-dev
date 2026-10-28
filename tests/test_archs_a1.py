@@ -129,19 +129,31 @@ def test_lifecycle(name):
     net(x).mean().backward()
     opt.step()
     ref = _assert_eval_matches_train(net, x)
-    # weights changed while already in eval mode (schedule-free optimizer.eval() after model.eval(),
-    # which writes through p.data and bumps no version counter) are picked up
+    # weights changed in place while already in eval mode (EMA lerp, optimizer step) are picked
+    # up by the next eval forward: the cached deploy kernel is keyed on the version counters
     net.eval()
     with torch.no_grad():
         # mild change: random weights blow activations up past fp32 tolerance
         for p in net.parameters():
             if p.ndim > 1:
-                p.data.mul_(1.1)
+                p.mul_(1.1)
     with torch.inference_mode():
         out = net(x)
     with torch.no_grad():
         torch.testing.assert_close(out, net.train()(x), rtol=1e-5, atol=1e-5)
     assert not torch.allclose(out, ref)
+    # writes through p.data (schedule-free optimizer.eval()) bump no version counter: eval()
+    # after them refreshes (eval_weights runs opt.eval() before net.eval())
+    net.eval()
+    with torch.no_grad():
+        for p in net.parameters():
+            if p.ndim > 1:
+                p.data.mul_(1.1)
+    net.eval()
+    with torch.inference_mode():
+        out = net(x)
+    with torch.no_grad():
+        torch.testing.assert_close(out, net.train()(x), rtol=1e-5, atol=1e-5)
     # saving after such an in-place change stores the current deploy kernels
     net.eval()
     with torch.no_grad():

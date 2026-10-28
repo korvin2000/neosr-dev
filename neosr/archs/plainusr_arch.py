@@ -3,18 +3,6 @@ import torch
 import torch.nn.functional as F
 from einops.layers.torch import Rearrange, Reduce
 from torch import nn
-from torch.nn.utils.parametrize import remove_parametrizations
-
-
-def pad_tensor(t, pattern):
-    pattern = pattern.view(1, -1, 1, 1)
-    t = F.pad(t, (1, 1, 1, 1), "constant", 0)
-    t[:, :, 0:1, :] = pattern
-    t[:, :, -1:, :] = pattern
-    t[:, :, :, 0:1] = pattern
-    t[:, :, :, -1:] = pattern
-
-    return t
 
 
 class ASR(nn.Module):
@@ -53,84 +41,40 @@ class MBConv(nn.Module):
         self.reduce_conv = nn.Conv2d(i_feat, n_feat, 1, 1, 0)
         self.se = ASR(i_feat)
 
+    def fused_kernel(self):
+        """expand 1x1 -> 3x3 on the expand-bias padded map -> ASR scale + identity -> reduce 1x1
+        + identity, folded into one 3x3 conv on the zero-padded input (exact, borders included:
+        the bias padding is what expand gives on zero padding). fp32 under autocast."""
+        with torch.autocast(self.fea_conv.weight.device.type, enabled=False):
+            k0, b0 = self.expand_conv.weight[:, :, 0, 0], self.expand_conv.bias
+            k1, b1 = self.fea_conv.weight, self.fea_conv.bias
+            k2, b2 = self.reduce_conv.weight[:, :, 0, 0], self.reduce_conv.bias
+            a = self.se.se(self.se.tensor).reshape(-1)
+            w = torch.einsum("omuv,mi->oiuv", k1, k0) * a[:, None, None, None]
+            b = (b1 + torch.einsum("omuv,m->o", k1, b0)) * a
+            w, b = w + F.pad(k0[:, :, None, None], (1, 1, 1, 1)), b + b0
+            w, b = torch.einsum("om,miuv->oiuv", k2, w), k2 @ b + b2
+            eye = torch.eye(w.shape[0], dtype=w.dtype, device=w.device)
+            return w + F.pad(eye[:, :, None, None], (1, 1, 1, 1)), b
+
     def forward(self, x):
-        out = self.expand_conv(x)
-        out_identity = out
+        if "conv" in self._modules:  # deployed
+            return self.conv(x)
+        if torch.onnx.is_in_onnx_export():  # the TorchScript exporter needs constant kernels
+            out = self.expand_conv(F.pad(x, (1, 1, 1, 1)))  # expand bias on the border
+            return self.reduce_conv(self.se(self.fea_conv(out)) + out[:, :, 1:-1, 1:-1]) + x
+        # online re-parameterisation: the same function of (x, params) as the branch form
+        return F.conv2d(x, *self.fused_kernel(), padding=1)
 
-        # explicitly padding with bias for reparameterizing in the test phase
-        b0 = self.expand_conv.bias
-        out = pad_tensor(out, b0)
-        out = self.fea_conv(out)
-        out = self.se(out) + out_identity
-        out = self.reduce_conv(out)
-        return out + x
-
+    @torch.no_grad()
     def switch_to_deploy(self):
-        n_feat, _, _, _ = self.reduce_conv.weight.data.shape
-        self.conv = nn.Conv2d(n_feat, n_feat, 3, 1, 1)
-
-        k0 = self.expand_conv.weight.data
-        b0 = self.expand_conv.bias.data
-
-        k1 = self.fea_conv.weight.data
-        b1 = self.fea_conv.bias.data
-
-        k2 = self.reduce_conv.weight.data
-        b2 = self.reduce_conv.bias.data
-
-        # first step: remove the ASR
-        a = self.se.se(self.se.tensor)
-
-        k1 = k1 * (a.permute(1, 0, 2, 3))
-        b1 = b1 * (a.view(-1))
-
-        # second step: remove the middle identity
-        for i in range(2 * n_feat):
-            k1[i, i, 1, 1] += 1.0
-
-        # third step: merge the first 1x1 convolution and the next 3x3 convolution
-        merge_k0k1 = F.conv2d(input=k1, weight=k0.permute(1, 0, 2, 3))
-        merge_b0b1 = b0.view(1, -1, 1, 1) * torch.ones(1, 2 * n_feat, 3, 3)  # .cuda()
-        merge_b0b1 = F.conv2d(input=merge_b0b1, weight=k1, bias=b1)
-
-        # third step: merge the remain 1x1 convolution
-        merge_k0k1k2 = F.conv2d(
-            input=merge_k0k1.permute(1, 0, 2, 3), weight=k2
-        ).permute(1, 0, 2, 3)
-        merge_b0b1b2 = F.conv2d(input=merge_b0b1, weight=k2, bias=b2).view(-1)
-
-        # last step: remove the global identity
-        for i in range(n_feat):
-            merge_k0k1k2[i, i, 1, 1] += 1.0
-
-        self.conv.weight.data = merge_k0k1k2.float()
-        self.conv.bias.data = merge_b0b1b2.float()
-
-        for para in self.parameters():
-            para.detach_()
-
-        self.__delattr__("expand_conv")
-        self.__delattr__("fea_conv")
-        self.__delattr__("reduce_conv")
-        self.__delattr__("se")
-
-        # redundancy
-        remove_parametrizations(self, "expand_conv", leave_parametrized=False)
-        remove_parametrizations(self, "fea_conv", leave_parametrized=False)
-        remove_parametrizations(self, "reduce_conv", leave_parametrized=False)
-        remove_parametrizations(self, "se", leave_parametrized=False)
-        delattr(self, "expand_conv")
-        delattr(self, "fea_conv")
-        delattr(self, "reduce_conv")
-        delattr(self, "se")
-        del self._modules["expand_conv"]
-        del self._parameters["expand_conv"]
-        del self._modules["fea_conv"]
-        del self._parameters["fea_conv"]
-        del self._modules["reduce_conv"]
-        del self._parameters["reduce_conv"]
-        del self._modules["se"]
-        del self._parameters["se"]
+        w, b = self.fused_kernel()
+        self.conv = nn.Conv2d(
+            w.shape[1], w.shape[0], 3, 1, 1, device=w.device, dtype=w.dtype
+        )
+        self.conv.weight.copy_(w)
+        self.conv.bias.copy_(b)
+        del self.expand_conv, self.fea_conv, self.reduce_conv, self.se
 
 
 class PConv(nn.Module):
@@ -260,129 +204,27 @@ class Block(nn.Module):
     def forward(self, x):
         return self.body(x)
 
-    def switch_to_deploy(self, prune):
-        n_feat, _, _, _ = self.body[0].conv.weight.data.shape
-
-        self.body[0].switch_to_deploy()
-        self.body[2].switch_to_deploy()
-        if self.version >= 4:
-            self.body[4].switch_to_deploy()
-
-        if self.version == 1:
-            body = self.body
-            self.__delattr__("body")
-            # redundancy
-            remove_parametrizations(self, "body", leave_parametrized=False)
-            delattr(self, "body")
-            del self._modules["body"]
-            del self._parameters["body"]
-            self.body = nn.Sequential(
-                nn.Conv2d(n_feat, n_feat, 3, 1, 1),
-                nn.LeakyReLU(0.05, inplace=True),
-                nn.Conv2d(n_feat, n_feat, 3, 1, 1),
-            )
-        elif self.version in [2, 3]:
-            k3x3 = self.body[2].conv.weight.data
-            b3x3 = self.body[2].conv.bias.data
-            k1x1 = self.body[3].conv.weight.data
-            b1x1 = self.body[3].conv.bias.data
-            merge_w = F.conv2d(input=k3x3.permute(1, 0, 2, 3), weight=k1x1).permute(
-                1, 0, 2, 3
-            )
-            merge_b = F.conv2d(
-                input=b3x3.unsqueeze(0).unsqueeze(-1).unsqueeze(-1),
-                weight=k1x1,
-                bias=b1x1,
-            ).view(-1)
-            self.body[2].conv.weight.data[0:1, :, ...] = merge_w.float()
-            self.body[2].conv.bias.data[0:1] = merge_b.float()
-            body = self.body
-            self.__delattr__("body")
-            # redundancy
-            remove_parametrizations(self, "body", leave_parametrized=False)
-            delattr(self, "body")
-            del self._modules["body"]
-            del self._parameters["body"]
-        else:
-            k3x3 = self.body[4].conv.weight.data
-            b3x3 = self.body[4].conv.bias.data
-            k1x1 = self.body[5].conv.weight.data
-            b1x1 = self.body[5].conv.bias.data
-            merge_w = F.conv2d(input=k3x3.permute(1, 0, 2, 3), weight=k1x1).permute(
-                1, 0, 2, 3
-            )
-            merge_b = F.conv2d(
-                input=b3x3.unsqueeze(0).unsqueeze(-1).unsqueeze(-1),
-                weight=k1x1,
-                bias=b1x1,
-            ).view(-1)
-            self.body[4].conv.weight.data[0:1, :, ...] = merge_w.float()
-            self.body[4].conv.bias.data[0:1] = merge_b.float()
-            body = self.body
-            self.__delattr__("body")
-            # redundancy
-            remove_parametrizations(self, "body", leave_parametrized=False)
-            delattr(self, "body")
-            del self._modules["body"]
-            del self._parameters["body"]
-
-        if self.version == 2:
-            self.body = nn.Sequential(
-                nn.Conv2d(n_feat, n_feat, 3, 1, 1),
-                nn.LeakyReLU(0.05, inplace=True),
-                nn.Conv2d(n_feat, n_feat, 3, 1, 1),
-                LocalAttention(n_feat, self.f),
-            )
-        elif self.version == 3:
-            self.body = nn.Sequential(
-                nn.Conv2d(n_feat, n_feat, 3, 1, 1),
-                nn.LeakyReLU(0.05, inplace=True),
-                nn.Conv2d(n_feat, n_feat, 3, 1, 1),
-                LocalAttention(n_feat, self.f, speed=True),
-            )
-        else:
-            self.body = nn.Sequential(
-                nn.Conv2d(n_feat, n_feat, 3, 1, 1),
-                nn.LeakyReLU(0.05, inplace=True),
-                nn.Conv2d(n_feat, n_feat, 3, 1, 1),
-                nn.LeakyReLU(0.05, inplace=True),
-                nn.Conv2d(n_feat, n_feat, 3, 1, 1),
-                LocalAttention(n_feat, self.f),
-            )
-
-        self.body[0].weight.data = body[0].conv.weight.data
-        self.body[0].bias.data = body[0].conv.bias.data
-        self.body[2].weight.data = body[2].conv.weight.data
-        self.body[2].bias.data = body[2].conv.bias.data
-
-        if self.version >= 4:
-            self.body[4].weight.data = body[4].conv.weight.data
-            self.body[4].bias.data = body[4].conv.bias.data
-
-        if self.version == 2:
-            for i in [0, 2, 3]:
-                self.body[3].body[i].weight.data = body[4].body[i].weight.data
-                self.body[3].body[i].bias.data = body[4].body[i].bias.data
-        elif self.version == 3:
-            for i in [0]:
-                self.body[3].body[i].weight.data = body[4].body[i].weight.data
-                self.body[3].body[i].bias.data = body[4].body[i].bias.data
-        else:
-            for i in [0, 2, 3]:
-                self.body[5].body[i].weight.data = body[6].body[i].weight.data
-                self.body[5].body[i].bias.data = body[6].body[i].bias.data
-
+    @torch.no_grad()
+    def switch_to_deploy(self, prune=False):
+        """Plain deploy form: each MBConv becomes its fused 3x3 conv and a PConv folds into the
+        conv before it (its 1x1 output replaces channel 0); activations and LocalAttention stay.
+        `prune` zeroes the deployed 3x3 weights below 1e-2."""
+        layers, convs = [], []
+        for m in self.body:
+            if isinstance(m, MBConv):
+                m.switch_to_deploy()
+                layers.append(m.conv)
+                convs.append(m.conv)
+            elif isinstance(m, PConv):
+                conv, k = layers[-1], m.conv.weight[:, :, 0, 0]
+                conv.weight[:1] = torch.einsum("om,miuv->oiuv", k, conv.weight)
+                conv.bias[:1] = k @ conv.bias + m.conv.bias
+            else:
+                layers.append(m)
         if prune:
-            x = self.body[0].weight.data
-            self.body[0].weight.data = torch.where(x.abs() < 1e-2, 0, x)
-            x = self.body[2].weight.data
-            self.body[2].weight.data = torch.where(x.abs() < 1e-2, 0, x)
-            if self.version >= 4:
-                x = self.body[4].weight.data
-                self.body[4].weight.data = torch.where(x.abs() < 1e-2, 0, x)
-
-        for para in self.parameters():
-            para.detach_()
+            for conv in convs:
+                conv.weight.masked_fill_(conv.weight.abs() < 1e-2, 0)
+        self.body = nn.Sequential(*layers)
 
 
 class plainusr(nn.Module):
@@ -422,6 +264,12 @@ class plainusr(nn.Module):
 
         self.init_weights()
 
+    def switch_to_deploy(self, prune=False):
+        """In place: every block in its plain deploy form (same eval output unless `prune`)."""
+        for m in self.children():
+            if isinstance(m, Block):
+                m.switch_to_deploy(prune)
+
     def init_weights(self):
         scale_squared = self.scale**2
         self.head.weight.data[-3, 0, 1, 1] += 1
@@ -458,9 +306,7 @@ class plainusr(nn.Module):
             x, pic = x.split([self.im_feat[0], 3], 1)
             x = self.block1(x)
             x1, x2 = x.split([self.im_feat[1], self.im_feat[0] - self.im_feat[1]], 1)
-            x1 = self.blockm(x1)
-            x1 = torch.cat([x1, x2], 1)
-            x1 = self.block2(x1)
+            x = self.block2(torch.cat([self.blockm(x1), x2], 1))  # as fast_forward
         else:
             x, pic = x.split([self.im_feat[0], 3], 1)
             x = self.block1(x)

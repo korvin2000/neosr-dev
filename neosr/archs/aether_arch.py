@@ -127,11 +127,15 @@ class ReparamLargeKernelConv(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.fused:
             return self.fused_conv(x)
-
-        lk_out = self.lk_conv(x)
-        sk_out = self.sk_conv(x)
-        return (lk_out + self.lk_bias.view(1, -1, 1, 1) +
-                sk_out + self.sk_bias.view(1, -1, 1, 1))
+        if torch.onnx.is_in_onnx_export():  # the TorchScript exporter needs constant kernels
+            lk_out, sk_out = self.lk_conv(x), self.sk_conv(x)
+            return (lk_out + self.lk_bias.view(1, -1, 1, 1) +
+                    sk_out + self.sk_bias.view(1, -1, 1, 1))
+        # online re-parameterisation: lk + zero-padded sk is one depth-wise conv, the same function
+        # of (x, params); the separate fp32 bias add keeps the two-branch output dtype under autocast
+        w, b = self._fuse_kernel()
+        out = F.conv2d(x, w, None, self.stride, self.padding, groups=self.groups)
+        return out + b.view(1, -1, 1, 1)
 
     def _fuse_kernel(self) -> Tuple[torch.Tensor, torch.Tensor]:
         """Fuse large and small kernels into single convolution"""
@@ -187,7 +191,9 @@ class GatedConvFFN(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         gate = self.conv_gate(x) / self.temperature
         main = self.conv_main(x)
-        activated = self.quant_act(self.act(gate))
+        activated = self.act(gate)
+        if self.is_quantized:  # idle stubs are identities that break dynamo graphs
+            activated = self.quant_act(activated)
 
         if self.is_quantized:
             x = self.quant_mul.mul(activated, main)
@@ -325,8 +331,9 @@ class AetherBlock(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         shortcut = x
-        x = self.conv(x)
-        x = self.quant_norm(self.norm(x))
+        x = self.norm(self.conv(x))
+        if self.is_quantized:
+            x = self.quant_norm(x)
         x = self.ffn(x)
         x = self.channel_attn(x)
         x = self.spatial_attn(x)
@@ -540,7 +547,9 @@ class aether(nn.Module):
             x = self.quant(x)
 
         # --- Shallow Features ---
-        x = self.quant_first(self.conv_first(x))
+        x = self.conv_first(x)
+        if self.is_quantized:  # idle stubs are identities that break dynamo graphs
+            x = self.quant_first(x)
         shortcut = x
 
         # --- Deep Features ---
@@ -554,7 +563,10 @@ class aether(nn.Module):
         x = x + shortcut
 
         # --- Post-Processing ---
-        x = self.conv_after_body(self.quant_body(self.norm(x))) + x
+        y = self.norm(x)
+        if self.is_quantized:
+            y = self.quant_body(y)
+        x = self.conv_after_body(y) + x
 
         # --- Reconstruction ---
         x = self.conv_before_upsample(x)
@@ -616,7 +628,8 @@ class aether(nn.Module):
         # moving the norm statistics (eval), then forget the dummy activation ranges (T5 D10)
         self.eval()
         with torch.no_grad():
-            self(torch.rand(1, self.mean.shape[1], 16, 16, device=self.mean.device))
+            w = self.conv_first.weight  # a half/bf16 net is primed in its own dtype
+            self(torch.rand(1, self.mean.shape[1], 16, 16, device=w.device, dtype=w.dtype))
         for m in self.modules():
             obs = getattr(m, "activation_post_process", None)
             if isinstance(m, tq.FakeQuantize) and isinstance(obs, tq.MinMaxObserver):

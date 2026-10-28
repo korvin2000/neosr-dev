@@ -102,17 +102,17 @@ class DySample(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         offset = self.offset(x) * self.scope(x).sigmoid() * 0.5 + self.init_pos
         B, _, H, W = offset.shape
-        offset = offset.view(B, 2, -1, H, W)
-        # fp32 grid, then cast (the rounding order of the original)
-        coords_h = torch.arange(H, device=x.device, dtype=torch.float32) + 0.5
-        coords_w = torch.arange(W, device=x.device, dtype=torch.float32) + 0.5
-        coords = (
-            torch.stack(torch.meshgrid([coords_w, coords_h], indexing="ij"))
-            .transpose(1, 2)[None, :, None]
-            .to(x.dtype)
-        )
-        normalizer = torch.tensor([W, H], dtype=x.dtype, device=x.device).view(
-            1, 2, 1, 1, 1
+        # grid in >= fp32 in every mode: a bf16 `coords + offset` rounds sub-pixel offsets to 1/8..2 px
+        dt = torch.promote_types(x.dtype, torch.float32)
+        offset = offset.to(dt).view(B, 2, -1, H, W)
+        coords_h = torch.arange(H, device=x.device, dtype=dt) + 0.5
+        coords_w = torch.arange(W, device=x.device, dtype=dt) + 0.5
+        coords = torch.stack(
+            torch.meshgrid([coords_w, coords_h], indexing="ij")
+        ).transpose(1, 2)[None, :, None]
+        # [W, H] from the aranges: shape-derived in a traced graph (dynamic ONNX), no H2D copy
+        normalizer = (
+            torch.stack((coords_w[-1], coords_h[-1])).add(0.5).view(1, 2, 1, 1, 1)
         )
         coords = 2 * (coords + offset) / normalizer - 1
 
@@ -123,6 +123,9 @@ class DySample(nn.Module):
             .contiguous()
             .flatten(0, 1)
         )
+        # autocast promotes x to the fp32 grid; a half/bf16 net casts the finished grid once
+        if not torch.is_autocast_enabled(x.device.type):
+            coords = coords.to(x.dtype)
         output = F.grid_sample(
             x.reshape(B * self.groups, -1, H, W),
             coords,

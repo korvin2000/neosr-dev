@@ -49,6 +49,37 @@ def pixelshuffle_block(in_channels, out_channels, upscale_factor=2, kernel_size=
     return sequential(conv, pixel_shuffle)
 
 
+def param_key(m: nn.Module) -> tuple | None:
+    """Changes on every in-place parameter update (optimizer step, EMA lerp, load_state_dict) and on
+    reallocation (.to(), deepcopy); not on writes through `.data` (eval() refreshes after those).
+    None for inference tensors (built under inference_mode: no version counter), which re-fuse on
+    every eval forward."""
+    ps = list(m.parameters())
+    if any(p.is_inference() for p in ps):
+        return None
+    return tuple((p.data_ptr(), p._version) for p in ps)
+
+
+def fuse_online(m: nn.Module) -> bool:
+    """Run the differentiable fused kernel instead of the cached deploy conv: in training, under
+    torch.compile, and in an eval forward that autograd records for trainable branch parameters
+    (the deploy conv is frozen, so it would drop their gradients)."""
+    return (
+        m.training
+        or torch.compiler.is_compiling()
+        or (
+            torch.is_grad_enabled()
+            and not torch.onnx.is_in_onnx_export()
+            and any(p.requires_grad for p in m.parameters())
+        )
+    )
+
+
+def cache_stale(m: nn.Module) -> bool:
+    key = param_key(m)
+    return key is None or key != m._key
+
+
 def fuse_conv3xc(sk: nn.Conv2d, conv: nn.Sequential):
     """Fold the 1x1 skip and the 1x1-3x3-1x1 branch into one 3x3 kernel (fp32 under autocast)."""
     with torch.autocast(sk.weight.device.type, enabled=False):
@@ -112,7 +143,8 @@ class Conv3XC(nn.Module):
             ),
         )
 
-        # deploy conv (export): fused kernel, refreshed on eval() and state_dict()
+        # deploy conv (eval without autograd, export): fused kernel, refreshed on eval(), state_dict()
+        # and in an eval forward after any in-place parameter update (EMA lerp, load_state_dict)
         self.eval_conv = nn.Conv2d(
             in_channels=c_in,
             out_channels=c_out,
@@ -121,6 +153,7 @@ class Conv3XC(nn.Module):
             stride=s,
             bias=bias,
         ).requires_grad_(requires_grad=False)
+        self._key = None  # param_key() the eval_conv was fused at
 
     def fused_kernel(self):
         return fuse_conv3xc(self.sk, self.conv)
@@ -132,6 +165,7 @@ class Conv3XC(nn.Module):
         self.eval_conv.weight.copy_(w)
         if b is not None:
             self.eval_conv.bias.copy_(b)
+        self._key = param_key(self)
 
     def _save_to_state_dict(self, destination, prefix, keep_vars):
         self.update_params()  # saved deploy kernel matches weights changed in any mode
@@ -144,10 +178,13 @@ class Conv3XC(nn.Module):
         return self
 
     def forward(self, x):
-        if self.training:
-            return self.conv(F.pad(x, (1, 1, 1, 1), "constant", 0)) + self.sk(x)
-        # fused on the fly: never stale, whatever changed the branch weights in eval mode
-        return F.conv2d(x, *self.fused_kernel(), stride=self.stride, padding=1)
+        if fuse_online(self):
+            # online re-parameterisation: the fused kernel is the same function of (x, params) as
+            # 1x1 skip + 1x1-3x3-1x1 on the zero-padded input, so outputs and gradients match
+            return F.conv2d(x, *self.fused_kernel(), stride=self.stride, padding=1)
+        if cache_stale(self):
+            self.update_params()
+        return self.eval_conv(x)
 
 
 class SPAB(nn.Module):
@@ -184,9 +221,9 @@ class span(nn.Module):
     """Swift Parameter-free Attention Network for Efficient Super-Resolution"""
 
     @staticmethod
-    def _init_weights(m) -> None:
+    def _init_weights(m, mode="fan_out") -> None:
         if isinstance(m, nn.Conv2d | nn.Linear):
-            nn.init.kaiming_normal_(m.weight, a=0, mode='fan_out', nonlinearity='linear')
+            nn.init.kaiming_normal_(m.weight, a=0, mode=mode, nonlinearity="linear")
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
@@ -201,6 +238,7 @@ class span(nn.Module):
         fast=False,
         img_range=1.0,
         rgb_mean=(0.5, 0.5, 0.5),
+        fan_in_init=False,
     ):
         super().__init__()
 
@@ -254,8 +292,18 @@ class span(nn.Module):
             feature_channels, out_channels, upscale_factor=upscale
         )
 
-        if self.fast:
+        if self.fast and not fan_in_init:
             self.apply(self._init_weights)
+        elif self.fast:
+            # A-06 candidate (opt-in until an A/B): variance-preserving init with the head scaled
+            # so the features start at std ~4. The bias-free SPAB gate (out3 + x) * (sigmoid(out3)
+            # - 0.5) is quadratic below |out3| ~ 2: with the fan_out init the chain underflows to
+            # exact zeros by block 3 (no gradient for blocks 3-5 and conv_2). conv_cat takes the
+            # head features back down.
+            self.apply(lambda m: self._init_weights(m, "fan_in"))
+            with torch.no_grad():
+                self.conv_9x9.weight.mul_(8)
+                self.conv_cat.weight.mul_(1 / 8)
 
     @property
     def is_norm(self):

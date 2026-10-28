@@ -87,7 +87,8 @@ class PLKConv2d(nn.Module):
             if self.with_idt:
                 k = self.conv.weight
                 n_pad = (k.shape[2] - 1) // 2
-                I = torch.eye(k.shape[0]).reshape(k.shape[0], k.shape[0], 1, 1)
+                I = torch.eye(k.shape[0], dtype=k.dtype, device=k.device)
+                I = I.reshape(k.shape[0], k.shape[0], 1, 1)
                 I = F.pad(I, (n_pad, n_pad, n_pad, n_pad))
                 k = k + I
                 self.conv.weight.data.copy_(k)
@@ -181,7 +182,7 @@ class SparsePLKConv2d(nn.Module):
 
     @staticmethod
     def _get_origin_kernel(kernel, dilation=1, p=0):
-        I = torch.ones((1, 1, 1, 1)).to(kernel.device)
+        I = kernel.new_ones((1, 1, 1, 1))
         if kernel.size(1) == 1:  # Depth-wise Convolution
             dilated = F.conv_transpose2d(kernel, I, stride=dilation)
         else:
@@ -242,21 +243,26 @@ class SparsePLKConv2d(nn.Module):
                 k = k + _k
                 b = b + _b
 
-            device = k.device
-
             if self.with_idt:
-                I = torch.eye(k.size(0)).reshape(k.size(0), k.size(0), 1, 1).to(device)
+                I = torch.eye(k.size(0), dtype=k.dtype, device=k.device)
+                I = I.reshape(k.size(0), k.size(0), 1, 1)
                 n_pad = (k.size(2) - 1) // 2
                 I = F.pad(I, (n_pad, n_pad, n_pad, n_pad))
                 k = k + I
 
             del self.convs
 
-            self.conv = nn.Conv2d(k.size(1), k.size(0), k.size(2), 1, k.size(2) // 2)
+            self.conv = nn.Conv2d(
+                k.size(1),
+                k.size(0),
+                k.size(2),
+                1,
+                k.size(2) // 2,
+                device=k.device,
+                dtype=k.dtype,
+            )
             self.conv.weight.data.copy_(k)
             self.conv.bias.data.copy_(b)
-
-            self.to(device)
 
             self.is_convert = True
 

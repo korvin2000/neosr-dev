@@ -1,91 +1,21 @@
 # type: ignore
 import torch
-import torch.nn.functional as F
 from torch import nn
 from torch.nn.init import trunc_normal_
 
+from neosr.archs import span_arch
 from neosr.archs.arch_util import DySample
-from neosr.archs.span_arch import fuse_conv3xc
 
 
-class Conv3XC(nn.Module):
+class Conv3XC(span_arch.Conv3XC):
+    """SPAN's Conv3XC (online re-parameterisation, cached eval kernel) with SPAN+'s init."""
+
     def __init__(
         self, c_in: int, c_out: int, gain: int = 1, s: int = 1, bias: bool = True
     ):
-        super(Conv3XC, self).__init__()
-        self.stride = s
-
-        self.sk = nn.Conv2d(
-            in_channels=c_in,
-            out_channels=c_out,
-            kernel_size=1,
-            padding=0,
-            stride=s,
-            bias=bias,
-        )
-        self.conv = nn.Sequential(
-            nn.Conv2d(
-                in_channels=c_in,
-                out_channels=c_in * gain,
-                kernel_size=1,
-                padding=0,
-                bias=bias,
-            ),
-            nn.Conv2d(
-                in_channels=c_in * gain,
-                out_channels=c_out * gain,
-                kernel_size=3,
-                stride=s,
-                padding=0,
-                bias=bias,
-            ),
-            nn.Conv2d(
-                in_channels=c_out * gain,
-                out_channels=c_out,
-                kernel_size=1,
-                padding=0,
-                bias=bias,
-            ),
-        )
-        self.eval_conv = nn.Conv2d(
-            in_channels=c_in,
-            out_channels=c_out,
-            kernel_size=3,
-            padding=1,
-            stride=s,
-            bias=bias,
-        )
+        super().__init__(c_in, c_out, gain1=gain, s=s, bias=bias)
         trunc_normal_(self.sk.weight, std=0.02)
         trunc_normal_(self.eval_conv.weight, std=0.02)
-        # deploy conv (export): fused kernel, refreshed on eval() and state_dict()
-        self.eval_conv.requires_grad_(requires_grad=False)
-
-    def fused_kernel(self):
-        return fuse_conv3xc(self.sk, self.conv)
-
-    @torch.no_grad()
-    def update_params(self):
-        """Copy the fused kernel into eval_conv in place (parameter identity is kept)."""
-        w, b = self.fused_kernel()
-        self.eval_conv.weight.copy_(w)
-        if b is not None:
-            self.eval_conv.bias.copy_(b)
-
-    def _save_to_state_dict(self, destination, prefix, keep_vars):
-        self.update_params()  # saved deploy kernel matches weights changed in any mode
-        super()._save_to_state_dict(destination, prefix, keep_vars)
-
-    def train(self, mode: bool = True):
-        super().train(mode)
-        if not mode:
-            self.update_params()
-        return self
-
-    def forward(self, x):
-        if self.training:
-            return self.conv(F.pad(x, (1, 1, 1, 1), "constant", 0)) + self.sk(x)
-        # fused on the fly: never stale, whatever changed the branch weights in eval mode
-        return F.conv2d(x, *self.fused_kernel(), stride=self.stride, padding=1)
 
 
 class SPAB(nn.Module):

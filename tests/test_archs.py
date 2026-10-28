@@ -13,11 +13,9 @@ from pathlib import Path
 
 import pytest
 import torch
-import torch.nn.functional as F
 from torch import Tensor
 
 from neosr.archs import ARCHS, build_network
-from neosr.archs.arch_util import DySample
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = Path(d) if (d := os.environ.get("NEOSR_ARCH_FIXTURE")) else None
@@ -208,24 +206,3 @@ def test_metagan_blocks_get_distinct_weights() -> None:
             net.state_dict().values(), again.state_dict().values(), strict=True
         )
     )
-
-
-def test_dysample_grid_is_fp32_then_cast(monkeypatch) -> None:
-    """D20: the grid is fp32 `arange + 0.5`, then cast; a bf16 arange rounds differently from W=512 on."""
-    H, W, s, bf = 2, 512, 2, torch.bfloat16
-    m = DySample(4, 3, scale=s, groups=4).to(bf)
-    for t in (m.offset.weight, m.offset.bias, m.scope.weight, m.init_pos):
-        t.data.zero_()  # offset 0: the grid reaches grid_sample unchanged
-    seen = []
-    grid_sample = F.grid_sample
-    monkeypatch.setattr(
-        F, "grid_sample", lambda x, g, **k: seen.append(g) or grid_sample(x, g, **k)
-    )
-    m(torch.rand(1, 4, H, W, dtype=bf))
-
-    def norm(c: Tensor) -> Tensor:
-        return 2 * c / torch.tensor(W, dtype=bf) - 1
-
-    ref = norm((torch.arange(W, dtype=torch.float32) + 0.5).to(bf))
-    assert not torch.equal(ref, norm(torch.arange(W, dtype=bf) + 0.5))
-    assert torch.equal(seen[0][..., 0], ref.repeat_interleave(s).expand(4, s * H, -1))
