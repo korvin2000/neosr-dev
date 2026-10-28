@@ -131,7 +131,9 @@ def clip_grad_norm_(groups: list[dict[str, Any]]) -> None:
     grads = [[p.grad for p in g["params"] if p.grad is not None] for g in groups]
     if not any(grads):
         return
-    norm = torch.linalg.vector_norm(torch.stack(torch._foreach_norm(sum(grads, []))))
+    norm = torch.linalg.vector_norm(
+        torch.stack(torch._foreach_norm([t for gs in grads for t in gs]))
+    )
     for g, gs in zip(groups, grads, strict=True):
         if gs and (max_norm := g["max_grad_norm"]) > 0:
             torch._foreach_mul_(gs, torch.clamp(max_norm / (norm + g["eps"]), max=1.0))
