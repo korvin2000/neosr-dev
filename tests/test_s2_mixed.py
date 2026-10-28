@@ -1,14 +1,17 @@
 """Stage-2 lane I6 (mixed archs, MX-01..MX-18): parity against the replaced code, gradient census, sizes."""
 
 import copy
+import io
 import math
 import time
+from collections import OrderedDict
 
 import pytest
 import torch
 import torch.nn.functional as F
 from einops import rearrange
 from torch import nn
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from neosr.archs import asid_arch, build_network, esc_arch, hma_arch, mfghmoe_arch
 from neosr.archs.asid_arch import (
@@ -32,7 +35,7 @@ from neosr.archs.microsr_arch import (
     window_partition,
     window_reverse,
 )
-from neosr.models.checkpoint import cpu_copy
+from neosr.models.checkpoint import cpu_copy, read_weights
 
 cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
 
@@ -40,6 +43,11 @@ cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
 def _build(name: str, scale: int = 4, seed: int = 0, **kw) -> nn.Module:
     torch.manual_seed(seed)
     return build_network({"type": name, **kw}, scale=scale)
+
+
+def _legacy_file(sd) -> OrderedDict:
+    # what the pre-refactor save_network wrote: a fresh OrderedDict, so no module metadata
+    return OrderedDict((k, v.cpu()) for k, v in sd.items())
 
 
 def _assert_grads_close(a: nn.Module, b: nn.Module, rtol: float = 1e-4) -> None:
@@ -241,9 +249,7 @@ def _old_asid_attn(grid: bool):
 
 def test_asid_legacy_checkpoint_keeps_its_forward(monkeypatch) -> None:
     old = _build("asid").eval()
-    sd = cpu_copy(
-        old.state_dict()
-    )  # a weight file; flash default: every t is exactly 1
+    sd = _legacy_file(old.state_dict())  # flash default: every t is exactly 1
     x = torch.rand(
         1, 3, 64, 64
     )  # the training patch (= 8 * window) where grid scales agree
@@ -351,7 +357,7 @@ def _spandrel_ditn_isa(self, x):
 
 def test_ditn_matches_spandrel_and_keeps_legacy_forward(monkeypatch) -> None:
     old = _build("ditn").eval()
-    sd = cpu_copy(old.state_dict())  # as read from a weight file (no module metadata)
+    sd = _legacy_file(old.state_dict())
     x = torch.rand(2, 3, 24, 40)
     with torch.no_grad(), monkeypatch.context() as m:
         m.setattr(ISA, "forward", _old_ditn_isa)
@@ -379,21 +385,46 @@ def test_ditn_matches_spandrel_and_keeps_legacy_forward(monkeypatch) -> None:
     _assert_grads_close(new, canon)
 
 
-@pytest.mark.parametrize("name", ["asid", "ditn"])
-def test_legacy_temperature_remap_only_for_weight_files(name: str) -> None:
+def _temps(net: nn.Module) -> list[torch.Tensor]:
+    return [m.temperature for m in net.modules() if hasattr(m, "temperature")]
 
+
+@pytest.mark.parametrize("name", ["asid", "ditn"])
+def test_legacy_temperature_remap_only_for_legacy_files(name: str) -> None:
+    # t == 1 exactly is both the legacy signature and a current untrained net: the module version
+    # in the state dict metadata tells them apart
     net = _build(name)
     ema = copy.deepcopy(net)
-    temps = [m.temperature for m in ema.modules() if hasattr(m, "temperature")]
+    temps = _temps(ema)
+    assert temps
     ema.load_state_dict(
         net.state_dict()
-    )  # the EMA's first copy: module version 2, no remap
-    assert temps
+    )  # in process (the EMA's first copy): version 2
     assert all(t.eq(1).all() for t in temps)
-    ema.load_state_dict(
-        cpu_copy(net.state_dict())
-    )  # a weight file (no metadata): legacy
+    buf = io.BytesIO()
+    torch.save({"params": net.state_dict()}, buf)
+    buf.seek(0)
+    sd = torch.load(buf, weights_only=True)[
+        "params"
+    ]  # a current file keeps the metadata
+    ema.load_state_dict(sd)
+    assert all(t.eq(1).all() for t in temps)
+    ema.load_state_dict(_legacy_file(net.state_dict()))  # a legacy file (no metadata)
     assert all(t.eq(1 / 8).all() for t in temps)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="handoff I1: checkpoint.cpu_copy/strip_prefixes/load_weights drop the state dict "
+    "_metadata, so an untrained current export reads back as legacy",
+)
+@pytest.mark.parametrize("name", ["asid", "ditn"])
+def test_current_export_round_trip_is_identity(tmp_path, name: str) -> None:
+    net = _build(name)
+    torch.save({"params": cpu_copy(net.state_dict())}, tmp_path / "net_g.pth")
+    other = _build(name, seed=1)
+    other.load_state_dict(read_weights(tmp_path / "net_g.pth"))
+    assert all(t.eq(1).all() for t in _temps(other))
 
 
 # ---------------------------------------------------------------- MX-04/06 MicroSR
@@ -932,29 +963,142 @@ def test_cuda_bf16_step_without_syncs(name: str) -> None:
                 y.float().mean().backward()
             torch.cuda.set_sync_debug_mode(0)
             assert torch.isfinite(y).all()
+            for n, p in net.named_parameters():
+                assert (
+                    not mode or not p.requires_grad or torch.isfinite(p.grad).all()
+                ), n
     finally:
         torch.cuda.set_sync_debug_mode(0)
         del net
         torch.cuda.empty_cache()
 
 
+FUSED = [SDPBackend.EFFICIENT_ATTENTION, SDPBackend.FLASH_ATTENTION]  # no math fallback
+
+
 @cuda
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 @pytest.mark.parametrize("d", [5, 10, 20, 30, 32])
-def test_cuda_sdpa_head_padding_exact(d: int) -> None:
-    # the head-dim padding that lets the memory-efficient kernel take a grad-requiring bias
+def test_cuda_sdpa_head_padding_exact(d: int, dtype) -> None:
+    # the head-dim padding (and the contiguous mask) that lets the memory-efficient kernel take a
+    # grad-requiring bias; the bias is permuted from a (n, n, heads) table as in the modules
     g = torch.Generator(device="cuda").manual_seed(0)
     q, k, v = (
-        torch.randn(4, 3, 64, d, device="cuda", generator=g, requires_grad=True)
+        torch.randn(4, 3, 64, d, device="cuda", generator=g).to(dtype).requires_grad_()
         for _ in range(3)
     )
-    bias = torch.randn(1, 3, 64, 64, device="cuda", generator=g, requires_grad=True)
-    y = hma_arch._sdpa(q, k, v, bias, scale=0.3)
-    ref = ((q @ k.transpose(-2, -1)) * 0.3 + bias).softmax(-1) @ v
-    torch.testing.assert_close(y, ref, rtol=1e-4, atol=1e-5)
-    gy = torch.randn_like(y)
+    table = torch.randn(64, 64, 3, device="cuda", generator=g, requires_grad=True)
+    bias = table.permute(2, 0, 1).unsqueeze(0)
+    with sdpa_kernel(FUSED):
+        y = hma_arch._sdpa(q, k, v, bias.to(dtype), scale=0.3)
+    qf, kf, vf = (t.float() for t in (q, k, v))
+    ref = ((qf @ kf.transpose(-2, -1)) * 0.3 + bias).softmax(-1) @ vf
+    tol = (
+        {"rtol": 1e-4, "atol": 1e-5}
+        if dtype == torch.float32
+        else {"rtol": 1.6e-2, "atol": 2e-2}
+    )
+    torch.testing.assert_close(y.float(), ref, **tol)
+    gy = torch.randn(y.shape, device="cuda", generator=g)
     for a, b in zip(
-        torch.autograd.grad(y, (q, k, v, bias), gy),
-        torch.autograd.grad(ref, (q, k, v, bias), gy),
+        torch.autograd.grad(y.float(), (q, k, v, table), gy),
+        torch.autograd.grad(ref, (q, k, v, table), gy),
         strict=True,
     ):
-        torch.testing.assert_close(a, b, rtol=1e-4, atol=1e-5)
+        torch.testing.assert_close(a.float(), b.float(), **tol)
+
+
+def _rel(a: torch.Tensor, b: torch.Tensor) -> float:
+    return ((a.float() - b.float()).norm() / b.float().norm().clamp_min(1e-12)).item()
+
+
+def _cuda_step(name, kw, old_patch, size, bf16: bool, fused: bool):
+    net = _build(name, **kw).cuda().train()
+    g = torch.Generator(device="cuda").manual_seed(1)
+    x = torch.rand(2, 3, *size, device="cuda", generator=g).requires_grad_()
+    with pytest.MonkeyPatch.context() as m:
+        if old_patch is not None:
+            old_patch(m)
+        backends = FUSED if fused else [SDPBackend.MATH]
+        with (
+            sdpa_kernel(backends),
+            torch.autocast("cuda", torch.bfloat16, enabled=bf16),
+        ):
+            y = net(x)
+        (y.float() * torch.randn(y.shape, device="cuda", generator=g)).sum().backward()
+    grads = {n: p.grad for n, p in net.named_parameters() if p.requires_grad}
+    del net
+    return y.detach().float(), x.grad, grads
+
+
+@cuda
+@pytest.mark.parametrize(
+    ("name", "kw", "old_patch", "size"),
+    [
+        ("hma", HMA_SMALL, _hma_old, (32, 48)),
+        ("mfghmoe", MOE_SMALL, lambda m: m.setattr(mfghmoe_arch, "_window_sdpa", _ref_window_attn), (32, 32)),
+        ("grformer", {"depths": (4,), "num_heads": (3,), "drop_path_rate": 0.0}, lambda m: m.setattr(GRSA, "forward", _old_grsa), (32, 64)),
+    ],
+)  # fmt: skip
+def test_cuda_bf16_fused_attention_vs_replaced_code(name, kw, old_patch, size) -> None:
+    # the real modules (permuted biases, shifted and unshifted blocks) run with the math kernel
+    # disabled; against the replaced code in fp32, the bf16 error stays at the replaced code's own
+    # bf16 error: outputs, input gradients and every parameter gradient
+    ref = _cuda_step(name, kw, old_patch, size, bf16=False, fused=False)
+    old = _cuda_step(name, kw, old_patch, size, bf16=True, fused=False)
+    new = _cuda_step(name, kw, None, size, bf16=True, fused=True)
+    torch.cuda.empty_cache()
+    assert torch.isfinite(new[0]).all()
+    assert torch.isfinite(new[1]).all()
+    assert _rel(new[0], ref[0]) <= 1.5 * _rel(old[0], ref[0]) + 1e-3
+    assert _rel(new[1], ref[1]) <= 1.5 * _rel(old[1], ref[1]) + 1e-3
+    assert new[2].keys() == ref[2].keys()
+    errs = {n: (_rel(new[2][n], r), _rel(old[2][n], r)) for n, r in ref[2].items()}
+    for n, (e_new, e_old) in errs.items():
+        assert torch.isfinite(new[2][n]).all(), n
+        # the per-head cosine scale folded into a bf16 q takes its gradient through the kernel's
+        # bf16 dq (the parallel component, cancelling): ~5-10x the old error on this scalar
+        floor = 0.6 if n.endswith("logit_scale") else 0.25
+        assert e_new <= max(3 * e_old, floor), (n, e_new, e_old)
+    mean_new = sum(e for e, _ in errs.values()) / len(errs)
+    mean_old = sum(e for _, e in errs.values()) / len(errs)
+    assert mean_new <= 2 * mean_old + 1e-2, (mean_new, mean_old)
+
+
+def test_mfghmoe_router_gradient_is_straight_through() -> None:
+    # w == 1 forward and d w = d (p_group * p_expert): loss <c, w> gives the router the gradient
+    # of <c, p> with p from an independent reference of the two-stage selection
+    _router_grad_check("cpu", bf16=False)
+
+
+@cuda
+def test_cuda_bf16_router_gradient_is_straight_through() -> None:
+    _router_grad_check(
+        "cuda", bf16=True
+    )  # routes in fp32 under autocast: the fp32 gradient
+
+
+def _router_grad_check(device: str, bf16: bool) -> None:
+    torch.manual_seed(0)
+    r = DualRouting(32, 16).to(device)
+    x = torch.randn(2, 32, 5, 7, device=device)
+    c = torch.randn(2, 1, 5, 7, device=device)
+    with torch.autocast(device, torch.bfloat16, enabled=bf16):
+        idx, w = r(x.to(torch.bfloat16) if bf16 else x)
+    assert w.dtype == torch.float32
+    assert torch.equal(w, torch.ones_like(w))
+    got = torch.autograd.grad((w * c).sum(), list(r.parameters()))
+    xt = rearrange(x.to(torch.bfloat16).float() if bf16 else x, "b c h w -> (b h w) c")
+    pg = F.softmax(r.w_group_gate(xt), dim=-1)
+    grp = pg.argmax(-1)
+    xe = xt + r.group_embedding(grp)
+    pe = torch.stack([F.softmax(gate(xe), dim=-1) for gate in r.w_expert_gates], 1)
+    pe = pe[torch.arange(len(grp), device=device), grp]
+    exp = pe.argmax(-1)
+    assert torch.equal(idx.flatten(), grp * 8 + exp)
+    p = pg.gather(1, grp[:, None]) * pe.gather(1, exp[:, None])
+    want = torch.autograd.grad(
+        (p.view(2, 5, 7) * c.squeeze(1)).sum(), list(r.parameters())
+    )
+    for a, b in zip(got, want, strict=True):
+        torch.testing.assert_close(a, b, rtol=1e-5, atol=1e-7)

@@ -16,6 +16,8 @@ def _sdpa(q, k, v, attn_mask=None, dropout_p=0.0, scale=None):
     Exact: q.k is unchanged and the padded output columns are zero and cut."""
     d, dv = q.shape[-1], v.shape[-1]
     scale = d**-0.5 if scale is None else scale
+    if attn_mask is not None:  # fused kernels need a unit last-dim stride; permuted biases have h
+        attn_mask = attn_mask.contiguous()
     if not q.is_cuda or (d % 8 == 0 and dv % 8 == 0):
         return F.scaled_dot_product_attention(q, k, v, attn_mask, dropout_p, scale=scale)
     q, k, v = F.pad(q, (0, -d % 8)), F.pad(k, (0, -d % 8)), F.pad(v, (0, -dv % 8))

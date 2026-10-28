@@ -118,7 +118,8 @@ class ISA(nn.Module):
     def forward(self, x):
         b, c, h, w = x.shape
         x = x.view(b, c, -1).transpose(-1, -2)
-        # channel attention softmax(t * cos(q, k)) v (spandrel/upstream DITN); 4-D for fused SDPA
+        # channel attention softmax(t * cos(q, k)) v (spandrel/upstream DITN) as one 4-D SDPA call;
+        # the head dim is the strided pixel axis, so CUDA takes the math kernel (c x c probabilities)
         q, k, v = (t.transpose(-1, -2).unsqueeze(1) for t in self.qkv(x).chunk(3, dim=-1))
         q = F.normalize(q, dim=-1) * self.temperature
         k = F.normalize(k, dim=-1)
