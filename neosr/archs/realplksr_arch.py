@@ -5,7 +5,7 @@ import torch
 from torch import nn
 from torch.nn.init import trunc_normal_
 
-from neosr.archs.arch_util import DySample, LayerNorm2d, icnr_
+from neosr.archs.arch_util import DySample, LayerNorm2d, icnr_, no_graph
 
 
 class DCCM(nn.Sequential):
@@ -30,7 +30,7 @@ class PLKConv2d(nn.Module):
         self.idx = dim
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.training:
+        if self.training or not no_graph(x):
             x1, x2 = torch.split(x, [self.idx, x.size(1) - self.idx], dim=1)
             x1 = self.conv(x1)
             return torch.cat([x1, x2], dim=1)

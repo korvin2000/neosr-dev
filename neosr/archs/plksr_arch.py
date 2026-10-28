@@ -8,6 +8,8 @@ from torch import nn
 from torch.nn import functional as F
 from torch.nn.init import trunc_normal_
 
+from neosr.archs.arch_util import no_graph
+
 
 def repeat_interleave(x, n):
     x = x.unsqueeze(2)
@@ -64,18 +66,12 @@ class PLKConv2d(nn.Module):
         self.is_convert = False
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.is_convert:
-            x[:, : self.idx] = self.conv(x[:, : self.idx])
-            return x
-
-        if self.training:
+        idt = self.with_idt and not self.is_convert  # convert() folds it into conv
+        if (self.training and not self.is_convert) or not no_graph(x):
             x1, x2 = torch.split(x, [self.idx, x.size(1) - self.idx], dim=1)
-            if self.with_idt:
-                x1 = self.conv(x1) + x1
-            else:
-                x1 = self.conv(x1)
+            x1 = self.conv(x1) + x1 if idt else self.conv(x1)
             return torch.cat([x1, x2], dim=1)
-        if self.with_idt:
+        if idt:
             x[:, : self.idx] = x[:, : self.idx] + self.conv(x[:, : self.idx])
         else:
             x[:, : self.idx] = self.conv(x[:, : self.idx])
@@ -114,11 +110,10 @@ class RectSparsePLKConv2d(nn.Module):
     def forward(
         self, x: torch.Tensor
     ) -> torch.Tensor:  # No reparametrization since this is for a ablative study
-        if self.training:
+        if self.training or not no_graph(x):
             x1, x2 = x[:, : self.idx], x[:, self.idx :]
             x1 = self.mn_conv(x1) + self.nm_conv(x1) + self.nn_conv(x1)
             return torch.cat([x1, x2], dim=1)
-
         x[:, : self.idx] = (
             self.mn_conv(x[:, : self.idx])
             + self.nm_conv(x[:, : self.idx])
@@ -168,10 +163,12 @@ class SparsePLKConv2d(nn.Module):
         self.is_convert = False
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.is_convert:
+        if self.is_convert and no_graph(x):
             x[:, : self.idx, :, :] = self.conv(x[:, : self.idx, :, :])
             return x
         x1, x2 = torch.split(x, [self.idx, x.size(1) - self.idx], dim=1)
+        if self.is_convert:
+            return torch.cat([self.conv(x1), x2], dim=1)
         if self.with_idt:
             out = x1
         else:

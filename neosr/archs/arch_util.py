@@ -44,6 +44,13 @@ def icnr_(conv: nn.Conv2d, scale: int, init: Callable = nn.init.kaiming_normal_)
         conv.bias.copy_(conv.bias[::r2].repeat_interleave(r2))
 
 
+def no_graph(x: Tensor) -> bool:
+    """True when writing into x in place cannot corrupt autograd: no graph is recorded and x is
+    untracked (a reentrant checkpoint's no_grad pass still sees requires_grad), or a jit trace runs
+    (its checker reruns under no_grad, so the path must not follow grad mode; traces are deploy-only)."""
+    return torch.jit.is_tracing() or not (torch.is_grad_enabled() or x.requires_grad)
+
+
 class LayerNorm2d(nn.LayerNorm):
     """LayerNorm over the channels of NCHW: F.layer_norm on the NHWC view (a view, no layout copy,
     under channels_last; CUDA autocast runs it in fp32, and its statistics accumulate in fp32 in any

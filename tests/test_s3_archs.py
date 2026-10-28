@@ -1,10 +1,13 @@
-"""Stage 3 A6: RealPLKSR opt-in pre-LayerNorm and ICNR init. CPU."""
+"""Stage 3 A6: RealPLKSR opt-in pre-LayerNorm and ICNR init; PLK eval + grad. CPU."""
+
+from functools import partial
 
 import pytest
 import torch
 from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint
 
-from neosr.archs import build_network
+from neosr.archs import build_network, plksr_arch
 from neosr.archs.arch_util import LayerNorm2d, icnr_
 
 
@@ -123,3 +126,60 @@ def test_icnr_helper_layout():
     for c in range(3):
         assert all(torch.equal(w[c * 4 + k], w[c * 4]) for k in range(4))
         assert torch.all(b[c * 4 : c * 4 + 4] == b[c * 4])
+
+
+# ---------------------------------------------------------------- PLK in-place fast path vs autograd
+@pytest.mark.parametrize("layer_norm", [False, True])
+def test_eval_with_grad_backprops_and_no_grad_stays_in_place(layer_norm):
+    """An eval-mode net with grad enabled used to fail backward: the PLK fast path wrote into
+    the conv's saved input. It now takes the split/cat path; no_grad keeps the in-place one."""
+    net = _plk(2, layer_norm=layer_norm)
+    x = torch.rand(1, 3, 12, 10, generator=torch.Generator().manual_seed(4))
+    with torch.no_grad():
+        ref = net(x)
+    y = net(x.clone().requires_grad_())
+    y.mean().backward()
+    assert all(p.grad is not None and p.grad.isfinite().all() for p in net.parameters())
+    torch.testing.assert_close(y.detach(), ref, rtol=0, atol=0)
+    lk, inplace = net.feats[1].lk, []
+    hook = lk.register_forward_hook(lambda _, i, o: inplace.append(o is i[0]))
+    with torch.no_grad():
+        net(x.clone().requires_grad_())  # a tracked image: the LK input is untracked
+    with torch.inference_mode():
+        net(x.clone())
+    hook.remove()
+    assert inplace == [True, True]  # inference keeps the in-place fast path
+    torch.jit.trace(lk, torch.rand(1, 64, 6, 5))  # no_grad checker: same graph
+
+
+def test_plksr_lk_layers_backprop_in_eval_with_grad():
+    torch.manual_seed(0)
+    kw = {"use_max_kernel": True, "with_idt": True}
+    sparse = partial(plksr_arch.SparsePLKConv2d, 8, 9, (5, 3), (1, 2), **kw)
+    layers = [
+        plksr_arch.PLKConv2d(8, 7, with_idt=True),
+        plksr_arch.PLKConv2d(8, 7, with_idt=False),
+        plksr_arch.RectSparsePLKConv2d(8, 9),
+        sparse(),
+    ]
+    for m in (plksr_arch.PLKConv2d(8, 7, with_idt=True), sparse()):
+        m.convert()  # deploy form: identity folded into one conv
+        layers.append(m)
+    x = torch.rand(1, 12, 9, 11)
+
+    def grads(m, fn):
+        m.zero_grad()
+        xg = x.clone().requires_grad_()
+        fn(xg.clone()).square().mean().backward()  # non-leaf input, as inside a block
+        return [xg.grad, *(p.grad.clone() for p in m.parameters())]
+
+    for m in layers:
+        m.eval()
+        with torch.no_grad():
+            ref = m(x.clone())
+        eager = grads(m, m)
+        assert all(g.isfinite().all() for g in eager)
+        torch.testing.assert_close(m(x.clone()).detach(), ref, rtol=0, atol=0)
+        # the reentrant checkpoint's no_grad pass must not overwrite the input it recomputes from
+        ckpt = grads(m, lambda t, m=m: checkpoint(m, t, use_reentrant=True))
+        assert all(map(torch.equal, eager, ckpt))
