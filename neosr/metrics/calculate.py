@@ -277,7 +277,7 @@ def calculate_ssim_pt(
 # build), so each network is built once per process and kept here by name. release_metric_nets(),
 # called by the model's validation() after each event, parks the nets on the CPU: the VRAM is freed
 # between events and the next event moves them back (~200 MB) instead of rebuilding them.
-_metric_nets: dict[str, nn.Module] = {}
+_metric_nets: dict[tuple[str, ...], nn.Module] = {}
 
 
 # the nets pull in torchvision models and weights: imported on first use
@@ -285,10 +285,16 @@ def _dists() -> nn.Module:
     return _streaming_dists()
 
 
-def _topiq() -> nn.Module:
+def _topiq(dataset: str) -> nn.Module:
     from neosr.metrics.topiq import topiq  # noqa: PLC0415
 
-    return topiq()
+    return topiq(dataset=dataset)
+
+
+def _lpips(net: str) -> nn.Module:
+    from neosr.metrics.lpips import lpips  # noqa: PLC0415
+
+    return lpips(net)
 
 
 class _streaming_dists(nn.Module):
@@ -327,7 +333,8 @@ class _streaming_dists(nn.Module):
         return 1 - (dist1 + dist2).squeeze()  # type: ignore[operator]
 
 
-_metric_builders = {"dists": _dists, "topiq": _topiq}
+# name -> builder of the net; a key (name, *args) builds and caches one net per variant
+_metric_builders = {"dists": _dists, "topiq": _topiq, "lpips": _lpips}
 
 
 def release_metric_nets() -> None:
@@ -335,11 +342,11 @@ def release_metric_nets() -> None:
         net.to("cpu")
 
 
-def _metric_net(name: str, device: torch.device) -> nn.Module:
-    net = _metric_nets.get(name)
+def _metric_net(key: tuple[str, ...], device: torch.device) -> nn.Module:
+    net = _metric_nets.get(key)
     if net is None:
-        net = _metric_builders[name]().eval().requires_grad_(False)
-        _metric_nets[name] = net
+        net = _metric_builders[key[0]](*key[1:]).eval().requires_grad_(False)
+        _metric_nets[key] = net
     # every tensor: a move that ran out of memory midway leaves the net split across devices
     if any(t.device != device for t in (*net.parameters(), *net.buffers())):
         net.to(device)
@@ -357,13 +364,13 @@ def _metric_device(device: torch.device | str | None) -> torch.device:
 
 
 def _net_metric_pt(
-    name: str, img: Tensor, img2: Tensor, device: torch.device | str | None
+    key: tuple[str, ...], img: Tensor, img2: Tensor, device: torch.device | str | None
 ) -> Tensor:
     assert img.shape == img2.shape, (
         f"Image shapes are different: {img.shape}, {img2.shape}."
     )
     device = _metric_device(device)
-    net = _metric_net(name, device)
+    net = _metric_net(key, device)
     if img.shape[1] == 1:  # grayscale: both networks expect 3 channels
         img, img2 = img.expand(-1, 3, -1, -1), img2.expand(-1, 3, -1, -1)
     # quantised / 255: exactly the uint8 / 255 input of the reference
@@ -376,18 +383,35 @@ def calculate_dists_pt(
     img: Tensor, img2: Tensor, device: torch.device | str | None = None
 ) -> Tensor:
     """DISTS (lower is better) on quantised tensors (see above)."""
-    return _net_metric_pt("dists", img, img2, device)
+    return _net_metric_pt(("dists",), img, img2, device)
 
 
 def calculate_topiq_pt(
-    img: Tensor, img2: Tensor, device: torch.device | str | None = None
+    img: Tensor,
+    img2: Tensor,
+    device: torch.device | str | None = None,
+    dataset: str = "kadid",
 ) -> Tensor:
-    """Full-reference TOPIQ (higher is better) on quantised tensors (see above)."""
-    return _net_metric_pt("topiq", img, img2, device)
+    """Full-reference TOPIQ (higher is better) on quantised tensors (see above); `dataset` names
+    the weights: "kadid" (KADID-10k) or "pipal" (PIPAL: GAN and SR outputs)."""
+    return _net_metric_pt(("topiq", dataset), img, img2, device)
+
+
+def calculate_lpips_pt(
+    img: Tensor,
+    img2: Tensor,
+    device: torch.device | str | None = None,
+    net: str = "alex",
+) -> Tensor:
+    """LPIPS v0.1 (lower is better) on quantised tensors (see above); `net`: "alex" or "vgg"."""
+    return _net_metric_pt(("lpips", net), img, img2, device)
 
 
 def _calculate_net_metric(
-    name: str, img: np.ndarray, img2: np.ndarray, device: torch.device | str | None
+    key: tuple[str, ...],
+    img: np.ndarray,
+    img2: np.ndarray,
+    device: torch.device | str | None,
 ) -> float:
     assert img.shape == img2.shape, (
         f"Image shapes are different: {img.shape}, {img2.shape}."
@@ -396,7 +420,7 @@ def _calculate_net_metric(
         img, img2 = img[..., None], img2[..., None]
     # BGR uint8 HWC -> the quantised RGB NCHW tensors of the _pt functions
     x, y = (cast("Tensor", t).unsqueeze(0) for t in img2tensor([img, img2]))
-    return _net_metric_pt(name, x, y, device).item()
+    return _net_metric_pt(key, x, y, device).item()
 
 
 def calculate_dists(
@@ -415,11 +439,14 @@ def calculate_dists(
         float: DISTS result.
 
     """
-    return _calculate_net_metric("dists", img, img2, device)
+    return _calculate_net_metric(("dists",), img, img2, device)
 
 
 def calculate_topiq(
-    img: np.ndarray, img2: np.ndarray, device: torch.device | str | None = None
+    img: np.ndarray,
+    img2: np.ndarray,
+    device: torch.device | str | None = None,
+    dataset: str = "kadid",
 ) -> float:
     """Calculate the full-reference TOPIQ metric (higher is better).
 
@@ -428,10 +455,21 @@ def calculate_topiq(
         img (np.ndarray): Images with range [0, 255] with order 'HWC' (BGR).
         img2 (np.ndarray): Images with range [0, 255] with order 'HWC' (BGR).
         device: Device to run on. Default: cuda if available, else cpu.
+        dataset (str): the weights, "kadid" (default) or "pipal".
 
     Returns:
     -------
         float: TOPIQ result.
 
     """
-    return _calculate_net_metric("topiq", img, img2, device)
+    return _calculate_net_metric(("topiq", dataset), img, img2, device)
+
+
+def calculate_lpips(
+    img: np.ndarray,
+    img2: np.ndarray,
+    device: torch.device | str | None = None,
+    net: str = "alex",
+) -> float:
+    """LPIPS v0.1 (lower is better) of BGR uint8 HWC images; `net`: "alex" or "vgg"."""
+    return _calculate_net_metric(("lpips", net), img, img2, device)

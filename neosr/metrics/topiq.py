@@ -7,6 +7,14 @@ from torch.nn import functional as F
 from torchvision.models import resnet50
 
 
+# training set of the CFANet head -> (local copy next to this file, pyiqa's weights on its HF mirror)
+_HF = "https://huggingface.co/chaofengc/IQA-PyTorch-Weights/resolve/main/"
+WEIGHTS = {
+    "kadid": ("topiq_fr_weights.pth", _HF + "cfanet_fr_kadid_res50-2c4cc61d.pth"),
+    "pipal": ("topiq_fr_pipal_weights.pth", _HF + "cfanet_fr_pipal_res50-69bbe5ba.pth"),
+}
+
+
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
@@ -165,6 +173,7 @@ class topiq(nn.Module):
         default_mean=(0.485, 0.456, 0.406),
         default_std=(0.229, 0.224, 0.225),
         loss_weight=1.0,
+        dataset="kadid",
     ):
         super().__init__()
 
@@ -175,7 +184,9 @@ class topiq(nn.Module):
         feature_dim_list = [64, 256, 512, 1024, 2048]
 
         self.register_buffer(
-            "default_mean", torch.tensor(default_mean).view(1, 3, 1, 1), persistent=False
+            "default_mean",
+            torch.tensor(default_mean).view(1, 3, 1, 1),
+            persistent=False,
         )
         self.register_buffer(
             "default_std", torch.tensor(default_std).view(1, 3, 1, 1), persistent=False
@@ -261,11 +272,11 @@ class topiq(nn.Module):
         self._init_linear(self.attn_pool)
 
         # load topiq_fr weights: a local copy if present, else the torch hub cache
-        model_path = Path(__file__).parent / "topiq_fr_weights.pth"
+        local, url = WEIGHTS[dataset]
+        model_path = Path(__file__).parent / local
         if model_path.exists():
             checkpoint = torch.load(model_path, map_location="cpu", weights_only=True)
         else:
-            url = "https://huggingface.co/chaofengc/IQA-PyTorch-Weights/resolve/main/cfanet_fr_kadid_res50-2c4cc61d.pth"
             checkpoint = torch.hub.load_state_dict_from_url(
                 url, map_location="cpu", weights_only=True
             )

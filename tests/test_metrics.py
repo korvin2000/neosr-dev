@@ -163,7 +163,7 @@ class _FakeNet(torch.nn.Module):
 def test_metric_net_built_once_and_moved(monkeypatch, fresh_nets, name):
     built = []
     monkeypatch.setitem(
-        calculate._metric_builders, name, lambda: built.append(1) or _FakeNet()
+        calculate._metric_builders, name, lambda *_: built.append(1) or _FakeNet()
     )
     rng = np.random.default_rng(0)
     img = rng.integers(0, 256, (8, 8, 3), dtype=np.uint8)
@@ -171,7 +171,9 @@ def test_metric_net_built_once_and_moved(monkeypatch, fresh_nets, name):
     metric = getattr(calculate, f"calculate_{name}")
     first = metric(img, img2, device="cpu")
     second = metric(img, img2, device=torch.device("cpu"))
-    net = calculate._metric_nets[name]
+    # the cache key: the name and its weights variant
+    key = (name, "kadid") if name == "topiq" else (name,)
+    net = calculate._metric_nets[key]
     assert len(built) == 1
     assert not net.training
     assert not any(p.requires_grad for p in net.parameters())
@@ -184,7 +186,7 @@ def test_metric_net_built_once_and_moved(monkeypatch, fresh_nets, name):
         metric(img, img2, device="cuda:0")
     assert len(built) == 1  # moved between devices, never rebuilt
     release_metric_nets()
-    assert calculate._metric_nets == {name: net}  # parked, not dropped
+    assert calculate._metric_nets == {key: net}  # parked, not dropped
     assert net.w.device.type == "cpu"
     assert type(first) is float
     assert first == second
@@ -198,7 +200,7 @@ DEVICES = ["cpu"] + (["cuda:0"] if torch.cuda.is_available() else [])
 def test_build_metric_net_built_once_on_device(monkeypatch, fresh_nets, name, device):
     built, seen = [], []
     monkeypatch.setitem(
-        calculate._metric_builders, name, lambda: built.append(1) or _FakeNet()
+        calculate._metric_builders, name, lambda *_: built.append(1) or _FakeNet()
     )
     real_net = calculate._metric_net
     monkeypatch.setattr(
@@ -319,14 +321,14 @@ def test_ssim_negative_for_inverted_image_and_replaceable_as_best():
 def test_validation_parks_metric_nets_on_cpu(monkeypatch, fresh_nets, fail):
     built = []
     monkeypatch.setitem(
-        calculate._metric_builders, "dists", lambda: built.append(1) or _FakeNet()
+        calculate._metric_builders, "dists", lambda *_: built.append(1) or _FakeNet()
     )
     img = torch.zeros(1, 3, 8, 8)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def validate(*_):
         calculate.calculate_dists_pt(img, img, device=device)
-        assert calculate._metric_nets["dists"].w.device.type == device.type
+        assert calculate._metric_nets["dists",].w.device.type == device.type
         if fail:
             msg = "boom"
             raise RuntimeError(msg)
@@ -345,5 +347,5 @@ def test_validation_parks_metric_nets_on_cpu(monkeypatch, fresh_nets, fail):
                 base.validation(model, loader, 1, None)
         else:
             base.validation(model, loader, 1, None)
-        assert calculate._metric_nets["dists"].w.device.type == "cpu"
+        assert calculate._metric_nets["dists",].w.device.type == "cpu"
     assert len(built) == 1

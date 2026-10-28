@@ -224,16 +224,16 @@ def test_metric_nets_survive_events_and_move_back(monkeypatch):
         def forward(self, x, y):
             return (x - y).abs().mean() * self.w
 
-    monkeypatch.setitem(calculate._metric_builders, "topiq", Net)
+    monkeypatch.setitem(calculate._metric_builders, "topiq", lambda _dataset: Net())
     dev = torch.device("cuda" if CUDA else "cpu")
     f = build_metric({"type": "calculate_topiq"}, dev)
     img = quantize(torch.rand(1, 1, 8, 8))  # gray: expanded to 3 channels
     for _ in range(2):
         v = f(img, img.flip(-1))
-        assert calculate._metric_nets["topiq"].w.device.type == dev.type
+        assert calculate._metric_nets["topiq", "kadid"].w.device.type == dev.type
         assert v.device.type == dev.type
         calculate.release_metric_nets()
-        assert calculate._metric_nets["topiq"].w.device.type == "cpu"
+        assert calculate._metric_nets["topiq", "kadid"].w.device.type == "cpu"
     assert built == [1]
 
 

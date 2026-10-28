@@ -17,6 +17,12 @@ METRICS = {
     "calculate_ssim": ("calculate", None),
     "calculate_dists": ("calculate", None),
     "calculate_topiq": ("calculate", None),
+    "calculate_lpips": ("calculate", None),
+}
+# keyword values checked when the metric is bound, not at the first validation
+CHOICES = {
+    "calculate_topiq": {"dataset": ("kadid", "pipal")},
+    "calculate_lpips": {"net": ("alex", "vgg")},
 }
 
 
@@ -41,4 +47,8 @@ def build_metric(
     except TypeError as err:
         msg = f"[{section}] {name}: {err}"
         raise ConfigError(msg) from err
+    for key, allowed in CHOICES.get(name, {}).items():
+        if key in kwargs and kwargs[key] not in allowed:
+            msg = f"[{section}] {name}: {key} must be one of {list(allowed)}, got {kwargs[key]!r}"
+            raise ConfigError(msg)
     return partial(fn, **kwargs, **extra)

@@ -35,6 +35,11 @@ val_freq = 1000
 #better = "lower"
 #[val.metrics.topiq]
 #type = "calculate_topiq"
+#dataset = "kadid" # or "pipal" (weights trained on SR/GAN outputs)
+#[val.metrics.lpips]
+#type = "calculate_lpips" # lower is better
+#net = "alex" # or "vgg"
+# judge checkpoints by a metric that is not a training loss here (TOPIQ, LPIPS; DISTS only without dists_opt)
 
 [path]
 #pretrain_network_g = 'experiments\pretrain_g.pth'

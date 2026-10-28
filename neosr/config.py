@@ -33,7 +33,7 @@ REQUIRED = ("name", "model_type", "scale", "network_g", "datasets")
 SCALES = frozenset({1, 2, 3, 4, 8})
 PHASES = frozenset({"train", "val", "test"})
 # val.metrics types where a lower value is better: the default of their `better` (M-14)
-METRIC_LOWER = frozenset({"calculate_dists"})
+METRIC_LOWER = frozenset({"calculate_dists", "calculate_lpips"})
 
 # OTF degradation keys: valid in [degradations] and, after the merge, in [datasets.train]
 _DEGRADATIONS: dict[str, Any] = {

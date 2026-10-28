@@ -397,8 +397,8 @@ def test_metric_net_reunites_a_net_split_by_a_failed_move(monkeypatch):
     net[1].to("meta")  # as if the move to the device ran out of memory after net[0]
     moves = []
     monkeypatch.setattr(net, "to", lambda d: moves.append(d) or net)
-    monkeypatch.setitem(_metric_nets, "split", net)
-    assert _metric_net("split", torch.device("cpu")) is net
+    monkeypatch.setitem(_metric_nets, ("split",), net)
+    assert _metric_net(("split",), torch.device("cpu")) is net
     assert moves == [torch.device("cpu")]
 
 

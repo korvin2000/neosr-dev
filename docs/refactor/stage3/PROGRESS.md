@@ -68,3 +68,24 @@ worktree `.venv` has no torch), each file in its own capped scope (`systemd-run 
   now replays (lr 0.5) instead of raising, `test_model` state test sets `nets` for its SF G.
 - Verified: test_s3_scheduler (25), test_phase_state, test_s2_trainer, test_resume, test_model, test_config,
   test_entry, test_ddp_gloo, test_phase, test_s2_review, test_stop: green.
+
+### A3 TOPIQ-FR weights, LPIPS
+- Done: `calculate_topiq(_pt)` takes `dataset = "kadid" | "pipal"` (default kadid unchanged; PIPAL weights
+  `cfanet_fr_pipal_res50-69bbe5ba.pth` on pyiqa's HF mirror, HEAD-checked 200; local override
+  `topiq_fr_pipal_weights.pth`); strict load as before. `calculate_lpips(_pt)` (`neosr/metrics/lpips.py`, LPIPS v0.1
+  rewritten from the reference): torchvision AlexNet (or VGG16) ImageNet features at the 5 ReLUs, official v0.1 lin
+  layers loaded strictly (`lin<k>.model.1.weight`), [0,1] -> [-1,1] -> ScalingLayer, unit-normalised channels,
+  spatial mean, summed; both images in one backbone pass; `METRIC_LOWER` (better = lower). Metric-net cache key is
+  `(name, *variant)`: one net per weights variant, built once, parked on the CPU as before. Variant values are checked
+  when the metric is bound (`metrics.CHOICES`), not at the first validation. 84 training templates gained commented
+  rows only (TOPIQ dataset, LPIPS, which metric judges: not a training loss); `options/aether/*` experiment configs
+  untouched.
+- Parity probe (scratchpad `probe/lpips_parity.py`, pyiqa's own `lpips_arch.py` from `/home/korvin/apps/IQA-PyTorch`,
+  imports stubbed): alex with the official weights max |diff| 1.5e-8 over 64x64, 97x131, batch 2; vgg 9.3e-10 with
+  shared random lin layers (the official vgg lin file is not cached; not downloaded).
+- Codex review: no scoring bug; fixed: the PIPAL strict-load test now forces the hub branch; download-free tests
+  (untrained backbones, both nets, odd sizes, batch 2, grayscale) against the algorithm spelled out per image;
+  per-layer temporaries freed before the next slice. Open: official VGG-lin parity, real PIPAL file load and 1080p
+  peak memory are unverified offline (GPU/owner).
+- Test changes: metric-cache tests use the tuple key and variant-taking builders (internal API changed).
+- Verified: test_s3_metrics (13), test_metrics, test_s2_metrics, test_s2_review, test_config, test_imports: green.
