@@ -630,3 +630,46 @@ def test_ddp_regularised_rpgan_keeps_ranks_in_sync(tmp_path):
     for n in r0["nets"]:
         for k, v in r0["nets"][n].items():
             assert torch.equal(v, r1["nets"][n][k]), (n, k)
+
+
+# ---- ST-01: scripts/term_grads.py -------------------------------------------------------------------
+
+
+def test_term_grads_reports_shares_and_leaves_the_model(tmp_path):
+    from scripts.term_grads import term_grads  # ruff: ignore[import-outside-top-level]
+
+    opt = model_opt(tmp_path, d=True)
+    opt["train"]["mse_opt"] = {"type": "MSELoss", "loss_weight": 0.5}
+    m = build_model_seeded(opt)
+    before = deepcopy(m.net_g.state_dict())
+    stats = term_grads(m, model_batches(3))
+    assert set(stats) == {"l_g_pix", "l_g_mse", "l_g_gan"}
+    assert sum(s["share"] for s in stats.values()) == pytest.approx(1.0)
+    assert all(-1 - 1e-6 <= s["cos"] <= 1 + 1e-6 for s in stats.values())
+    assert list(stats) == sorted(stats, key=lambda k: -stats[k]["share"])
+    for k, v in m.net_g.state_dict().items():
+        assert torch.equal(v, before[k]), k
+    assert (m.update, m.micro) == (0, 0)
+    assert all(not s for s in m.g.opt.state.values())
+    assert all(p.grad is None for p in m.net_g.parameters())
+
+    # one batch, by hand: the L1 term's gradient norm over G's trainable parameters
+    one = term_grads(m, model_batches(1))
+    m.feed_data(model_batches(1)[0])
+    loss = F.l1_loss(m.net_g(m.lq).clamp(1 / 255, 1), m.gt)
+    gs = torch.autograd.grad(loss, m.g.params)
+    norm = torch.cat([g.flatten() for g in gs]).norm()
+    assert one["l_g_pix"]["norm"] == pytest.approx(float(norm), rel=1e-5)
+
+
+def test_term_grads_skips_inactive_terms(tmp_path):
+    from scripts.term_grads import term_grads  # ruff: ignore[import-outside-top-level]
+
+    opt = model_opt(tmp_path, d=True)
+    opt["train"]["gan_opt"]["start_iter"] = 5
+    m = build_model_seeded(opt)
+    only = term_grads(m, model_batches(1))  # update 1: the GAN term is off
+    assert set(only) == {"l_g_pix"}
+    assert only["l_g_pix"]["share"] == pytest.approx(1.0)
+    assert only["l_g_pix"]["cos"] == pytest.approx(1.0)
+    assert set(term_grads(m, model_batches(1), it=6)) == {"l_g_pix", "l_g_gan"}

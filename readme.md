@@ -155,10 +155,18 @@ target = "lq"         # reference: "gt" (default) or "lq" = bicubic-upscaled lq 
   `fake_label_val`, `loss_weight` for the generator term) also adds the discriminator objective, which is
   unweighted. `wavelet_init = N` makes D see the stationary-wavelet high-frequency view from update N on, for both
   terms. The legacy pair `train.wavelet_guided = true` + `train.wavelet_init` maps to `gan_opt.wavelet_init`. D is
-  always in train mode, and the adversarial term reaches only the generator's parameters.
+  always in train mode, and the adversarial term reaches only the generator's parameters. Opt-in (defaults keep
+  the plain GAN): `start_iter = N` keeps both GAN terms off through update N, `ramp_iters = M` then raises the
+  generator term's weight linearly over M updates; `r1_gamma` / `r2_gamma` add the lazy R1 / R2 penalty
+  `gamma / 2 * |grad_x D(x)|^2` on real / fake inputs every `reg_every` (16) updates; `gan_type = "rpgan"` is the
+  relativistic pairing loss `softplus(D(fake) - D(real))` (no labels).
 - **Log keys** (means over the logging window): `l_g_<slot>`, `l_g_total`, `l_d_total`, `l_d_real`, `l_d_fake`,
-  `out_d_real`, `out_d_fake` (mean D logits), `grad_norm_g`/`grad_norm_d` (before clipping, successful updates
-  only), `skipped_g`/`skipped_d`.
+  `out_d_real`, `out_d_fake` (mean D logits), `out_d_margin` (rpgan), `l_d_reg` (R1/R2 updates), `grad_norm_g`/
+  `grad_norm_d` (before clipping, successful updates only), `skipped_g`/`skipped_d`.
+- **Which term drives the generator?** `python scripts/term_grads.py -opt config.toml [--net_g net_g.pth]
+  [--batches 4]` prints, for a few training batches of the config, each generator term's gradient norm, its share
+  of the summed squared norms and its cosine with the total gradient. It runs offline (no optimizer step, nothing
+  saved), so loss weights can be chosen from a measurement; e.g. at the shipped weights FDL(DINOv2) holds ~99 %.
 
 | loss | `type` |
 |---|---|
@@ -174,7 +182,7 @@ target = "lq"         # reference: "gt" (default) or "lq" = bicubic-upscaled lq 
 | [Consistency](https://github.com/neosr-project/neosr/wiki/Losses#consistency_opt-consistency_loss) (Oklab and CIE L*) | `consistency_loss` |
 | [KL divergence](https://pytorch.org/docs/stable/generated/torch.nn.KLDivLoss.html) | `kl_loss` |
 | [MS-SWD](https://github.com/real-hjq/MS-SWD) | `msswd_loss` |
-| [FDL](https://github.com/eezkni/FDL) (`model = "dinov2" \| "vgg" \| "resnet" \| "effnet"`) | `fdl_loss`; `fp32_backbone = false` runs the DINOv2 backbone in bf16 for ~2x faster FDL at 256 px patches (opt-in: gradients drift, see docs/refactor/analysis/perf.md) |
+| [FDL](https://github.com/eezkni/FDL) (`model = "dinov2" \| "vgg" \| "resnet" \| "effnet"`) | `fdl_loss`; `fp32_backbone = false` runs the DINOv2 backbone in bf16 for ~2x faster FDL at 256 px patches (opt-in: gradients drift, see docs/refactor/analysis/perf.md); `checkpoint = true` (DINOv2) recomputes the backbone activations in backward: same result, less memory, slower |
 
 ## training
 
