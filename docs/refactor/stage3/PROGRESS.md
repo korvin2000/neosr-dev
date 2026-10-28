@@ -169,3 +169,18 @@ worktree `.venv` has no torch), each file in its own capped scope (`systemd-run 
 - Test changes: `test_runtime` expects "high" (obsolete "medium").
 - Verified: test_s3_hygiene (6), test_runtime, test_s2_metrics, test_s2_exportfix, test_entry, test_qat,
   test_s2_review: green.
+
+### A9 training guide
+- Done: `docs/training_guide.md` (one page): the L1-only edit of a GAN template (checked: the edit validates for
+  realplksr; Codex: for all 84 templates), fidelity -> GAN as two runs (`pretrain_network_g`, same `[network_g]`,
+  fresh optimizer/EMA) or one run (`start_iter`/`ramp_iters` on any term), x2 -> x4 with `strict_load_g = false`,
+  fine-tuning lr, scheduler cooldown by resume, which metric judges what (never a training loss), `val.save_best`,
+  using exports, 1x NAFNet, bench.py. readme: the facts A1-A8 changed (exports, save_best, convert defaults and
+  `-optimize`, scheduler `nets`/replay, loss schedule keys, hinge, psnr_loss, LPIPS/TOPIQ-PIPAL, nafnet,
+  realplksr options, detect_anomaly, a Stage 3 changes bullet) plus two stale statements on the same convert line
+  (`-fp16` works; the export blocklist).
+- Codex review: 8 findings, fixed: the GAN-start comparison mixed 7k and 8k numbers (now the 8k set, stated as
+  unsettled); schedule keys do not reach loss constructors; branching from an export needs the same
+  `[network_g]` in training; `clamp = false` reproduces the unclamped objective, not the official recipe; the fresh
+  EMA starts after the first update; "DISTS only when no term uses dists_loss"; best exports also on ties;
+  the stale `-fp16`/blocklist line.

@@ -65,12 +65,14 @@ uv run python convert.py --input net_g_10000.pth -net esrgan -s 4   # ONNX expor
 
 - `train.py` and `test.py` take `-opt <file.toml>` (required), `--launcher none|pytorch|slurm` and `--debug`;
   `train.py` also `--auto_resume`. Any run name containing `debug` gets the debug frequencies and no TensorBoard.
-- `convert.py` builds `-net` at scale `-s` (default 4) on the CPU, loads `--input` (any layout accepted by
+- `convert.py` builds the network on the CPU from `--input`'s own `neosr` entry (exports since stage 3: type,
+  options, scale) or from `-net` and `-s` (default 4; explicit flags win), loads `--input` (any layout accepted by
   `pretrain_network_g`), exports `<output>_fp32.onnx` (`--output` defaults to the input path with `.onnx`) and
   checks it against PyTorch with ONNX Runtime (`-nocheck` skips). Options: `-opset` (17), `-static C H W`
   (default: dynamic batch/height/width), `-window` (sets `window_size`), `-optimize` (adds
-  `<output>_fp32_optimized.onnx`). `-fp16` is temporarily a no-op, `-fulloptimization` is disabled, and `craft`
-  and `ditn` cannot be exported. A QAT checkpoint exports as INT8 QDQ ONNX; `--strip-qat` instead writes its
+  `<output>_fp32_optimized.onnx`, verified like the main file; onnxruntime BASIC level: standard ONNX ops only),
+  `-fp16` (adds a verified `<output>_fp16.onnx`); `-fulloptimization` is disabled. Archs that cannot export, or
+  only with `-static`, are refused up front (`NO_ONNX`, `STATIC_ONLY` in `convert.py`). A QAT checkpoint exports as INT8 QDQ ONNX; `--strip-qat` instead writes its
   float deploy weights to `<input>_float.pth` (`--output` overrides), and with `--onnx` also their float ONNX
   ([docs/aether.md](docs/aether.md)).
 - Templates live in [options/](options/): `train_<arch>.toml` (paired data), `train_<arch>_otf.toml`
@@ -119,7 +121,7 @@ Configs are TOML (`.toml` only). Required keys: `name`, `model_type` (`image` or
 | `path.ignore_resume_networks` | `pretrain_network_*` for a new run |
 
 Top-level keys: `num_gpu` (`"auto"`), `manual_seed`, `deterministic` (default false), `use_amp`, `bfloat16`,
-`fast_matmul` (TF32 and reduced matmul precision), `fp16_accumulation` (default false: fp16 GEMMs accumulate in
+`fast_matmul` (TF32 matmuls), `detect_anomaly` (debugging only: autograd anomaly detection, much slower), `fp16_accumulation` (default false: fp16 GEMMs accumulate in
 fp16, faster, overflow above 65504; fp16 AMP only), `compile` and `compile_mode` (training only, not on Windows; `test.py` runs eager),
 `find_unused_parameters` (DDP),
 `input_size`/`in_chans` (log MACs if `torchprofile` is installed), `print_network`.
@@ -154,7 +156,8 @@ type = "consistency_loss"
 target = "lq"         # reference: "gt" (default) or "lq" = bicubic-upscaled lq (colour reference)
 ```
 
-- Keys besides `type`, `loss_weight` (alias `perceptual_weight`, not both) and `target` go to the loss
+- Keys besides `type`, `loss_weight` (alias `perceptual_weight`, not both), `target` and the schedule keys
+  (`start_iter`, `ramp_iters`, `end_iter`, below) go to the loss
   constructor. Two slots may use the same type. At least one generator term with a non-zero weight is required;
   log keys must be unique.
 - Legacy `train.match_lq_colors = true` still sets `target = "lq"` for `consistency_opt` and `msswd_opt`.
@@ -163,10 +166,14 @@ target = "lq"         # reference: "gt" (default) or "lq" = bicubic-upscaled lq 
   unweighted. `wavelet_init = N` makes D see the stationary-wavelet high-frequency view from update N on, for both
   terms. The legacy pair `train.wavelet_guided = true` + `train.wavelet_init` maps to `gan_opt.wavelet_init`. D is
   always in train mode, and the adversarial term reaches only the generator's parameters. Opt-in (defaults keep
-  the plain GAN): `start_iter = N` keeps both GAN terms off through update N, `ramp_iters = M` then raises the
-  generator term's weight linearly over M updates; `r1_gamma` / `r2_gamma` add the lazy R1 / R2 penalty
+  the plain GAN): the schedule keys below (D trains exactly while the generator term is on and is never ramped);
+  `r1_gamma` / `r2_gamma` add the lazy R1 / R2 penalty
   `gamma / 2 * |grad_x D(x)|^2` on real / fake inputs every `reg_every` (16) updates; `gan_type = "rpgan"` is the
-  relativistic pairing loss `softplus(D(fake) - D(real))` (no labels).
+  relativistic pairing loss `softplus(D(fake) - D(real))`, `gan_type = "hinge"` the hinge loss (D
+  `relu(1 - D(real)) + relu(1 + D(fake))`, G `-D(fake)`); neither takes labels.
+- **Schedule** (every term, opt-in): `start_iter = N` keeps the term off through update N, `ramp_iters = M` then
+  raises its weight linearly over M updates, `end_iter = K` turns it off after update K. Pure functions of the
+  update, so resume and DDP are exact.
 - **Log keys** (means over the logging window): `l_g_<slot>`, `l_g_total`, `l_d_total`, `l_d_real`, `l_d_fake`,
   `out_d_real`, `out_d_fake` (mean D logits), `out_d_margin` (rpgan), `l_d_reg` (R1/R2 updates), `grad_norm_g`/
   `grad_norm_d` (before clipping, successful updates only), `clipped_g`/`clipped_d` (share of clipped updates),
@@ -188,6 +195,7 @@ target = "lq"         # reference: "gt" (default) or "lq" = bicubic-upscaled lq 
 | [LDL](https://github.com/csjliang/LDL) | `ldl_loss` |
 | [Focal Frequency](https://github.com/EndlessSora/focal-frequency-loss) | `ff_loss` |
 | [DISTS](https://github.com/dingkeyan93/DISTS) | `dists_loss` |
+| PSNR (`10 log10(MSE)` per image, `reduction = "mean" \| "sum"`) | `psnr_loss` |
 | [Consistency](https://github.com/neosr-project/neosr/wiki/Losses#consistency_opt-consistency_loss) (Oklab and CIE L*) | `consistency_loss` |
 | [KL divergence](https://pytorch.org/docs/stable/generated/torch.nn.KLDivLoss.html) | `kl_loss` |
 | [MS-SWD](https://github.com/real-hjq/MS-SWD) | `msswd_loss` |
@@ -223,7 +231,8 @@ target = "lq"         # reference: "gt" (default) or "lq" = bicubic-upscaled lq 
   linearly over the first N updates for every optimizer (a trainer `LinearLR` for the plain ones, before the
   configured scheduler; the schedule-free ones count their applied steps); the logged lr includes it. With a
   schedule-free optimizer and no EMA, validation and exports use the evaluation (x) weights; training resumes
-  from the training weights. `[train.scheduler]` (`multisteplr` or `cosineannealing`) applies to every optimizer.
+  from the training weights. `[train.scheduler]` (`multisteplr` or `cosineannealing`) drives the optimizers in
+  `nets = ["g", "d"]`; without `nets`, every optimizer that is not schedule-free (logged).
   Schedule-free `adan_sf` is Schedule-Free AdamW with Adan's direction: `y` and `z` take the same step
   `lr * min(t / warmup_steps, 1) * sqrt(1-b3^t)` along `(g + b2/(1-b2^t) v) / (sqrt(n) + eps) + weight_decay * y`,
   where `v` is the EMA of the gradient difference
@@ -245,7 +254,8 @@ Files under `experiments/<name>/`:
 
 | file | content |
 |---|---|
-| `models/net_g_<u>.pth`, `models/net_d_<u>.pth` | `{"params": state_dict}` at update `u`; `net_g` is the EMA if enabled. Kept unless `logger.keep_exports` |
+| `models/net_g_<u>.pth`, `models/net_d_<u>.pth` | `{"params": state_dict, "neosr": {"network_g"/"network_d": options, "scale", "update"}}` at update `u` (spandrel reads `params`); `net_g` is the EMA if enabled. Kept unless `logger.keep_exports` |
+| `models/net_g_best_<dataset>_<metric>.pth` | with `val.save_best = "<metric>"`: the evaluated generator whenever that metric matched or improved its best, plus `neosr.metric` (value, direction); never pruned |
 | `models/net_*_latest.pth` | copies written at the end of training or on a Ctrl-C stop |
 | `training_states/<u>.state` | format 2: nets, EMA, optimizers, schedulers, scalers, counters, RNG, best metrics, run record; loads with `torch.load(weights_only=True)` |
 
@@ -256,8 +266,10 @@ Files under `experiments/<name>/`:
 - **Resume**: an explicit `path.resume_state` wins; else `--auto_resume` takes the newest `<u>.state` in
   `training_states/` (none: a fresh start). A fresh run renames an existing run folder to
   `<name>_archived_<time>`; a resume never does. Resume is strict: a changed set of networks, optimizer type or
-  schedule-free mode, trainable parameter list or scheduler list is a configuration error ("use
-  pretrain_network_* for a new run"), and so is a changed optimizer state version. Other differences in the
+  schedule-free mode or trainable parameter list is a configuration error ("use
+  pretrain_network_* for a new run"), and so is a changed optimizer state version. A changed scheduler
+  configuration (also an added or removed scheduler) is rebuilt from the config and replayed to the saved update,
+  with a warning (a cooldown can start from any checkpoint); an unchanged one is restored exactly. Other differences in the
   run record (network options, AMP, EMA, world size, optimizers, scheduler, loss sections, clamp, clip,
   `ema_power`, accumulation, batch and patch size, QAT keys) are warnings. The optimizer hyper-parameters come
   from the state; each one that differs from the config is reported (`restored lr 0.001 from the state (config
@@ -266,7 +278,9 @@ Files under `experiments/<name>/`:
   ranks start fresh streams); data order, augmentations and the OTF pool restart.
 - **Pretrained weights**: `path.pretrain_network_g`/`_d` (ignored while resuming), `param_key_g`/`_d` (default:
   `params_ema`, `params-ema`, `params`, or a bare state dict), `strict_load_g`/`_d` (default true; false skips
-  shape mismatches and logs missing and unexpected keys). Pre-refactor `net_g_*.pth` files load this way;
+  shape mismatches and logs one summary: the loaded share and up to 10 skipped, missing and unexpected keys).
+  `.safetensors` files load with the optional `safetensors` package; `esrgan` also loads the original community
+  `model.N` layout. Pre-refactor `net_g_*.pth` files load this way;
   pre-refactor `.state` files cannot be resumed, and a `.state` is not accepted as a pretrain.
 - **Ctrl-C**: the first one stops at the next update boundary, saves state, exports and `*_latest`, and exits 0
   without the final validation. A second one exits 130 at once. Under DDP all ranks stop together, one update
@@ -281,12 +295,17 @@ tiles are stitched on the CPU) and `suffix` (inference file name suffix, default
 
 ```toml
 [val.metrics.psnr]
-type = "calculate_psnr"   # calculate_psnr, calculate_ssim (crop_border, test_y_channel), calculate_dists, calculate_topiq
+type = "calculate_psnr"   # calculate_psnr, calculate_ssim (crop_border, test_y_channel), calculate_dists,
+                          # calculate_topiq (dataset = "kadid" | "pipal"), calculate_lpips (net = "alex" | "vgg")
 [val.metrics.dists]
 type = "calculate_dists"
-better = "lower"          # default "higher" ("lower" for calculate_dists); best-value tracking (a resumed best
-                          # tracked the other way starts over, with a warning)
+better = "lower"          # default "higher" ("lower" for calculate_dists, calculate_lpips); best-value tracking
+                          # (a resumed best tracked the other way starts over, with a warning)
 ```
+
+`val.save_best = "<metric key>"` exports the evaluated generator when that metric matches or improves its best
+(see checkpoints).
+Judge GAN runs by a metric that is not one of their training losses ([docs/training_guide.md](docs/training_guide.md)).
 
 Validation runs on rank 0 with the EMA (or evaluation) weights and leaves the training RNG streams untouched.
 `single` datasets skip the metrics. `test.py` writes `experiments/results/<name>/<dataset>/<image>_<suffix>.png`.
@@ -390,9 +409,10 @@ suggestion. `tests/test_hygiene.py` rejects `_REGISTRY` under `neosr/`.
 | [RGT](https://github.com/zhengchen1999/RGT) | `rgt`, `rgt_s` | 2023 | Medium heavy / Medium |
 | [ATD](https://github.com/LabShuHangGU/Adaptive-Token-Dictionary) | `atd`, `atd_light` | 2024 | Heavy / Heavy |
 | [PLKSR](https://github.com/dslisleedh/PLKSR) | `plksr`, `plksr_tiny` | 2023 | Light / Light |
-| [RealPLKSR](https://github.com/dslisleedh/PLKSR/issues/4) | `realplksr`, `realplksr_s`, `realplksr_l` | 2023 | Medium / Medium / Medium heavy |
+| [RealPLKSR](https://github.com/dslisleedh/PLKSR/issues/4) (opt-in `layer_norm = true`, `icnr = true`) | `realplksr`, `realplksr_s`, `realplksr_l` | 2023 | Medium / Medium / Medium heavy |
 | [DRCT](https://github.com/ming053l/DRCT) | `drct`, `drct_l`, `drct_xl`, `drct_s` | 2024 | Heavy / Ultra heavy / Ultra heavy / Heavy |
 | [MSDAN](https://github.com/Supereeeee/MSDAN) | `msdan` | 2024 | Medium heavy |
+| [NAFNet](https://github.com/megvii-research/NAFNet) (1x restoration, `scale = 1`) | `nafnet`, `nafnet_l` | 2022 | Heavy / Ultra heavy |
 | [HiT-SRF](https://github.com/XiangZ-0/HiT-SR) | `hit_srf`, `hit_srf_medium`, `hit_srf_large` | 2024 | Medium heavy / Heavy / Heavy |
 | [HMA](https://github.com/korouuuuu/HMA) | `hma`, `hma_medium`, `hma_large` | 2024 | Medium heavy / Heavy / Heavy |
 | [ASID](https://github.com/saturnian77/ASID) | `asid`, `asid_d8` | 2024 | Medium / Medium heavy |
@@ -444,7 +464,7 @@ Ultra light).
 | datasets | `paired`, `otf`, `single` |
 | optimizers | [Adam](https://pytorch.org/docs/stable/generated/torch.optim.Adam.html) `adam`, [AdamW](https://pytorch.org/docs/stable/generated/torch.optim.AdamW.html) `adamw`, [NAdam](https://pytorch.org/docs/stable/generated/torch.optim.NAdam.html) `nadam`, [Adan](https://github.com/sail-sg/Adan) `adan`, [AdamW Schedule-Free](https://github.com/facebookresearch/schedule_free) `adamw_sf`, [Adan Schedule-Free](https://github.com/neosr-project/adan_schedule_free) `adan_sf` |
 | schedulers | `multisteplr`, `cosineannealing` |
-| metrics | PSNR `calculate_psnr`, SSIM `calculate_ssim`, [DISTS](https://github.com/dingkeyan93/DISTS) `calculate_dists`, [TOPIQ](https://github.com/chaofengc/IQA-PyTorch) `calculate_topiq` |
+| metrics | PSNR `calculate_psnr`, SSIM `calculate_ssim`, [DISTS](https://github.com/dingkeyan93/DISTS) `calculate_dists`, [TOPIQ](https://github.com/chaofengc/IQA-PyTorch) `calculate_topiq`, [LPIPS](https://github.com/richzhang/PerceptualSimilarity) `calculate_lpips` |
 | augmentations | flip `use_hflip`, rotation `use_rot`, [MixUp](https://arxiv.org/abs/1710.09412) `mixup`, [CutMix](https://arxiv.org/abs/1905.04899) `cutmix`, [ResizeMix](https://arxiv.org/abs/2012.11101) `resizemix`, [CutBlur](https://github.com/clovaai/cutblur/) `cutblur` |
 
 ## changes since the refactor
@@ -472,6 +492,11 @@ Ultra light).
   scaler grows every 200 updates (was 2000); `train.clamp` defaults to `"restore"` (`true` = the old hard clamp);
   new `train.grad_clip = <norm> | "spike"`,
   `warmup_steps` for every optimizer, `aug_multi_prob`, `logger.keep_exports`.
+- **Stage 3**: exports carry a `neosr` entry and `val.save_best`; `[train.scheduler]` leaves schedule-free
+  optimizers out unless listed in `nets`, and a changed scheduler resumes by replay; generic loss schedules,
+  hinge GAN, `psnr_loss`, LPIPS and TOPIQ-PIPAL, `nafnet`, realplksr `layer_norm`/`icnr`; ONNX exports fold
+  constants and `-optimize` is BASIC; `fast_matmul` sets "high"; `scripts/bench.py`;
+  [docs/training_guide.md](docs/training_guide.md).
 - **Configuration**: unknown keys warn instead of being silently ignored, removed keys are errors, and
   `match_lq_colors` became the per-loss `target = "lq"`.
 - **`blur_kernel_size`, `blur_kernel_size2`** (OTF) were removed: they were never read. Kernel sizes are sampled
