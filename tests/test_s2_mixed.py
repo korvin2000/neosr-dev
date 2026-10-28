@@ -580,3 +580,53 @@ def test_mfghmoe_checkpoint_grad_parity() -> None:
     a(x).square().mean().backward()
     b(x).square().mean().backward()
     _assert_grads_close(a, b, rtol=1e-5)
+
+
+# ---------------------------------------------------------------- MX-08/17 GRFormer
+
+
+def _old_grsa(self, x, mask=None):
+    # GRSA.forward before MX-08: explicit cosine-attention probabilities
+    import math
+
+    b_, n, c = x.shape
+    x = x.reshape(b_, n, 2, c // 2).permute(2, 0, 1, 3).contiguous()
+
+    def heads(t):
+        return t.permute(1, 2, 0, 3).flatten(2).reshape(b_, n, self.num_heads, -1).permute(0, 2, 1, 3)
+
+    k = heads(torch.stack((x[0] + self.k1(x[0]), x[1] + self.k2(x[1]))))
+    q = heads(torch.stack((x[0] + self.q1(x[0]), x[1] + self.q2(x[1]))))
+    v = heads(torch.stack((x[0] + self.v1(x[0]), x[1] + self.v2(x[1]))))
+    attn = F.normalize(q, dim=-1) @ F.normalize(k, dim=-1).transpose(-2, -1)
+    attn = attn * torch.clamp(self.logit_scale, max=math.log(100.0)).exp()
+    table = self.ESRPB_MLP(self.relative_position_bias_table).view(-1, self.num_heads)
+    rpb = table[self.relative_position_index.view(-1)].view(n, n, -1).permute(2, 0, 1)
+    attn = attn + 16 * torch.sigmoid(rpb).unsqueeze(0)
+    if mask is not None:
+        nw = mask.shape[0]
+        attn = attn.view(b_ // nw, nw, self.num_heads, n, n) + mask.unsqueeze(1).unsqueeze(0)
+        attn = attn.view(-1, self.num_heads, n, n)
+    x = (attn.softmax(-1) @ v).transpose(1, 2).reshape(b_, n, c)
+    x = x.reshape(b_, n, 2, c // 2).permute(2, 0, 1, 3)
+    return torch.stack((self.proj1(x[0]), self.proj2(x[1]))).permute(1, 2, 0, 3).reshape(b_, n, c)
+
+
+@pytest.mark.parametrize("size", [(64, 64), (32, 64)])  # buffer masks / masks rebuilt per forward
+def test_grformer_sdpa_parity_outputs_and_grads(monkeypatch, size) -> None:
+    from neosr.archs.grformer_arch import GRSA
+
+    kw = {"depths": (4,), "num_heads": (3,), "drop_path_rate": 0.0}
+    new = _build("grformer", **kw).train()
+    old = _build("grformer", **kw).train()
+    old.load_state_dict(new.state_dict())
+    x = torch.rand(2, 3, *size)
+    y = new(x)
+    with monkeypatch.context() as m:
+        m.setattr(GRSA, "forward", _old_grsa)
+        y_old = old(x)
+    torch.testing.assert_close(y, y_old, rtol=1e-4, atol=1e-5)
+    g = torch.randn_like(y)
+    (y * g).sum().backward()
+    (y_old * g).sum().backward()
+    _assert_grads_close(new, old)

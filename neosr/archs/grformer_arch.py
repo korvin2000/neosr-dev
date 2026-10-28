@@ -191,7 +191,6 @@ class GRSA(nn.Module):
             nn.Linear(dim // 2, dim // 2, bias=True),
         )
         self.proj_drop = nn.Dropout(proj_drop)
-        self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, x, mask=None):
         b_, n, c = x.shape
@@ -228,33 +227,27 @@ class GRSA(nn.Module):
             .contiguous()
         )
 
-        # cosine attention
-        attn = F.normalize(q, dim=-1) @ F.normalize(k, dim=-1).transpose(-2, -1)
-
-        logit_scale = torch.clamp(self.logit_scale, max=math.log(100.0)).exp()
-        attn = attn * logit_scale
-
         relative_position_bias_table = self.ESRPB_MLP(
             self.relative_position_bias_table
         ).view(-1, self.num_heads)
         relative_position_bias = relative_position_bias_table[
             self.relative_position_index.view(-1)
         ].view(n, n, -1)
-        relative_position_bias = relative_position_bias.permute(
-            2, 0, 1
-        ).contiguous()  # nH, Wh*Ww, Wh*Ww
-        relative_position_bias = 16 * torch.sigmoid(relative_position_bias)
-        attn = attn + relative_position_bias.unsqueeze(0)
+        bias = 16 * torch.sigmoid(relative_position_bias.permute(2, 0, 1))  # nH, N, N
 
-        if mask is not None:
-            nw = mask.shape[0]
-            attn = attn.view(b_ // nw, nw, self.num_heads, n, n) + mask.unsqueeze(
-                1
-            ).unsqueeze(0).to(attn.dtype)
-            attn = attn.view(-1, self.num_heads, n, n)
-        attn = self.softmax(attn)
-
-        x = (attn @ v).transpose(1, 2).reshape(b_, n, c)
+        # cosine attention softmax(cos(q, k) * logit_scale + bias [+ mask]) v as one SDPA call
+        # (no saved probabilities); q carries the per-head logit scale, so scale=1
+        logit_scale = torch.clamp(self.logit_scale, max=math.log(100.0)).exp()
+        q = (F.normalize(q, dim=-1) * logit_scale).to(v.dtype)
+        k = F.normalize(k, dim=-1)
+        if mask is None:
+            am = bias.unsqueeze(0).to(v.dtype)
+        else:  # (b, nw*heads, n, n) so the (nw, heads, n, n) mask broadcasts over the batch
+            nw, h = mask.shape[0], self.num_heads
+            q, k, v = (t.reshape(b_ // nw, nw * h, n, -1) for t in (q, k, v))
+            am = (bias.unsqueeze(0) + mask.unsqueeze(1)).reshape(1, nw * h, n, n).to(v.dtype)
+        x = F.scaled_dot_product_attention(q, k, v, am, scale=1.0)  # attn_drop: never applied
+        x = x.reshape(b_, self.num_heads, n, -1).transpose(1, 2).reshape(b_, n, c)
         x = x.reshape(b_, n, 2, c // 2).permute(2, 0, 1, 3).contiguous()
         return (
             torch.stack((self.proj1(x[0]), self.proj2(x[1])), dim=0)
@@ -375,15 +368,14 @@ class GRSAB(nn.Module):
             shifted_x.shape[1] * shifted_x.shape[2],
             shifted_x.shape[3],
         )
-        # W-MSA/SW-MSA (to be compatible for testing on images whose shapes are the multiple of window size
-        if self.img_size == x_size:
-            attn_windows = self.attn(
-                shifted_x, mask=self.attn_mask
-            )  # nw*b, window_size*window_size, c
+        # W-MSA/SW-MSA; an unshifted block's mask is all zeros, so it gets none
+        if self.shift_size[0] == 0:
+            mask = None
+        elif self.img_size == x_size:
+            mask = self.attn_mask
         else:
-            attn_windows = self.attn(
-                shifted_x, mask=self.calculate_mask(x_size, x.device)
-            )
+            mask = self.calculate_mask(x_size, x.device)
+        attn_windows = self.attn(shifted_x, mask=mask)  # nw*b, window_size*window_size, c
         attn_windows = window_reverse(attn_windows, self.window_size, h, w)
 
         # reverse cyclic shift
@@ -579,7 +571,8 @@ class grformer(nn.Module):
         max_window_size = max(self.window_size)
         mod_pad_h = (max_window_size - h % max_window_size) % max_window_size
         mod_pad_w = (max_window_size - w % max_window_size) % max_window_size
-        return F.pad(x, (0, mod_pad_w, 0, mod_pad_h), "reflect")
+        mode = "reflect" if mod_pad_h < h and mod_pad_w < w else "replicate"
+        return F.pad(x, (0, mod_pad_w, 0, mod_pad_h), mode)
 
     def forward(self, x):
         H, W = x.shape[2:]
