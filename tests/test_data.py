@@ -140,10 +140,10 @@ def test_folder_pairing_repeated_root_name(tmp_path, monkeypatch, rel):
 
 
 @pytest.mark.parametrize(
-    ("scale", "patch_size", "legacy", "crop"),
-    [(3, 64, False, 225), (3, 200, False, 633), (3, 64, True, 513), (3, 200, True, 600)],
+    ("scale", "patch_size", "tight", "crop"),
+    [(3, 64, True, 225), (3, 200, True, 633), (3, 64, False, 513), (3, 200, False, 600)],
 )
-def test_otf_item(data_root, scale, patch_size, legacy, crop):
+def test_otf_item(data_root, scale, patch_size, tight, crop):
     kernels = {
         "kernel_list": ["iso", "aniso"],
         "kernel_prob": [0.5, 0.5],
@@ -163,7 +163,7 @@ def test_otf_item(data_root, scale, patch_size, legacy, crop):
         "sinc_prob": 0.5,
         "sinc_prob2": 0.5,
         "final_sinc_prob": 0.5,
-        "legacy_canvas": legacy,
+        "tight_canvas": tight,
     })
     assert ds.crop_pad_size == crop
     item = ds[0]
@@ -296,16 +296,15 @@ def test_sampler_no_cuda_allocation():
 
 
 def test_otf_crop_size():
-    # D-02: GT patch + 32, rounded up to a multiple of scale
-    assert otf_crop_size(64, 4) == 288
-    assert otf_crop_size(256, 4) == 1056
-    assert otf_crop_size(64, 3) == 225
-    assert otf_crop_size(200, 3) == 633
-    # legacy_canvas: the old floor of 512
-    assert otf_crop_size(64, 4, legacy=True) == 512
-    assert otf_crop_size(256, 4, legacy=True) == 1024
-    assert otf_crop_size(64, 3, legacy=True) == 513
-    assert otf_crop_size(200, 3, legacy=True) == 600
+    assert otf_crop_size(64, 4) == 512
+    assert otf_crop_size(256, 4) == 1024
+    assert otf_crop_size(64, 3) == 513
+    assert otf_crop_size(200, 3) == 600
+    # D-02 tight_canvas: GT patch + 32, rounded up to a multiple of scale
+    assert otf_crop_size(64, 4, tight=True) == 288
+    assert otf_crop_size(256, 4, tight=True) == 1056
+    assert otf_crop_size(64, 3, tight=True) == 225
+    assert otf_crop_size(200, 3, tight=True) == 633
     with pytest.raises(ValueError, match="patch_size"):
         otf_crop_size(None, 4)  # type: ignore[arg-type]
 

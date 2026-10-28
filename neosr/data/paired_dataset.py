@@ -2,7 +2,6 @@ from typing import Any
 
 from torch import Tensor
 from torch.utils import data
-from torchvision.transforms.functional import normalize
 
 from neosr.data.data_util import (
     PathList,
@@ -10,6 +9,7 @@ from neosr.data.data_util import (
     paired_paths_from_lmdb,
     paired_paths_from_meta_info_file,
     read_img,
+    reject_normalization,
     to_float32,
     train_retry,
 )
@@ -49,8 +49,7 @@ class paired(data.Dataset):
         super().__init__()
         self.opt = opt
         self.file_client: FileClient | None = None
-        self.mean = opt.get("mean")
-        self.std = opt.get("std")
+        reject_normalization(opt)
         self.color = self.opt.get("color", None) != "y"
         self.gt_folder, self.lq_folder = opt["dataroot_gt"], opt["dataroot_lq"]
 
@@ -127,10 +126,5 @@ class paired(data.Dataset):
         img_gt, img_lq = img2tensor(
             [img_gt, img_lq], bgr2rgb=True, float32=True, color=self.color
         )
-
-        # normalize
-        if self.mean is not None or self.std is not None:
-            normalize(img_lq, self.mean, self.std, inplace=True)  # type: ignore[reportArgumentType]
-            normalize(img_gt, self.mean, self.std, inplace=True)  # type: ignore[reportArgumentType]
 
         return {"lq": img_lq, "gt": img_gt, "lq_path": lq_path, "gt_path": gt_path}

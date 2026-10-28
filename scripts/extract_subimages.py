@@ -14,6 +14,7 @@ high byte), at about 1.65x less decode time. `--crop 0` converts without tiling 
 
 import argparse
 import os
+from collections import Counter
 from functools import partial
 from multiprocessing import Pool
 from pathlib import Path
@@ -28,6 +29,15 @@ def starts(n: int, crop: int, step: int) -> list[int]:
     """Tile origins along one axis; a last tile is added flush with the border."""
     s = list(range(0, max(n - crop, 0) + 1, step))
     return s if s[-1] + crop >= n else [*s, n - crop]
+
+
+def check_stems(paths: list[str]) -> None:
+    """Outputs are named after the source stem: sources sharing one (a.png and a.jpg) would overwrite
+    each other's tiles, racing across workers, so they are refused before anything is written."""
+    stems = Counter(Path(p).stem for p in paths)
+    if dup := sorted(p for p in paths if stems[Path(p).stem] > 1):
+        msg = f"{len(dup)} sources share a file stem and would overwrite each other: {dup[:6]}"
+        raise ValueError(msg)
 
 
 def _write(dst: Path, img, level: int) -> None:
@@ -77,9 +87,10 @@ if __name__ == "__main__":
     )
     p.add_argument("--workers", type=int, default=os.process_cpu_count())
     a = p.parse_args()
+    paths = image_paths(a.input)
+    check_stems(paths)
     out = Path(a.output)
     out.mkdir(parents=True, exist_ok=False)  # never mix tiles of two runs
-    paths = image_paths(a.input)
     with Pool(a.workers) as pool:
         n = sum(
             pool.imap_unordered(

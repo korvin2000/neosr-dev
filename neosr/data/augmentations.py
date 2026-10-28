@@ -101,6 +101,7 @@ def resizemix(
     img_lq: Tensor,
     scope: tuple[float, float] = (0.2, 0.9),
     scale: int = 1,
+    antialias: bool = False,
 ) -> tuple[Tensor, Tensor]:
     r"""ResizeMix augmentation.
 
@@ -113,6 +114,8 @@ def resizemix(
             GT `scale` times the size of LQ. Modified in place.
         scope (float): The given min/max box size ratio.
         scale (int): Scale ratio between GT and LQ.
+        antialias (bool): Antialiased downscale (D-04, opt-in until an A/B). The box is always a
+            downscale; without antialias the targets alias (29.6 dB to the clean box at tao 0.2).
 
     """
     _check_sizes(img_gt, img_lq, scale)
@@ -122,12 +125,11 @@ def resizemix(
     s = scale
 
     idx = _perm(img_gt)
-    # always a downscale (the box is at most the image): antialias, or the targets alias
     gt_resized = F.interpolate(
-        img_gt[idx], ((y2 - y1) * s, (x2 - x1) * s), mode="bicubic", antialias=True
+        img_gt[idx], ((y2 - y1) * s, (x2 - x1) * s), mode="bicubic", antialias=antialias
     ).clamp(0, 1)
     lq_resized = F.interpolate(
-        img_lq[idx], (y2 - y1, x2 - x1), mode="bicubic", antialias=True
+        img_lq[idx], (y2 - y1, x2 - x1), mode="bicubic", antialias=antialias
     ).clamp(0, 1)
     img_gt[..., y1 * s : y2 * s, x1 * s : x2 * s] = gt_resized
     img_lq[..., y1:y2, x1:x2] = lq_resized
@@ -188,6 +190,7 @@ def apply_augment(
     augs: tuple[str, ...] = ("none", "mixup", "cutmix", "resizemix", "cutblur"),
     prob: tuple[float, ...] | None = (0.1, 0.3, 0.2, 0.7, 0.8),
     multi_prob: float = 0.3,
+    antialias: bool = False,
 ) -> tuple[Tensor, Tensor]:
     r"""Applies Augmentations. The inputs are never modified.
 
@@ -201,6 +204,7 @@ def apply_augment(
             disables it). Default None: uniform.
         multi_prob (float): Probability that to apply >1 augmentations from the list.
             Default: 0.3
+        antialias (bool): Passed to resizemix.
     Return:
         img_gt, img_lq (Tensor)
 
@@ -239,6 +243,7 @@ def apply_augment(
     # the mixing functions write in place: never touch the caller's tensors
     img_gt, img_lq = img_gt.clone(), img_lq.clone()
     for aug in chosen:
-        img_gt, img_lq = _AUGMENTS[aug](img_gt, img_lq, scale=scale)
+        kw = {"antialias": antialias} if aug == "resizemix" else {}
+        img_gt, img_lq = _AUGMENTS[aug](img_gt, img_lq, scale=scale, **kw)
 
     return img_gt, img_lq

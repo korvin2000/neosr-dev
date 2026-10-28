@@ -16,6 +16,7 @@ from neosr.data.data_util import (
     lmdb_keys,
     meta_info_names,
     read_img,
+    reject_normalization,
     to_float32,
     train_retry,
 )
@@ -26,16 +27,17 @@ from neosr.utils import get_root_logger, img2tensor, tc
 from neosr.utils.rng import rng
 
 
-def otf_crop_size(patch_size: int, scale: int, *, legacy: bool = False) -> int:
-    """GT canvas the dataset crops/pads to and the Degrader works on: the GT patch plus a 32 px
-    margin (Real-ESRGAN, traiNNer), a multiple of scale so the degraded LQ (GT // scale) keeps the
-    exact scale ratio. `legacy` (`legacy_canvas = true`) restores the old floor of 512 px: 4x the
-    degradation work at LQ 64 x4, and on 256 px tiles 75% mirrored padding.
+def otf_crop_size(patch_size: int, scale: int, *, tight: bool = False) -> int:
+    """GT canvas the dataset crops/pads to and the Degrader works on, a multiple of scale so the
+    degraded LQ (GT // scale) keeps the exact scale ratio: at least 512 px and the GT patch, or with
+    `tight` (`tight_canvas = true`, opt-in until an A/B) the GT patch plus a 32 px margin
+    (Real-ESRGAN, traiNNer): 1/4 of the degradation work at LQ 64 x4, and on 256 px tiles 12%
+    instead of 75% mirrored padding.
     """
     if not (isinstance(patch_size, int) and isinstance(scale, int)) or min(patch_size, scale) < 1:
         msg = f"otf needs positive integer patch_size and scale, got {patch_size!r}, {scale!r}."
         raise ValueError(msg)
-    gt = max(512, patch_size * scale) if legacy else patch_size * scale + 32
+    gt = patch_size * scale + 32 if tight else max(512, patch_size * scale)
     return math.ceil(gt / scale) * scale
 
 
@@ -104,9 +106,10 @@ class otf(data.Dataset):
         self.crop_pad_size = otf_crop_size(
             opt.get("patch_size"),  # type: ignore[arg-type]
             opt.get("scale"),  # type: ignore[arg-type]
-            legacy=bool(opt.get("legacy_canvas")),
+            tight=bool(opt.get("tight_canvas")),
         )
         _check_kernel_keys(opt)
+        reject_normalization(opt)
 
         # sets flag for file_client.py
         if self.gt_folder.endswith("lmdb"):

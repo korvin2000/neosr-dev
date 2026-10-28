@@ -228,14 +228,14 @@ def test_bad_range_raises():
 
 def _ids(start, b=2):
     """Batch whose sample i carries the 8-bit value (start+i)/255 in both lq (b,3,2,2) and gt
-    (b,3,8,8), so the pool stores both as uint8 holding start+i (D-15)."""
+    (b,3,8,8), so a gt_8bit pool stores both as uint8 holding start+i (D-15)."""
     v = torch.arange(start, start + b, dtype=torch.float32).view(b, 1, 1, 1) / 255
     return v.expand(b, 3, 2, 2).clone(), v.expand(b, 3, 8, 8).clone()
 
 
 def test_pair_pool():
     torch.manual_seed(0)
-    pool = PairPool(7, 2, device="cpu")
+    pool = PairPool(7, 2, device="cpu", gt_8bit=True)
     assert pool.size == 6
     for i in range(3):  # filling: pass-through, stored as copies
         lq, gt = _ids(2 * i)

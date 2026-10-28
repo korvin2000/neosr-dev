@@ -10,6 +10,7 @@ from typing import Any
 import cv2
 import numpy as np
 
+from neosr.config import ConfigError
 from neosr.data.file_client import FileClient
 from neosr.utils import imfrombytes, scandir
 
@@ -87,6 +88,15 @@ def read_img(
         msg = f"Failed to decode image: {path}"
         raise OSError(msg)
     return img  # type: ignore[return-value]
+
+
+def reject_normalization(opt: dict[str, Any]) -> None:
+    """mean/std normalisation is not supported (D-12/F13): nothing inverts it, while every loss,
+    metric and saved image assumes [0, 1], and a half-specified pair crashed in `normalize`."""
+    for key in ("mean", "std"):
+        if opt.get(key) is not None:
+            msg = f"[datasets.{opt.get('phase')}] {key!r} is not supported (images stay in [0, 1]); remove it"
+            raise ConfigError(msg, key=key)
 
 
 def train_retry[T](load: Callable[[int], T], index: int, size: int, phase: str) -> T:

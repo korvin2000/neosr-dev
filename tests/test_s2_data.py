@@ -4,6 +4,8 @@ import logging
 import os
 import pickle
 import random
+import subprocess
+import sys
 from functools import partial
 from itertools import starmap
 from pathlib import Path
@@ -17,7 +19,8 @@ from torch.utils.data import DataLoader, Dataset
 from neosr.config import ConfigError
 from neosr.data import build_dataset, otf_dataset, paired_dataset, worker_init_fn
 from neosr.data import data_util as du
-from neosr.data.augmentations import resizemix
+from neosr.data.augmentations import apply_augment, resizemix
+from neosr.data.data_util import to_float32
 from neosr.data.otf_degradation import Degrader, PairPool
 from neosr.utils import misc
 from neosr.utils.rng import seed_rng
@@ -117,13 +120,14 @@ def test_paired_crop_before_float_is_exact(pairs, monkeypatch, phase, color):
     assert new[0]["gt"].shape[0] == (1 if color else 3)
 
 
-@pytest.mark.parametrize("patch", [24, 96])  # canvas 128 (crop) and 416 (pad) of a 200x296 GT
-def test_otf_crop_before_float_is_exact(pairs, monkeypatch, patch):
-    new = _items(build_dataset(_otf_opt(pairs, patch)))
+# tight canvas 128 (crop) and 416 (pad), legacy 512 (pad) of a 200x296 GT
+@pytest.mark.parametrize(("patch", "tight"), [(24, True), (96, True), (24, False)])
+def test_otf_crop_before_float_is_exact(pairs, monkeypatch, patch, tight):
+    new = _items(build_dataset(_otf_opt(pairs, patch, tight_canvas=tight)))
     _float_first(monkeypatch, otf_dataset)
-    old = _items(build_dataset(_otf_opt(pairs, patch)))
+    old = _items(build_dataset(_otf_opt(pairs, patch, tight_canvas=tight)))
     _assert_items_equal(new, old)
-    assert new[0]["gt"].shape == (3, *(otf_dataset.otf_crop_size(patch, 4),) * 2)
+    assert new[0]["gt"].shape == (3, *(otf_dataset.otf_crop_size(patch, 4, tight=tight),) * 2)
 
 
 # D-01: bounded training retry
@@ -171,10 +175,10 @@ def test_retry_bounded(pairs, warnings_seen):
     assert len(warnings_seen) == 10
 
 
-# D-02: canvas key
-def test_otf_legacy_canvas_key(pairs):
-    assert build_dataset(_otf_opt(pairs, 64)).crop_pad_size == 288
-    assert build_dataset(_otf_opt(pairs, 64, legacy_canvas=True)).crop_pad_size == 512
+# D-02: canvas key, opt-in until an A/B
+def test_otf_tight_canvas_key(pairs):
+    assert build_dataset(_otf_opt(pairs, 64)).crop_pad_size == 512
+    assert build_dataset(_otf_opt(pairs, 64, tight_canvas=True)).crop_pad_size == 288
 
 
 # D-09 / F15, D-10 / F16
@@ -269,16 +273,31 @@ def test_otf_kernel_keys_optional_ranges(pairs):
     build_dataset(opt)[0]
 
 
-# D-04: resizemix targets without aliasing
-def test_resizemix_antialiased():
+# D-04: resizemix targets without aliasing (opt-in)
+@pytest.mark.parametrize("antialias", [True, False])
+def test_resizemix_antialias(antialias):
     """Downscaled white noise: antialiasing averages it out (std 0.06 at 4x), plain bicubic
-    samples it (aliasing, std 0.21)."""
+    samples it (aliasing, std 0.21). The default keeps the old plain bicubic."""
     gt = torch.rand(2, 3, 64, 64, generator=torch.Generator().manual_seed(0))
+    kw = {"antialias": True} if antialias else {}
     seed_rng(0)
-    out, _ = resizemix(gt.clone(), gt[..., ::2, ::2].clone(), scope=(0.25, 0.25), scale=2)
+    out, _ = resizemix(gt.clone(), gt[..., ::2, ::2].clone(), scope=(0.25, 0.25), scale=2, **kw)
     box = (out != gt).all(1)
     assert box.sum(dim=(1, 2)).min() >= 8 * 8  # the 16x16 box, at most halved by the border
-    assert out[:, 0][box].std() < 0.1
+    assert (out[:, 0][box].std() < 0.1) == antialias
+
+
+def test_apply_augment_passes_antialias():
+    gt = torch.rand(2, 3, 32, 32, generator=torch.Generator().manual_seed(0))
+    lq = gt[..., ::2, ::2].clone()
+    outs = []
+    for aa in (False, True):
+        seed_rng(0)
+        outs.append(apply_augment(gt, lq, scale=2, augs=("resizemix",), prob=(1,), antialias=aa))
+    box = (outs[0][0] != gt).all(1)
+    assert box.any()
+    assert torch.equal(box, (outs[1][0] != gt).all(1))  # same box, different filter
+    assert not torch.equal(outs[0][0], outs[1][0])
 
 
 # D-05: no host sync in the noise path
@@ -334,8 +353,8 @@ def test_otf_dataset_gray_stays_rgb(pairs):
 class _OldPool:
     """PairPool at f3d2b7c (fp32 storage)."""
 
-    def __init__(self, size, batch):
-        self.batch, self.size, self.ptr = batch, size // batch * batch, 0
+    def __init__(self, size, batch, device="cpu"):
+        self.batch, self.size, self.ptr, self.device = batch, size // batch * batch, 0, device
         self.lq = self.gt = None
 
     def __call__(self, lq, gt):
@@ -348,33 +367,54 @@ class _OldPool:
             self.gt[self.ptr : self.ptr + b] = gt
             self.ptr += b
             return lq, gt
-        idx = torch.randperm(self.size)[:b]
+        idx = torch.randperm(self.size, device=self.device)[:b]
         out_lq, out_gt = self.lq[idx], self.gt[idx]
         self.lq[idx], self.gt[idx] = lq, gt
         return out_lq, out_gt
 
 
-@pytest.mark.parametrize("gt_exact", [True, False])
-def test_pair_pool_uint8_bit_exact(gt_exact):
-    gen = torch.Generator().manual_seed(0)
+DEVICES = ["cpu", *(["cuda"] if CUDA else [])]
+
+
+@pytest.mark.parametrize("dev", DEVICES)
+@pytest.mark.parametrize("gt_8bit", [True, False])
+def test_pair_pool_uint8_bit_exact(dev, gt_8bit):
+    """The producers as in training: lq quantised by the Degrader on the device, gt decoded by the
+    dataset (numpy to_float32) and copied over; luma gt is not 8 bit."""
+    gen = np.random.default_rng(0)
 
     def batch():
-        lq = (torch.rand(3, 3, 4, 4, generator=gen) * 255).round() / 255  # Degrader output
-        gt = torch.rand(3, 3, 16, 16, generator=gen)
-        return lq, (gt * 255).round() / 255 if gt_exact else gt
+        lq = torch.from_numpy(gen.random((3, 3, 4, 4), np.float32)).to(dev)
+        lq = torch.clamp((lq * 255.0).round(), 0, 255) / 255.0  # Degrader._quantize
+        if gt_8bit:
+            gt = torch.from_numpy(to_float32(gen.integers(0, 256, (3, 3, 16, 16), np.uint8)))
+        else:
+            gt = torch.from_numpy(gen.random((3, 1, 16, 16), np.float32))
+        return lq, gt.to(dev)
 
     batches = [batch() for _ in range(12)]
-    new, old = PairPool(9, 3, device="cpu"), _OldPool(9, 3)
+    new, old = PairPool(9, 3, device=dev, gt_8bit=gt_8bit), _OldPool(9, 3, dev)
     torch.manual_seed(1)
     got = list(starmap(new, batches))
     torch.manual_seed(1)
     ref = list(starmap(old, batches))
     assert new.lq.dtype == torch.uint8
-    assert new.gt.dtype == (torch.uint8 if gt_exact else torch.float32)
+    assert new.gt.dtype == (torch.uint8 if gt_8bit else torch.float32)
     for (a, b), (c, d) in zip(got, ref, strict=True):
         assert a.dtype == b.dtype == torch.float32
         assert torch.equal(a, c)
         assert torch.equal(b, d)
+
+
+def test_pair_pool_storage_not_from_values():
+    """A first gt batch that happens to be 8 bit (black luma) must not switch the pool to uint8:
+    later luma values such as 0.299 would come back rounded (0.298039)."""
+    pool = PairPool(2, 2, device="cpu")
+    lq, black, luma = torch.zeros(2, 1, 2, 2), torch.zeros(2, 1, 8, 8), torch.full((2, 1, 8, 8), 0.299)
+    pool(lq, black)  # fills the pool
+    assert torch.equal(pool(lq, luma)[1], black)  # swaps luma in
+    assert pool.gt.dtype == torch.float32
+    assert torch.equal(pool(lq, black)[1], luma)
 
 
 # D-17: thread hygiene in workers
@@ -464,6 +504,19 @@ def test_extract_subimages(tmp_path):
 
 
 # D-14: 16-bit sources stored as the 8 bit the loaders decode: bit-identical training input
+def test_extract_subimages_refuses_shared_stems(tmp_path):
+    """a.png and a.jpg would both write a_s001.png, ... (racing across workers)."""
+    (tmp_path / "src").mkdir()
+    for n in ("a.png", "a.jpg", "b.png"):
+        cv2.imwrite(str(tmp_path / "src" / n), _img(8, 8, 0))
+    run = subprocess.run([sys.executable, "-m", "scripts.extract_subimages", "-i", str(tmp_path / "src"),
+                          "-o", str(tmp_path / "out"), "--crop", "4", "--step", "4", "--workers", "1"],
+                         cwd=Path(__file__).parents[1], capture_output=True, text=True, check=False)  # fmt: skip
+    assert run.returncode != 0
+    assert "share a file stem" in run.stderr
+    assert not (tmp_path / "out").exists()
+
+
 def test_extract_subimages_bits8(pairs, tmp_path):
     from scripts import extract_subimages as ex  # noqa: PLC0415
 
@@ -495,3 +548,37 @@ def test_degrader_disables_cudnn_benchmark(monkeypatch):
     with pytest.raises(ValueError, match="kernel size"):
         d(torch.rand(1, 3, 96, 96), *ks[:2], torch.ones(1, 4, 4))  # restored on errors too
     assert torch.backends.cudnn.benchmark
+
+
+# D-12 / F13: dataset normalisation is refused, not silently applied or ignored
+@pytest.mark.parametrize("kind", ["paired", "single", "otf"])
+@pytest.mark.parametrize("norm", [{"mean": [0.5] * 3, "std": [0.5] * 3}, {"mean": [0.5] * 3}, {"std": [1.0] * 3}])
+def test_normalization_rejected(pairs, kind, norm):
+    opt = {"paired": lambda: _paired_opt(pairs, "train"), "otf": lambda: _otf_opt(pairs),
+           "single": lambda: {"type": "single", "phase": "test", "dataroot_lq": str(pairs / "LQ")}}[kind]()  # fmt: skip
+    with pytest.raises(ConfigError, match=next(iter(norm))):
+        build_dataset({**opt, **norm})
+
+
+@pytest.mark.parametrize("color", [None, "y"])
+def test_otf_feed_path(pairs, color):
+    """The OTF training feed as models/otf.py must run it (trainer handoff): dataset RGB items ->
+    Degrader.degrade -> crop -> pool -> a generator with the configured channel count."""
+    from torch.utils.data import default_collate  # noqa: PLC0415
+
+    from neosr.data.transforms import paired_random_crop  # noqa: PLC0415
+
+    ds = build_dataset(_otf_opt(pairs, 24, tight_canvas=True, color=color))
+    d = Degrader({**DEG, "color": color}, scale=4, device="cpu")
+    pool = PairPool(2, 2, device="cpu", gt_8bit=not d.gray)
+    c = 1 if color else 3
+    net = torch.nn.Sequential(torch.nn.Conv2d(c, 16 * c, 3, padding=1), torch.nn.PixelShuffle(4))
+    _seed(0)
+    for _ in range(2):  # fill, then swap
+        data = default_collate([ds[0], ds[1]])
+        gt, lq = d.degrade(data["gt"], data["kernel1"], data["kernel2"], data["sinc_kernel"])
+        gt, lq = paired_random_crop([gt], lq, 24, 4)
+        lq, gt = pool(lq, gt)
+        assert lq.shape == (2, c, 24, 24)
+        assert net(lq).shape == gt.shape == (2, c, 96, 96)
+    assert pool.gt.dtype == (torch.float32 if color else torch.uint8)
