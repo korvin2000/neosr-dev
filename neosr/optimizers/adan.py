@@ -122,18 +122,21 @@ def _multi_tensor_adan(
 _ADAN_STATE = ("exp_avg", "exp_avg_sq", "exp_avg_diff", "neg_pre_grad")
 
 
-def clip_grad_norm_(groups: list[dict[str, Any]], max_norm: float) -> None:
-    """Optional optimizer-level clip (0 = off; the neosr trainer already clips with train.grad_clip):
-    one _foreach_norm and one 0-dim coefficient for all groups; no .item(), so no host sync."""
-    if max_norm <= 0:
+def clip_grad_norm_(groups: list[dict[str, Any]]) -> None:
+    """Optional optimizer-level clip by each group's max_grad_norm (0 = off; the neosr trainer already
+    clips with train.grad_clip) against the norm over all groups: one _foreach_norm and a 0-dim
+    coefficient per group; no .item(), so no host sync. Per group, so a resumed group value applies."""
+    if all(g["max_grad_norm"] <= 0 for g in groups):
         return
-    grads = [p.grad for g in groups for p in g["params"] if p.grad is not None]
-    if not grads:
+    grads = [[p.grad for p in g["params"] if p.grad is not None] for g in groups]
+    if not any(grads):
         return
-    norm = torch.linalg.vector_norm(torch.stack(torch._foreach_norm(grads)))
-    torch._foreach_mul_(
-        grads, torch.clamp(max_norm / (norm + groups[-1]["eps"]), max=1.0)
+    norm = torch.linalg.vector_norm(
+        torch.stack(torch._foreach_norm([t for gs in grads for t in gs]))
     )
+    for g, gs in zip(groups, grads, strict=True):
+        if gs and (max_norm := g["max_grad_norm"]) > 0:
+            torch._foreach_mul_(gs, torch.clamp(max_norm / (norm + g["eps"]), max=1.0))
 
 
 def adan_group_step(
@@ -248,7 +251,7 @@ class adan(Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
-        clip_grad_norm_(self.param_groups, self.defaults["max_grad_norm"])
+        clip_grad_norm_(self.param_groups)
         for group in self.param_groups:
             # assume same step across group now to simplify things
             # per parameter step can be easily support

@@ -19,7 +19,7 @@ from neosr.archs import build_network
 from neosr.config import ConfigError, qat_schedule
 from neosr.data.augmentations import apply_augment
 from neosr.losses import build_losses
-from neosr.losses.base import Context
+from neosr.losses.base import Context, restoring_clamp
 from neosr.models.base import base, build_optimizer, build_schedulers
 from neosr.models.checkpoint import cpu_copy, load_weights, read_weights
 from neosr.models.phase import Ema, LossMeter, Phase, no_sync, trainable
@@ -30,30 +30,12 @@ from neosr.utils.img_util import quantize
 
 # optimizers without a native warmup_steps: the trainer prepends a LinearLR warmup (ST-10)
 LINEAR_WARMUP = frozenset({"adam", "adamw", "nadam", "adan"})
+# train-level keys build_losses folds into the terms (None when unset, as in older states)
+OBJECTIVE_KEYS = ("match_lq_colors", "wavelet_guided", "wavelet_init")
 QAT_KEYS = (
     "enable_qat", "qat_type", "fused_init", "quantize_residual", "calibration_iters",
     "qat_freeze_norm_iter", "qat_freeze_observers_iter",
 )  # fmt: skip
-
-
-class _RestoringClamp(torch.autograd.Function):
-    """clamp(x, 0, 1) whose backward keeps the gradient components that move an out-of-range raw
-    value back into range (T-01). The hard clamp zeroes every out-of-range pixel's gradient, so such
-    a pixel can never return; a straight-through clamp would let an outward gradient drift it."""
-
-    @staticmethod
-    def forward(ctx, x: Tensor) -> Tensor:
-        ctx.save_for_backward(x)
-        return x.clamp(0, 1)
-
-    @staticmethod
-    def backward(ctx, g: Tensor) -> Tensor:
-        (x,) = ctx.saved_tensors
-        return g.masked_fill(((x < 0) & (g > 0)) | ((x > 1) & (g < 0)), 0)
-
-
-def restoring_clamp(x: Tensor) -> Tensor:
-    return _RestoringClamp.apply(x)
 
 
 def step_lr(group: dict[str, Any]) -> float:
@@ -479,6 +461,26 @@ class image(base):
             )
         return infer_tiled(net, lq, self.scale, tile, self.tile_overlap)
 
+    @staticmethod
+    def _metric(f, q: Tensor, gt: Tensor, warned: list[bool]) -> Tensor:
+        """f(q, gt). A learned metric (DISTS/TOPIQ: bound to a `device`) moves full-size images to
+        that device whatever the inference tiling, so an OOM there computes this image's value on
+        the CPU after emptying the caching allocator (warned once per event); others propagate."""
+        if "device" not in getattr(f, "keywords", {}):
+            return f(q, gt)
+        try:
+            return f(q, gt)
+        except torch.OutOfMemoryError:
+            pass  # retried outside the handler: the traceback no longer pins the failed activations
+        torch.cuda.empty_cache()
+        if not warned[1]:
+            warned[1] = True
+            get_root_logger().warning(
+                f"a learned validation metric ran out of memory on a {tuple(q.shape[-2:])} image: "
+                "computing it on the CPU for such images (slower)"
+            )
+        return f(q, gt, device="cpu")
+
     def validate(self, loader, current_iter, tb_logger, save_img: bool) -> None:
         """Output contract of the old nondist_validation (T2 §6.3); rank 0, called by validation().
         Metrics run on the quantised images (the values tensor2img writes, MT-04) where the output is:
@@ -508,7 +510,7 @@ class image(base):
             dtype=torch.bfloat16 if self.opt.get("bfloat16") else torch.float16,
             enabled=amp and self.device.type == "cuda",
         )
-        warned = [False]
+        warned = [False, False]  # tiled-inference retry, learned metric on the CPU
         writer, pending = (
             ThreadPoolExecutor(1, thread_name_prefix="val_imwrite"),
             deque(),
@@ -540,7 +542,9 @@ class image(base):
                             gt = quantize(data["gt"].to(q.device, non_blocking=True))
                             for k, f in metrics.items():
                                 values[k].append(
-                                    f(q, gt).to(self.device, non_blocking=True)
+                                    self._metric(f, q, gt, warned).to(
+                                        self.device, non_blocking=True
+                                    )
                                 )
                             del gt
                     if save_img or save_tb:  # the one host copy: uint8 HWC RGB
@@ -624,7 +628,7 @@ class image(base):
                 "clamp": self.clamp,
                 "grad_clip": tr.get("grad_clip", True),
                 "ema_power": tr.get("ema_power"),
-                **{k: tr.get(k) for k in QAT_KEYS},
+                **{k: tr.get(k) for k in OBJECTIVE_KEYS + QAT_KEYS},
             },
             "data": {
                 "accumulate": self.accumulate,

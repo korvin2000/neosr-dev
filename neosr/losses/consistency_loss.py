@@ -4,7 +4,7 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
-from neosr.losses.base import Loss
+from neosr.losses.base import Loss, restoring_clamp
 from neosr.losses.basic_loss import chc_loss
 
 if TYPE_CHECKING:
@@ -167,8 +167,8 @@ class consistency_loss(Loss):
             float.
         """
 
-        # clamp
-        net_output = torch.clamp(net_output, 1 / 255, 1)
+        # bounded for the colour conversion; inward gradients pass so train.clamp = "restore" holds
+        net_output = restoring_clamp(net_output, 1 / 255, 1)
         gt = torch.clamp(gt, 1 / 255, 1)
 
         # luma

@@ -663,9 +663,9 @@ BAD = [
         (
             "batch_size = 2",
             "batch_size = 2\nmean = [0.5, 0.5, 0.5]\nstd = [0.5, 0.5, 0.5]",
-            "normalisation",
+            "'mean' is not supported",
         ),
-        ("batch_size = 2", "batch_size = 2\nmean = [0.0, 0.0, 0.0]", "normalisation"),
+        ("batch_size = 2", "batch_size = 2\nstd = [1.0, 1.0, 1.0]", "'std' is not supported"),
         ("batch_size = 2", "batch_size = 2\naug_multi_prob = 1.5", "aug_multi_prob"),
         ("total_iter = 10", "total_iter = 0", "logger.total_iter"),
         ("total_iter = 10", "total_iter = 10\nprint_freq = 0", "logger.print_freq"),
@@ -695,7 +695,7 @@ def test_validate_train_rejects(tmp_path, old, new, match):
 def test_validate_train_accepts(tmp_path, extra):
     body = BASE.replace(TRAIN, extra + TRAIN).replace(
         "batch_size = 2",
-        "batch_size = 2\nnum_worker_per_gpu = 'auto'\nmean = [0, 0, 0]\nstd = [1, 1, 1]",
+        "batch_size = 2\nnum_worker_per_gpu = 'auto'",
     )
     validate_train(_cfg(tmp_path, body))
 

@@ -252,7 +252,9 @@ def window_sdpa(
         ab = ab + mask.unsqueeze(1).to(bias.dtype)
     ab = ab.expand(nw, nh, n, k.shape[2]).reshape(1, nw * nh, n, -1)
     ab = ab.to(q.dtype).contiguous()
-    if nw > 1:  # [B, nW*nH, ., .]: the folded mask broadcasts over the batch only
+    # [B, nW*nH, ., .]: the folded mask broadcasts over the batch only. Unconditional with a mask, so a
+    # trace taken at one window still folds (and runs at) several
+    if mask is not None:
         q, k, v = (t.reshape(b_ // nw, nw * nh, *t.shape[2:]) for t in (q, k, v))
     out = F.scaled_dot_product_attention(q, k, v, attn_mask=ab, dropout_p=dropout_p, scale=scale)
     out = out.reshape(b_, nh, n, d + pad)

@@ -237,6 +237,20 @@ def _ssim_kernel(device: torch.device) -> Tensor:
     return k
 
 
+def _ssim_channel(x: Tensor, y: Tensor, k: Tensor) -> Tensor:
+    """Per-image mean SSIM of one (n, h, w) channel."""
+    (n, h, w), c1, c2 = x.shape, (0.01 * 255) ** 2, (0.03 * 255) ** 2
+    x, y = x.double(), y.double()
+    stats = torch.stack((x, y, x * x, y * y, x * y), 1).view(n * 5, 1, h, w)
+    stats = F.conv2d(F.conv2d(stats, k), k.view(1, 1, 1, 11))
+    mu1, mu2, xx, yy, xy = stats.view(n, 5, h - 10, w - 10).unbind(1)
+    mu1_sq, mu2_sq, mu1_mu2 = mu1**2, mu2**2, mu1 * mu2
+    ssim_map = ((2 * mu1_mu2 + c1) * (2 * (xy - mu1_mu2) + c2)) / (
+        (mu1_sq + mu2_sq + c1) * ((xx - mu1_sq) + (yy - mu2_sq) + c2)
+    )
+    return ssim_map.mean((-2, -1))
+
+
 def calculate_ssim_pt(
     img: Tensor,
     img2: Tensor,
@@ -252,20 +266,10 @@ def calculate_ssim_pt(
         raise ValueError(msg)
     if test_y_channel:
         img, img2 = _y_pt(img), _y_pt(img2)
-    n, c, h, w = img.shape
     k = _ssim_kernel(img.device)
-    c1, c2 = (0.01 * 255) ** 2, (0.03 * 255) ** 2
-    ssims = []
-    for i in range(c):  # one channel at a time: the fp64 statistics are 5x the channel
-        x, y = img[:, i].double(), img2[:, i].double()
-        stats = torch.stack((x, y, x * x, y * y, x * y), 1).view(n * 5, 1, h, w)
-        stats = F.conv2d(F.conv2d(stats, k), k.view(1, 1, 1, 11))
-        mu1, mu2, xx, yy, xy = stats.view(n, 5, h - 10, w - 10).unbind(1)
-        mu1_sq, mu2_sq, mu1_mu2 = mu1**2, mu2**2, mu1 * mu2
-        ssim_map = ((2 * mu1_mu2 + c1) * (2 * (xy - mu1_mu2) + c2)) / (
-            (mu1_sq + mu2_sq + c1) * ((xx - mu1_sq) + (yy - mu2_sq) + c2)
-        )
-        ssims.append(ssim_map.mean((-2, -1)))
+    # one channel at a time (the fp64 statistics are 5x the channel), each in its own frame so the
+    # previous channel's maps are freed before the next allocates
+    ssims = [_ssim_channel(img[:, i], img2[:, i], k) for i in range(img.shape[1])]
     return torch.stack(ssims, -1).mean()  # per channel, then over channels
 
 
@@ -336,7 +340,8 @@ def _metric_net(name: str, device: torch.device) -> nn.Module:
     if net is None:
         net = _metric_builders[name]().eval().requires_grad_(False)
         _metric_nets[name] = net
-    if next(net.parameters()).device != device:
+    # every tensor: a move that ran out of memory midway leaves the net split across devices
+    if any(t.device != device for t in (*net.parameters(), *net.buffers())):
         net.to(device)
     return net
 

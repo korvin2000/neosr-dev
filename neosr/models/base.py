@@ -328,9 +328,12 @@ class base:
             )
         elif state["ema"] is not None:
             log.warning("saved EMA ignored: ema is disabled")
+        saved = _flat(state["run"])
         for key, (old, new) in dict_diff(state["run"], self.run_record()).items():
-            # a key absent from the saved record was recorded only since that state
-            if key.split(".")[0] in state["run"]:
+            # a key absent from the saved record was recorded only since that state; train/data
+            # hold the record's own keys, the other sections config sub-keys (a new one is a change)
+            sec = key.split(".")[0]
+            if key in saved or (sec in state["run"] and sec not in ("train", "data")):
                 log.warning(f"changed since {path.name}: {key}: {old!r} -> {new!r}")
         self.update, self.epoch = state["update"], state["epoch"]
         self.best_metric_results = state["best"]
