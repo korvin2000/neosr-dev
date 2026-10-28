@@ -6,7 +6,8 @@ Phase A landed through fa07061), then run the A/B on the owner's data and report
 the specs, numbers and the 20 tests), `stage3/r3gan/audit.md` sections 3, 6, 7 (reference facts, fixes), `stage3/r3gan/codex.md`
 (independent review). Owner rules as in `stage3/TASK_OPUS.md` (binding): fast, stable, reliable, compact; no automation or
 damping; explicit tables, no registries; losses read `Context`, no if-chains in the loop; defaults preserved (`bce` + metagan
-templates untouched); spandrel-compatible keys; exact resume; commit per verified item on `refactor/stabilize`, never push;
+templates untouched); spandrel-compatible keys; exact resume; commit per verified item on `refactor/stabilize` and push it
+(owner permission of 2026-10-28: run apps and tests, create files, commit, push, monitor system resources as the task needs);
 Codex reviews every diff (`Agent` with `subagent_type: codex:codex-rescue`, brief starts `--model gpt-6-astra --effort high`,
 "read-only: advise only, do not edit files", hand it the diff and ask what is wrong); log each item in `stage3/PROGRESS.md`.
 CPU tests: `.venv/bin/python -m pytest tests/<file> -q`, memory capped at 4 GB, one job at a time. GPU (RTX 4090, 24 GB):
