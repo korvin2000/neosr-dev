@@ -30,6 +30,8 @@ from neosr.utils.img_util import quantize
 
 # optimizers without a native warmup_steps: the trainer prepends a LinearLR warmup (ST-10)
 LINEAR_WARMUP = frozenset({"adam", "adamw", "nadam", "adan"})
+# train-level keys build_losses folds into the terms (None when unset, as in older states)
+OBJECTIVE_KEYS = ("match_lq_colors", "wavelet_guided", "wavelet_init")
 QAT_KEYS = (
     "enable_qat", "qat_type", "fused_init", "quantize_residual", "calibration_iters",
     "qat_freeze_norm_iter", "qat_freeze_observers_iter",
@@ -604,7 +606,7 @@ class image(base):
                 "clamp": self.clamp,
                 "grad_clip": tr.get("grad_clip", True),
                 "ema_power": tr.get("ema_power"),
-                **{k: tr.get(k) for k in QAT_KEYS},
+                **{k: tr.get(k) for k in OBJECTIVE_KEYS + QAT_KEYS},
             },
             "data": {
                 "accumulate": self.accumulate,

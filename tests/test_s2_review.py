@@ -1,5 +1,7 @@
 """Stage 2 review fixes (two Codex reviews of the merged branch): one regression test per finding."""
 
+import logging
+
 import pytest
 import torch
 
@@ -7,6 +9,8 @@ from neosr.losses.base import restoring_clamp
 from neosr.losses.consistency_loss import consistency_loss
 from neosr.optimizers import adamw_sf, adan, adan_sf
 from neosr.optimizers.adan import clip_grad_norm_
+from neosr.utils import get_root_logger
+from tests.test_model import batches, build, make_opt, run
 
 
 # ---------------------------------------------------------------------------- 1 consistency clamp
@@ -82,3 +86,18 @@ def test_adamw_sf_step_bumps_the_parameter_version(foreach):
     v = p._version
     opt.eval()
     assert p._version > v
+
+
+# ---------------------------------------------------------------------------- 4 run record
+def test_resume_warns_about_global_objective_keys(tmp_path, caplog, monkeypatch):
+    monkeypatch.setattr(get_root_logger(), "propagate", True)  # caplog listens on the root logger
+    m = build(make_opt(tmp_path))
+    run(m, batches(1))
+    m.save()
+    opt = make_opt(tmp_path)
+    opt["path"]["resume_state"] = tmp_path / "training_states" / "1.state"
+    opt["train"]["match_lq_colors"] = True
+    with caplog.at_level(logging.WARNING, logger="neosr"):
+        build(opt)
+    assert "train.match_lq_colors: None -> True" in caplog.text
+    assert "wavelet" not in caplog.text  # unset before and after: not a change
