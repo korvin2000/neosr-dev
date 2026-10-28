@@ -378,6 +378,10 @@ class upsampler(nn.Module):
         self.up_3 = nn.PixelShuffle(upscale_factor=3)
         self.GELU = nn.GELU()
         self.upscale_factor = upscale_factor
+        # the other scale's branch never runs: frozen for DDP, its keys stay (checkpoints load)
+        x2, x3 = (self.BSConv_2, self.BSConv1_2), (self.BSConv_3, self.BSConv1_3)
+        for m in x2 if upscale_factor == 3 else x3:
+            m.requires_grad_(False)
 
     def forward(self, x):
         if self.upscale_factor == 2:

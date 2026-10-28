@@ -13,7 +13,7 @@ class MeanShift(nn.Conv2d):
         with torch.no_grad():  # copy_ works across devices (default device may differ)
             self.weight.copy_(torch.eye(3).view(3, 3, 1, 1) / std.view(3, 1, 1, 1))
             self.bias.copy_(sign * rgb_range * torch.tensor(rgb_mean) / std)
-        self.requires_grad = False
+        self.requires_grad_(False)  # fixed colour transform (keys kept)
 
 
 def activation(act_type, inplace=True, neg_slope=0.05, n_prelu=1):

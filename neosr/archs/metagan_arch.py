@@ -52,7 +52,11 @@ class Attention(nn.Module):
         q, k, v = qkv.unbind(0)  # make torchscript happy (cannot use tensor as tuple)
 
         x = nn.functional.scaled_dot_product_attention(
-            q, k, v, scale=self.scale, dropout_p=self.dropout_p
+            q,
+            k,
+            v,
+            scale=self.scale,
+            dropout_p=self.dropout_p if self.training else 0.0,
         )
         x = x.transpose(1, 2).reshape(B, H, W, self.attention_dim)
         x = self.proj(x)

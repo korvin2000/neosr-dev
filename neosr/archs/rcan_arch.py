@@ -18,7 +18,7 @@ class MeanShift(nn.Conv2d):
         self.weight.data.div_(std.view(3, 1, 1, 1))
         self.bias.data = sign * 1.0 * torch.Tensor(rgb_mean)
         self.bias.data.div_(std)
-        self.requires_grad = False
+        self.requires_grad_(False)  # fixed colour transform (keys kept)
 
 
 class Upsampler(nn.Sequential):
