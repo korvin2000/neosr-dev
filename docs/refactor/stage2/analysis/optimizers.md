@@ -243,8 +243,9 @@ the bug):
 1. Reference trajectory: explicit `x`/`z` per-tensor implementation (as `sf_variants.SFAdanBase`) vs the
    foreach kernel, 300 steps with warmup 20 and wd 0.01 on random grads: `assert_close` on `y`, `z`, `x`.
 2. `b2 = 0` equals `adamw_sf(betas=(b1, b3))` bit-for-bit on the same trajectory.
-3. Step 1: `x_1 == y_1 == z_1`, and for a scalar `p = 1, g = +1` all three equal `1 - lr/(1 + eps)` (with
-   `bc3` folded: `lr * sqrt(1-b3) / (sqrt(1-b3) |g| + eps)`); eval moves downhill.
+3. Step 1: `x_1 == y_1 == z_1`, and for a scalar `p = 1, g = +1, wd 0` all three equal
+   `1 - eta_1 q_1 / (q_1 + eps)` with `eta_1 = lr * sched_1`, `q_1 = sqrt(1-b3)` (`bc3` folded into the
+   step); eval moves downhill.
 4. Zero gradient + wd: one step gives `(1 - lr*wd)` on `y`, `x`, `z`.
 5. Warmup: the step-1 `z` delta with `warmup_steps = 10` is 1/10 of warmup 0 (same assertion as today,
    against the preconditioned direction).
@@ -386,7 +387,9 @@ Recommendation for the first arm = *change only the recurrence*, keep every temp
 `betas (0.98, 0.92, 0.99)`, `wd 0.01`, `eps 1e-8`, `warmup 1600`; D `lr 1e-4`, `warmup 600`. Reasons:
 (i) a recurrence fix and an lr change together cannot be attributed; (ii) SF tolerates lr above AdamW's
 because `y` sits near the average `x` and only moves by `lr*(1-b1+b1 c)` per step (~2% of the `z` step
-at `b1 0.98`); (iii) the clip to 1.0 bounds the `z` step. Candidate second arms: `b2 = 0` (drop the
+at `b1 0.98`). (The clip to 1.0 does *not* bound the corrected `z` step: the adaptive normalisation makes
+each coordinate move about `gamma_t * sign(g)` whatever the gradient norm, so the clip only bounded the raw
+`z` step of the old recurrence.) Candidate second arms: `b2 = 0` (drop the
 difference term: the toys' best and 2 buffers), G `lr 5e-4`, `b1 0.9`. Not recommended: changing `eps`,
 `wd` or `weight_lr_power`.
 
@@ -432,6 +435,15 @@ A/B protocol (dataset `/home/korvin/apps/data`: GT 10607 PNG 256x256, LQ x4 64x6
 | F19 (optimizer part) | partial -> confirmed for optimizer hyper-parameters | Saved groups override lr/betas/wd/warmup silently (torch `update_group`); the loss/accumulate/data part is outside this lane. |
 | analyze.md "168 sections use adan_sf" | confirmed | `grep` over `options/`: 168 `type = "adan_sf"`, all `schedule_free = true`, 167 with `(0.98, 0.92, 0.99)`. |
 | PLAN.md S.2 (warmup for plain optimizers) | not-checked | Out of scope; with O-01 the SF optimizers remain the only ones with warmup. |
+
+Codex verification of the §1.3 derivation (stage 2, before implementation): variant B confirmed as a sound
+schedule-free Adan; the §2 foreach sketch checked line by line and correct (B keeps the numerator line
+`copy(g) + (b2/bc2) v`); `b2 = 0` reduces to SF-AdamW `(b1, b3)`; the eval/train formulas are unchanged.
+Binding precisions: `sched = 1` when `warmup = 0`; `c = 0` while the cumulative weight is 0; `neg_pre_grad`
+is seeded from `g_1` (`d_1 = 0`); any schedule-free `sf_version` other than exactly 2 (missing, 1, future)
+is refused; the §6 claim that the clip bounds the corrected `z` step was false and is withdrawn. The shipped
+kernel (`adan_sf.py`) is 16 foreach ops with `b2 > 0` (`v` by one lerp, `-g_t` by copy + neg, `U` written
+into the gradient buffers as `adamw_sf` does) and adamw_sf's 9 ops with `b2 = 0`.
 
 ## 9. Competitor material used
 
