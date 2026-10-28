@@ -836,6 +836,37 @@ def test_keep_exports_in_save_and_size_logged_once(tmp_path, caplog):
     assert caplog.text.count("one export set is") == 1
 
 
+# ---------------------------------------------------------------------------- host syncs, CUDA
+@CUDA
+@pytest.mark.parametrize("clip", [True, "spike"])
+def test_model_update_keeps_one_host_sync_per_phase(tmp_path, clip):
+    """Buffer snapshot/restore, masked meter, restoring clamp and the spike clip add no sync."""
+    opt = make_opt(tmp_path, d=True, ema=0.9)
+    opt |= {"use_amp": True, "bfloat16": True}
+    opt["network_d"] = {
+        "type": "patchgan",
+        "num_feat": 4,
+        "num_layers": 1,
+        "norm_type": "batch",
+    }
+    opt["train"] |= {"clamp": "restore", "grad_clip": clip}
+    cuda = Runtime(torch.device("cuda", 0), 0, 1, 0, False)
+    m = build(opt, rt=cuda)
+    data = [{k: v.cuda() for k, v in b.items()} for b in batches(4)]
+    run(m, data[:3])
+    torch.cuda.synchronize()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        torch.cuda.set_sync_debug_mode("warn")
+        try:
+            assert run(m, data[3:]) == [True]
+        finally:
+            torch.cuda.set_sync_debug_mode(0)
+    syncs = [w for w in caught if "called a synchronizing" in str(w.message)]
+    assert len(syncs) == 2  # Phase.step's isfinite, G and D
+    assert m.g.skipped == m.d.skipped == 0
+
+
 # ---------------------------------------------------------------------------- end to end, CPU
 def test_short_run_with_every_new_mode(tmp_path):
     opt = make_opt(
