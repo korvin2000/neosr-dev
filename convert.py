@@ -472,7 +472,7 @@ def to_onnx(args: argparse.Namespace, model: nn.Module | None = None) -> None:
             output_fp32,
             export_params=True,
             opset_version=args.opset,
-            do_constant_folding=qat,  # QAT: Q/DQ scale/zero point become initializers
+            do_constant_folding=True,  # verified at every export shape; QAT: Q/DQ initializers
             dynamo=False,  # the TorchScript exporter: torch>=2.9 defaults to dynamo (needs onnxscript)
             **names,  # type: ignore[arg-type]
         )
@@ -493,15 +493,18 @@ def to_onnx(args: argparse.Namespace, model: nn.Module | None = None) -> None:
         print("-------- Running ONNX optimization...")
         output_optimized = filename + "_fp32_optimized" + extension
         session_opt = onnxruntime.SessionOptions()
-        # ENABLE_ALL can cause compatibility issues, leaving EXTENDED as default
+        # BASIC: rewrites into standard ONNX ops only; EXTENDED and ALL fuse into com.microsoft
+        # contrib ops that only onnxruntime runs
         session_opt.graph_optimization_level = (
-            onnxruntime.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
+            onnxruntime.GraphOptimizationLevel.ORT_ENABLE_BASIC
         )
         session_opt.optimized_model_filepath = output_optimized
         # save
         onnxruntime.InferenceSession(output_fp32, session_opt)
-        # verify
+        # verify: the rewritten graph as the original one
         onnx.checker.check_model(onnx.load(output_optimized))
+        if args.nocheck is False:
+            (verify_qat if qat else assert_verify)(args, output_optimized, model)
         print(f"-------- Model successfully optimized. Saved at: {output_optimized}")
 
     if args.fp16:  # from the portable fp32 graph, not the ORT-optimized one

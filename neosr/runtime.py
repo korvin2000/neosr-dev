@@ -104,10 +104,16 @@ def setup_runtime(cfg: dict[str, Any], *, launcher: str = "none") -> Runtime:
     torch.use_deterministic_algorithms(deterministic, warn_only=True)
     torch.utils.deterministic.fill_uninitialized_memory = deterministic  # type: ignore[attr-defined]
     if cfg.get("fast_matmul"):
-        # "medium" already enables TF32 matmul; also setting the legacy allow_tf32 flag makes
+        # "high" = TF32 fp32 matmuls (CUDA; MKLDNN where the CPU has TF32); "medium" is the same on
+        # CUDA but runs MKLDNN fp32 matmuls in bf16; also setting the legacy cuda.matmul.allow_tf32 flag makes
         # get_float32_matmul_precision() raise (mixed APIs, torch 2.9), which breaks inductor
-        torch.set_float32_matmul_precision("medium")
+        torch.set_float32_matmul_precision("high")
         torch.backends.cudnn.allow_tf32 = True
+    # debugging only: names the backward op that produced a NaN, several times slower; unset leaves
+    # the process setting alone
+    if cfg.get("detect_anomaly"):
+        torch.autograd.set_detect_anomaly(True)
+        logger.warning("detect_anomaly = true: autograd anomaly detection, training is much slower")
     # fp16 GEMMs accumulating in fp16 (overflow above 65504): an explicit opt-in (ST-09)
     torch.backends.cuda.matmul.allow_fp16_accumulation = bool(
         cfg.get("fp16_accumulation")

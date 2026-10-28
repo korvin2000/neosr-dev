@@ -76,6 +76,7 @@ SCHEMA: dict[str, dict[str, Any]] = {
         "use_amp": bool,
         "bfloat16": bool,
         "fast_matmul": bool,
+        "detect_anomaly": bool,
         "fp16_accumulation": bool,
         "compile": bool,
         "compile_mode": str,

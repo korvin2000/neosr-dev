@@ -114,7 +114,12 @@ def convert_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Enable half-precision. (default: false)",
     )
-    add("-optimize", "--optimize", action="store_true", help="Run ONNX optimizations.")
+    add(
+        "-optimize",
+        "--optimize",
+        action="store_true",
+        help="Also write an onnxruntime-optimized graph (BASIC level: standard ONNX ops only).",
+    )
     add(
         "-fulloptimization",
         "--fulloptimization",

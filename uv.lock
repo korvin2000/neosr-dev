@@ -207,7 +207,6 @@ dependencies = [
     { name = "onnx", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { name = "onnxruntime-gpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { name = "opencv-python-headless", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
-    { name = "pytorch-optimizer", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { name = "pywavelets", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { name = "scipy", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { name = "tb-nightly", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
@@ -226,7 +225,6 @@ requires-dist = [
     { name = "onnx", specifier = ">=1.18.0" },
     { name = "onnxruntime-gpu", specifier = ">=1.22.0" },
     { name = "opencv-python-headless", specifier = ">=4.11.0.86" },
-    { name = "pytorch-optimizer", specifier = ">=2.16.0" },
     { name = "pywavelets", specifier = ">=1.8.0" },
     { name = "scipy", specifier = ">=1.15.3" },
     { name = "tb-nightly", specifier = ">=2.20.0a0" },
@@ -531,19 +529,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/0f/49/4cea918a08f02817aabae639e3d0ac046fef9f9180518a3ad394e22da148/pyreadline3-3.5.4.tar.gz", hash = "sha256:8d57d53039a1c75adba8e50dd3d992b28143480816187ea5efbd5c78e6c885b7", size = 99839, upload-time = "2024-09-19T02:40:10.062Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5a/dc/491b7661614ab97483abf2056be1deee4dc2490ecbf7bff9ab5cdbac86e1/pyreadline3-3.5.4-py3-none-any.whl", hash = "sha256:eaf8e6cc3c49bcccf145fc6067ba8643d1df34d604a1ec0eccbf7a18e6d3fae6", size = 83178, upload-time = "2024-09-19T02:40:08.598Z" },
-]
-
-[[package]]
-name = "pytorch-optimizer"
-version = "3.9.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
-    { name = "torch", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/aa/c8/fd10dda88a4aba4e57d33299f7b5585a06c5695d9ff31179ac63a92eb161/pytorch_optimizer-3.9.0.tar.gz", hash = "sha256:0f960ae31f2e1611ec467a87176b01fb9c76fde0e0510e58cca1e9e171a55915", size = 162235, upload-time = "2025-12-21T06:38:12.6Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ae/30/0713c42477391c7ca97704a6330a51279dc8a33d54c348ccb5a52a9bda29/pytorch_optimizer-3.9.0-py3-none-any.whl", hash = "sha256:4ec3415acdff2176e3d04d1538e5092cfcbf7cfc2e894cfa5666ed8b71167caf", size = 273445, upload-time = "2025-12-21T06:38:11.003Z" },
 ]
 
 [[package]]

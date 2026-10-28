@@ -153,3 +153,19 @@ worktree `.venv` has no torch), each file in its own capped scope (`systemd-run 
   full images (global pooling). For the guide (A9): official NAFNet trains unclamped, neosr's default restoring clamp
   differs (`train.clamp = false` to reproduce).
 - Verified: test_s3_nafnet (8), test_registry, test_imports, nafnet rows of test_archs (CUDA rows skip on CPU).
+
+### A8 hygiene
+- Done: ONNX constant folding on for every export (was `do_constant_folding=qat`); `-optimize` writes an
+  ORT_ENABLE_BASIC graph (standard ONNX ops, no com.microsoft contrib ops) and now verifies it like the main file;
+  `fast_matmul` sets "high" (TF32 on CUDA as before; "medium" ran MKLDNN fp32 matmuls in bf16); `detect_anomaly`
+  root key (debug, warned as slow; unset leaves the process setting alone); `pytorch-optimizer` dropped from
+  pyproject and uv.lock (no import anywhere; `uv lock --locked --offline` reports the hand-edited lock consistent).
+- Measured: folding removes shape subgraphs (realplksr_s 1197 -> 990 nodes, omnisr 7703 -> 7051; the TorchScript
+  exporter does not fold parameter-derived ops). CPU export sweep of all 75 exportable ARCHS rows (default options,
+  x2, nafnet x1, STATIC_ONLY static): 73 verify with folding on; `hma`/`hma_medium` fail the batch-2 dynamic check
+  identically with folding off (pre-existing; follow-up: STATIC_ONLY row or a fix).
+- Codex review: 4 findings, fixed: `set_detect_anomaly(False)` when the key was absent clobbered a caller's state;
+  the `-optimize` file had no numerical verification (pre-existing gap); comment precision (MKLDNN TF32, NaN only).
+- Test changes: `test_runtime` expects "high" (obsolete "medium").
+- Verified: test_s3_hygiene (6), test_runtime, test_s2_metrics, test_s2_exportfix, test_entry, test_qat,
+  test_s2_review: green.

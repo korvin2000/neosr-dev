@@ -90,7 +90,7 @@ def test_single_process() -> None:
     assert torch.are_deterministic_algorithms_enabled()
     assert os.environ["CUBLAS_WORKSPACE_CONFIG"] == ":4096:8"
     assert torch.backends.cuda.matmul.allow_tf32
-    assert torch.get_float32_matmul_precision() == "medium"  # no mixed-API RuntimeError
+    assert torch.get_float32_matmul_precision() == "high"  # no mixed-API RuntimeError
     assert random.random() == random.Random(7).random()
     with pytest.raises(dataclasses.FrozenInstanceError):
         rt.seed = 1  # type: ignore[misc]
