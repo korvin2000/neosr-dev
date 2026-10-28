@@ -22,10 +22,17 @@ class LayerNorm(nn.Module):
                 x, self.normalized_shape, self.weight, self.bias, self.eps
             )
         if self.data_format == "channels_first":
-            u = x.mean(1, keepdim=True)
-            s = (x - u).pow(2).mean(1, keepdim=True)
-            x = (x - u) / torch.sqrt(s + self.eps)
-            return self.weight[:, None, None] * x + self.bias[:, None, None]
+            # fused kernel on the NHWC view: the same formula (biased variance, eps inside the
+            # sqrt), fp32 statistics under autocast; the output keeps x's memory format
+            y = F.layer_norm(
+                x.permute(0, 2, 3, 1),
+                self.normalized_shape,
+                self.weight,
+                self.bias,
+                self.eps,
+            ).permute(0, 3, 1, 2)
+            cl = x.is_contiguous(memory_format=torch.channels_last)
+            return y if cl else y.contiguous()
         return None
 
 

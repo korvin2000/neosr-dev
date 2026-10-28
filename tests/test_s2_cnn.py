@@ -165,10 +165,11 @@ def _old_dysample_forward(m: DySample, x: torch.Tensor) -> torch.Tensor:
     return m.end_conv(out) if m.end_convolution else out
 
 
-def test_dysample_fp32_bit_identical() -> None:
-    m = DySample(16, 3, scale=2, groups=4)
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_dysample_bit_identical_in_full_precision(dtype) -> None:
+    m = DySample(16, 3, scale=2, groups=4).to(dtype)
     nn.init.normal_(m.scope.weight, std=0.5)  # non-trivial offsets
-    x = torch.randn(2, 16, 13, 9, requires_grad=True)
+    x = torch.randn(2, 16, 13, 9, dtype=dtype, requires_grad=True)
     out = m(x)
     ref = _old_dysample_forward(m, x)
     assert torch.equal(out, ref)
@@ -229,3 +230,46 @@ def test_dysample_has_no_host_tensor() -> None:
     finally:
         torch.tensor = real
     assert not calls
+
+
+# ---------------------------------------------------------------- channels-first LayerNorm (A-08)
+def _ln_manual(m, x):
+    u = x.mean(1, keepdim=True)
+    s = (x - u).pow(2).mean(1, keepdim=True)
+    return (
+        m.weight[:, None, None] * ((x - u) / torch.sqrt(s + m.eps))
+        + m.bias[:, None, None]
+    )
+
+
+LAYER_NORMS = {
+    "safmn": lambda c: safmn_arch.LayerNorm(c, data_format="channels_first"),
+    "man": lambda c: man_arch.LayerNorm(c, data_format="channels_first"),
+    "cfsr": lambda c: cfsr_arch.LayerNorm(c, data_format="channels_first"),
+    "eimn": lambda c: eimn_arch.LayerNorm(c, data_format="channels_first"),
+    "moesr": moesr_arch.LayerNorm,
+}
+
+
+@pytest.mark.parametrize("fmt", [torch.contiguous_format, torch.channels_last])
+@pytest.mark.parametrize("name", LAYER_NORMS)
+def test_channels_first_layer_norm(name: str, fmt) -> None:
+    """F.layer_norm on the NHWC view: the hand-written formula at fp32 rounding (outputs and
+    gradients), x's memory format kept; under bf16 autocast the mean is no longer rounded first."""
+    m = LAYER_NORMS[name](16)
+    with torch.no_grad():
+        m.weight.normal_(1, 0.2)
+        m.bias.normal_(0, 0.2)
+    x = (torch.randn(2, 16, 7, 9) + 3).to(memory_format=fmt).requires_grad_()
+    out, grads = _out_and_grads(m, x)
+    ref, ref_grads = _out_and_grads(m, x, lambda t: _ln_manual(m, t))
+    assert out.is_contiguous(memory_format=fmt)
+    torch.testing.assert_close(out, ref, rtol=1e-5, atol=1e-5)
+    for g, r in zip(grads, ref_grads, strict=True):
+        torch.testing.assert_close(g, r, rtol=1e-4, atol=1e-5)
+    xb = (torch.randn(2, 16, 8, 8) + 16 * torch.randn(2, 1, 8, 8)).to(torch.bfloat16)
+    exact = _ln_manual(copy.deepcopy(m).double(), xb.double())
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        new, old = m(xb), _ln_manual(m, xb)
+    err = [float((y.double() - exact).norm() / exact.norm()) for y in (new, old)]
+    assert err[0] < 4e-3 < err[1], err
