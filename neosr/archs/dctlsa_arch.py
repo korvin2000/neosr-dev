@@ -284,7 +284,8 @@ class BasicLayer(nn.Module):
         mod_pad_h = (self.window_size - h % self.window_size) % self.window_size
         mod_pad_w = (self.window_size - w % self.window_size) % self.window_size
         if mod_pad_h != 0 or mod_pad_w != 0:
-            x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), "reflect")
+            mode = "reflect" if mod_pad_h < h and mod_pad_w < w else "replicate"
+            x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), mode)
         return x, h, w
 
     def forward(self, x):

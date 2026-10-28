@@ -884,9 +884,11 @@ class dct(nn.Module):
         self.img_range = img_range
         if in_chans == 3:
             rgb_mean = (0.5, 0.5, 0.5)
-            self.mean = torch.Tensor(rgb_mean).view(1, 3, 1, 1)
+            mean = torch.Tensor(rgb_mean).view(1, 3, 1, 1)
         else:
-            self.mean = torch.zeros(1, 1, 1, 1)
+            mean = torch.zeros(1, 1, 1, 1)
+        # a buffer follows .to(device) (the attribute was copied to the device in forward)
+        self.register_buffer("mean", mean, persistent=False)
         self.upscale = upscale
         self.upsampler = upsampler
 
@@ -971,8 +973,8 @@ class dct(nn.Module):
         return rearrange(x, "b (h w) c -> b c h w", h=H, w=W).contiguous()
 
     def forward(self, x):
-        self.mean = self.mean.type_as(x)
-        x = (x - self.mean) * self.img_range
+        mean = self.mean.type_as(x)
+        x = (x - mean) * self.img_range
 
         if self.upsampler == "pixelshuffle":
             x = self.conv_first(x)
@@ -984,4 +986,4 @@ class dct(nn.Module):
             x = self.conv_after_body(self.forward_features(x)) + x
             x = self.upsample(x)
 
-        return x / self.img_range + self.mean
+        return x / self.img_range + mean

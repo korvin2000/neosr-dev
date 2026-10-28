@@ -464,9 +464,17 @@ def test_hma_checkpoint_grad_parity() -> None:
     _assert_grads_close(a, b, rtol=1e-5)
 
 
-def test_hma_pad_is_identity_on_aligned_inputs(monkeypatch) -> None:
-    net = _build("hma", **HMA_SMALL).eval()
-    x = torch.rand(1, 3, 40, 24)
+@pytest.mark.parametrize(
+    ("name", "kw", "size"),
+    [
+        ("hma", HMA_SMALL, (40, 24)),  # multiples of lcm(window 8, interval 4)
+        ("mfghmoe", {"embed_dim": 48, "depths": (2,), "num_heads": (6,)}, (32, 48)),
+        ("microsr_light", {}, (16, 24)),
+    ],
+)
+def test_pad_is_identity_on_aligned_inputs(monkeypatch, name: str, kw: dict, size) -> None:
+    net = _build(name, **kw).eval()
+    x = torch.rand(1, 3, *size)
     with torch.no_grad():
         y = net(x)
         monkeypatch.setattr(type(net), "check_image_size", lambda self, t: t)
@@ -691,3 +699,76 @@ def test_dct_constant_bias_skip_parity(monkeypatch, size) -> None:
     _assert_grads_close(new, old)
     frozen = {n for n, p in new.named_parameters() if not p.requires_grad}
     assert frozen and all(".pos." in n for n in frozen)
+
+
+
+# ---------------------------------------------------------------- MX-16 census over the lane's ARCHS rows
+
+LANE = (
+    "asid", "asid_d8", "catanet", "dct", "dctlsa", "ditn",
+    "esc", "esc_light", "esc_fp", "esc_large",
+    "grformer", "grformer_medium", "grformer_large",
+    "hma", "hma_medium", "hma_large",
+    "lmlt", "lmlt_tiny", "lmlt_large",
+    "mfghmoe", "microsr", "microsr_light", "omnisr",
+)  # fmt: skip
+HEAVY = {"esc_large", "grformer_medium", "grformer_large", "hma_medium", "hma_large"}
+
+
+@pytest.mark.parametrize("name", LANE)
+def test_strict_gradient_census_without_host_syncs(name: str) -> None:
+    # default constructor, train mode: every trainable parameter is reached (F02/F03/F11) and no
+    # Python-level device->host read happens in forward or backward
+    net = _build(name).train()
+    with _NoHostSync():
+        net(torch.rand(1, 3, 32, 32)).mean().backward()
+    frozen = []
+    for n, p in net.named_parameters():
+        if not p.requires_grad:
+            frozen.append(n)
+            continue
+        assert p.grad is not None, n
+        assert torch.isfinite(p.grad).all(), n
+    # the only structural exception: the constant pos_dim-1 DynamicPosBias (MX-09), frozen
+    assert all(".pos." in n for n in frozen), frozen
+
+
+@pytest.mark.parametrize("name", [n for n in LANE if n != "mfghmoe"])  # autocast lacks meta
+def test_no_cpu_tensor_copied_to_the_device(monkeypatch, name: str) -> None:
+    # on the meta device every CPU-built tensor that forward moves to the input's device shows
+    # up as a cpu->meta copy; on CUDA each is a pageable upload + stream sync (MX-01/06/10)
+    net = _build(name).to("meta")
+    copies = []
+    to, type_as = torch.Tensor.to, torch.Tensor.type_as
+
+    def spy(self, *a, **k):
+        out = to(self, *a, **k)
+        if self.device.type == "cpu" and out.device.type == "meta":
+            copies.append(tuple(out.shape))
+        return out
+
+    monkeypatch.setattr(torch.Tensor, "to", spy)
+    monkeypatch.setattr(
+        torch.Tensor,
+        "type_as",
+        lambda self, o: spy(self, o.device, o.dtype) if self.device != o.device else type_as(self, o),
+    )
+    for mode in (True, False):
+        net.train(mode)
+        y = net(torch.empty(1, 3, 32, 40, device="meta"))
+        if mode:
+            y.mean().backward()
+    assert copies == []
+
+
+@pytest.mark.parametrize("size", [(1, 1), (7, 5), (17, 13), (67, 53), (200, 200)])
+@pytest.mark.parametrize("name", LANE)
+def test_size_sweep(name: str, size) -> None:
+    # validation and tiled inference feed any size (MX-04/MX-17); 200 px = the mfghmoe tile hint
+    if size == (200, 200) and name in HEAVY:
+        pytest.skip("same code path as the default variant; CPU time")
+    net = _build(name).eval()
+    with torch.no_grad():
+        y = net(torch.rand(1, 3, *size))
+    assert y.shape == (1, 3, 4 * size[0], 4 * size[1])
+    assert torch.isfinite(y).all()

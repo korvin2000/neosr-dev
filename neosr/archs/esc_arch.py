@@ -524,6 +524,11 @@ class esc(nn.Module):
         self.plk_func = nn.Identity()
 
     def forward(self, x: Tensor) -> Tensor:
+        h, w = x.shape[2:]
+        if h < 4 or w < 4:  # the realsr skip's 7x7 reflect-padded conv needs sides >= 4
+            s = self.upscaling_factor
+            x = F.pad(x, (0, max(4 - w, 0), 0, max(4 - h, 0)), "replicate")
+            return self.forward(x)[:, :, : h * s, : w * s]
         feat = self.proj(x)
         skip = feat
 

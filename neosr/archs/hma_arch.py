@@ -1171,9 +1171,11 @@ class hma(nn.Module):
         self.img_range = img_range
         if in_chans == 3:
             rgb_mean = (0.5, 0.5, 0.5)
-            self.mean = torch.Tensor(rgb_mean).view(1, 3, 1, 1)
+            mean = torch.Tensor(rgb_mean).view(1, 3, 1, 1)
         else:
-            self.mean = torch.zeros(1, 1, 1, 1)
+            mean = torch.zeros(1, 1, 1, 1)
+        # a buffer follows .to(device) (the attribute was copied to the device in forward)
+        self.register_buffer("mean", mean, persistent=False)
         self.upscale = upscale
         self.upsampler = upsampler
 
@@ -1367,8 +1369,8 @@ class hma(nn.Module):
     def forward(self, x):
         h, w = x.shape[2:]
         x = self.check_image_size(x)
-        self.mean = self.mean.type_as(x)
-        x = (x - self.mean) * self.img_range
+        mean = self.mean.type_as(x)
+        x = (x - mean) * self.img_range
 
         if self.upsampler == "pixelshuffle":
             # for classical SR
@@ -1377,7 +1379,7 @@ class hma(nn.Module):
             x = self.conv_before_upsample(x)
             x = self.conv_last(self.upsample(x))
 
-        x = x / self.img_range + self.mean
+        x = x / self.img_range + mean
 
         return x[:, :, : h * self.upscale, : w * self.upscale]
 

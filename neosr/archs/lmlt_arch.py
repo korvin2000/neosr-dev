@@ -348,7 +348,8 @@ class lmlt(nn.Module):
 
         mod_pad_h = (scaled_size - h % scaled_size) % scaled_size
         mod_pad_w = (scaled_size - w % scaled_size) % scaled_size
-        return F.pad(x, (0, mod_pad_w, 0, mod_pad_h), "reflect")
+        mode = "reflect" if mod_pad_h < h and mod_pad_w < w else "replicate"
+        return F.pad(x, (0, mod_pad_w, 0, mod_pad_h), mode)
 
     def forward(self, x):
         _B, _C, H, W = x.shape
