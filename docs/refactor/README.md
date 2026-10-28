@@ -17,6 +17,7 @@ Speed / reliability / memory / training-efficiency pass: `stage2/PLAN.md` (lanes
 ## Stage 3 (2026-10-28)
 What to take from traiNNer-redux: `stage3/CONSENSUS.md` (3-model verdict), `stage3/REVIEW.md` (Fable re-check, final
 phased list), `stage3/TASK_OPUS.md` (Phase A implementation brief), `stage3/PROGRESS.md`, `stage3/competitor/` (lane reports).
+Phase A (A1-A9) is done (commits and follow-ups at the end of `stage3/PROGRESS.md`); user docs: `docs/training_guide.md`.
 
 ## Files
 | file | content |

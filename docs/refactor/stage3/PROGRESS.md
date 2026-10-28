@@ -184,3 +184,15 @@ worktree `.venv` has no torch), each file in its own capped scope (`systemd-run 
   `[network_g]` in training; `clamp = false` reproduces the unclamped objective, not the official recipe; the fresh
   EMA starts after the first update; "DISTS only when no term uses dists_loss"; best exports also on ties;
   the stale `-fp16`/blocklist line.
+
+### Phase A closed
+- Full suite on 527d16f, one file at a time (4 GB cap; test_archs_a3, test_losses_pipeline, test_s2_mixed rerun at
+  12 GB after the 4 GB cap killed them): 48 files, 1989 passed, 0 failed, 372 skipped (CUDA-only and absent
+  fixtures).
+- Commits: A1 9cfc1da (+ fixup 3751cc0), A2 024ddff, A3 7b56f89, A4 24d07a8, A5 44dfb8a, A6 e747bed, A7 94230b9,
+  A8 0eb402c, A9 527d16f. Nothing skipped.
+- Follow-ups (pre-existing, proposed as separate sessions): PLKConv2d eval-mode in-place write breaks backward with
+  grad enabled; hma/hma_medium dynamic ONNX export wrong at batch 2. Formatting-only noise committed with A1-A3:
+  `ruff format` also reformatted 4 lines of topiq.py, 36 of test_s2_trainer.py, 6 of test_qat.py (not ruff-clean
+  before stage 3).
+- Next: the owner's Phase 0 GPU A/Bs (E0-E5) with bench.py for speed; Phase B per REVIEW.md after the R3GAN track.
