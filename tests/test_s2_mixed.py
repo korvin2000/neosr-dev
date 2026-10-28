@@ -336,7 +336,7 @@ def test_legacy_temperature_remap_only_for_weight_files(name: str) -> None:
 # ---------------------------------------------------------------- MX-04/06 MicroSR
 
 
-def _old_microsr_block(self, x, x_size):
+def _old_microsr_block(self, x, x_size, masks=None):
     # SwinTransformerBlock.forward before MX-06: a CPU-built mask per call, zero masks included
     from neosr.archs.microsr_arch import window_partition, window_reverse
 
@@ -364,9 +364,13 @@ def test_microsr_masks_bitwise(monkeypatch, patch_size: int) -> None:
 
     net = _build("microsr_light", patch_size=patch_size).eval()
     x = torch.rand(1, 3, 16, 24)  # aligned, != img_size: masks are rebuilt per forward
+    built = []
+    calc = SwinTransformerBlock.calculate_mask
     with torch.no_grad():
-        with _NoHostSync():
+        with _NoHostSync(), monkeypatch.context() as m:
+            m.setattr(SwinTransformerBlock, "calculate_mask", lambda s, *a: built.append(a) or calc(s, *a))
             y = net(x)
+        assert len(built) == (1 if patch_size == 1 else 0)  # once per forward; none unshifted
         monkeypatch.setattr(SwinTransformerBlock, "forward", _old_microsr_block)
         assert torch.equal(y, net(x))
 

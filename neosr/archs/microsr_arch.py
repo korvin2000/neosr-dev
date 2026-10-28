@@ -317,7 +317,7 @@ class SwinTransformerBlock(nn.Module):
             attn_mask == 0, 0.0
         )
 
-    def forward(self, x, x_size):
+    def forward(self, x, x_size, masks=None):
         H, W = x_size
         B, _L, C = x.shape
         # assert L == H * W, "input feature has wrong size"
@@ -347,8 +347,12 @@ class SwinTransformerBlock(nn.Module):
             mask = None
         elif self.input_resolution == x_size:
             mask = self.attn_mask
-        else:
-            mask = self.calculate_mask(x_size, x.device)
+        else:  # built on the input's device once per forward, shared by the shifted blocks
+            masks = {} if masks is None else masks
+            key = (self.window_size, self.shift_size)
+            if key not in masks:
+                masks[key] = self.calculate_mask(x_size, x.device)
+            mask = masks[key]
         attn_windows = self.attn(x_windows, mask=mask)  # nW*B, window_size*window_size, C
 
         # merge windows
@@ -544,30 +548,30 @@ class RDG(nn.Module):
             img_size=img_size, patch_size=patch_size, in_chans=0, embed_dim=dim
         )
 
-    def forward(self, x, xsize):
-        x1 = self.pe(self.lrelu(self.adjust1(self.pue(self.swin1(x, xsize), xsize))))
+    def forward(self, x, xsize, masks=None):
+        x1 = self.pe(self.lrelu(self.adjust1(self.pue(self.swin1(x, xsize, masks), xsize))))
         x2 = self.pe(
             self.lrelu(
-                self.adjust2(self.pue(self.swin2(torch.cat((x, x1), -1), xsize), xsize))
+                self.adjust2(self.pue(self.swin2(torch.cat((x, x1), -1), xsize, masks), xsize))
             )
         )
         x3 = self.pe(
             self.lrelu(
                 self.adjust3(
-                    self.pue(self.swin3(torch.cat((x, x1, x2), -1), xsize), xsize)
+                    self.pue(self.swin3(torch.cat((x, x1, x2), -1), xsize, masks), xsize)
                 )
             )
         )
         x4 = self.pe(
             self.lrelu(
                 self.adjust4(
-                    self.pue(self.swin4(torch.cat((x, x1, x2, x3), -1), xsize), xsize)
+                    self.pue(self.swin4(torch.cat((x, x1, x2, x3), -1), xsize, masks), xsize)
                 )
             )
         )
         x5 = self.pe(
             self.adjust5(
-                self.pue(self.swin5(torch.cat((x, x1, x2, x3, x4), -1), xsize), xsize)
+                self.pue(self.swin5(torch.cat((x, x1, x2, x3, x4), -1), xsize, masks), xsize)
             )
         )
         return x5 * 0.2 + x
@@ -753,8 +757,9 @@ class microsr(nn.Module):
         if self.ape:
             x = x + self.absolute_pos_embed
         x = self.pos_drop(x)
+        masks = {}  # shift masks of this input size (see SwinTransformerBlock.forward)
         for layer in self.layers:
-            x = layer(x, x_size)
+            x = layer(x, x_size, masks)
         x = self.norm(x)  # b seq_len c
         return self.patch_unembed(x, x_size)
 
