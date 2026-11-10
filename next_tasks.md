@@ -11,6 +11,7 @@ file has been started**. Read sections 0-1 first, then work on Task 1.
 | 4 | NeoSR Studio: finish the UI | later, after 1-3 | see section 5 |
 
 Parked by the owner: OTF realism (steps O4, O5, the A/B), `docs/refactor/stage3/otf/DESIGN.md`. Do not continue it.
+Ideas the owner has not decided on are in section 6 (pyvips lazy reads): do not start them.
 
 ## 0. Rules of the house (they caused friction once already)
 - **The owner sets the priorities.** Do not promote a track because a document calls it a goal; when the next step
@@ -299,12 +300,52 @@ trainer's validator), `npx ng build --configuration development --output-path di
 
 ---
 
-## 6. What waits for the Linux machine (do not attempt here)
+## 6. Ideas waiting for the owner's decision (not tasks; do not start)
+
+### 6.1 Replace OpenCV decoding by pyvips for lazy (region) reads
+**The suggestion as the owner received it** (Russian, with typos, 2026-11-10): "maybe replace cv with pyvips:
+lazy reading is still faster than reading the whole image into Python and cropping afterwards".
+**What it means.** Today a training sample is produced by decoding the **whole** image file with OpenCV
+(`cv2.imdecode` in `neosr/utils/img_util.py:186`, called from `read_img` in `neosr/data/data_util.py:54`) into a
+numpy array and then cutting the random crop out of it. libvips (Python binding: pyvips) is demand-driven: it
+opens the file, and pixels are decoded only when a region is asked for, so "open -> crop -> fetch" can skip
+work and memory for the part of the image that is thrown away.
+
+**What is already known in this repository (earlier sessions looked at it twice):**
+| source | verdict |
+|---|---|
+| `docs/refactor/analysis/competitor/H2.md:43` (stage 1) | the competitor traiNNer-redux reads this way; "partial win for large GT only", a new system dependency, its implementation reads buffers as uint8 unconditionally (16-bit PNG breaks), ICC behaviour unverified. Fable: optional later behind `io_backend="vips"` after a measured I/O bottleneck; Codex: do not port |
+| `docs/refactor/stage2/analysis/data.md` D-06 and line 414 (stage 2) | measured: decoding dominates (73 ms for a 4.6 MiB 2K PNG); "do not port pyvips just for crops, pre-tiling gives more for less": a 512 px tile decodes in ~7 ms, about 10x loader throughput |
+| what stage 2 did instead | D-06 (a): crop in uint8 first, convert only the patch to float (-25-30 % CPU per sample on 2K images); D-06 (b): `scripts/extract_subimages.py` for pre-tiling |
+
+**Technical points a decision needs (assessment of session 6, nothing measured for pyvips here):**
+- The gain depends on the **file format and on image size vs crop size**. A PNG is one deflate stream: to reach a
+  crop near the bottom every row above it must still be decompressed, so lazy reading saves memory and the copy,
+  not most of the decode time. Formats with real random access (tiled TIFF, some JPEG paths) gain more.
+- On **pre-tiled data** (the owner's set is 256 px tiles) the crop is almost the whole file: nothing to gain.
+  The idea pays only when training reads **large untiled images** directly.
+- Costs: a native dependency (libvips; a binary wheel exists for pyvips), its own thread pool inside DataLoader
+  workers, a second decode path to keep exact (16-bit files, alpha, grey, ICC profiles), the LMDB path (decode
+  from a buffer), and JPEG pixels that may differ from OpenCV's decoder by a level (training data would change
+  slightly; PNG is lossless either way). The exact-crop tests of stage 2 (`tests/test_s2_data.py`, D-06) would
+  need a twin.
+- It fits the project's goals only as a small, optional backend with a parity test, not as a second pipeline.
+
+**If the owner wants it examined:** first a measurement, no code in `neosr/`: per-sample time and peak RSS of
+"cv2 full decode + crop" vs "pyvips region read" for the formats and sizes actually trained on (256 px tiles; 2K
+and 4K PNG 8/16 bit; JPEG), inside a DataLoader with the usual worker count, plus a pixel-equality check per
+format. CPU-only, so it can run on either machine; the numbers that matter are the training machine's. Then the
+owner decides between: nothing (pre-tiling stays the answer), an optional `io_backend`, or a replacement.
+
+**Open question for the owner:** which data should this serve: the current pre-tiled sets, or large original
+photographs read directly?
+
+## 7. What waits for the Linux machine (do not attempt here)
 The list lives in `STATUS.md`: "Needs the Linux machine" (full suite on the current head, the R3GAN penalty-pass
 profile and A/B, Phase 0 A/Bs, a long run) and "Waiting for the Linux machine" (changes of session 6 not yet covered
 by a full run: the Studio surface script, OTF O1-O3 incl. the CUDA-only no-host-sync test).
 
-## 7. What session 6 did (commits `05954e0..8776bbd` on `master`)
+## 8. What session 6 did (commits `05954e0..8776bbd` on `master`, then docs-only commits)
 | commit | content |
 |---|---|
 | 0fb201d, ca244a4 | `AGENTS.md` project facts; `STATUS.md` as the single status page, follow-ups closed |
