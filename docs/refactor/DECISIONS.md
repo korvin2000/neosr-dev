@@ -137,3 +137,20 @@ rule changes with the implementation.
 - **Commits:** one local commit per step in this session; pushed at the end on the owner's word.
 - Implemented as proposed without a separate question, open to revision: no aliases for type names, no
   user plugin folders yet, `OPTIMIZERS` / `SCHEDULERS` stay tables (torch's own classes).
+
+## Owner clarification, 2026-11-10 (the goal is the framework, not the archs)
+The goal is the trainer itself: the training framework and its ecosystem (losses, metrics, schedulers,
+optimizers, the GAN implementations, utilities and helpers), its speed and its stability: a solid, stable,
+flexible and convenient foundation for testing and training **new, future** architectures. The existing
+architectures rank near last: some are experimental or outdated, and most of them the owner will never train.
+Fixing or polishing them is not a goal.
+
+Consequences:
+- Arch-specific findings and ideas are **deferred**, not rejected: they wait unless a change in the framework
+  needs them (a contract every arch must meet, e.g. `scale=`, export, checkpoint loading) or the owner trains
+  that arch. In the stage-2 audit this covers A-12, A-17, W-09, W-12, W-16, MX-15 and MX-19
+  (`stage2/CLOSURE.md`).
+- Work on the framework is preferred over work on one arch; a framework fix found through one arch is made
+  generic where that costs little (e.g. `convert.py --prune` calls any network's `switch_to_deploy`).
+- Small, exact fixes in the core may be made without asking first (owner, the same day); the house rules for a
+  code step (targeted tests, Codex review of the diff, one commit) still hold.

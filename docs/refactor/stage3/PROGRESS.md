@@ -392,3 +392,17 @@ Not a stage-3 step; logged here because this is the current log. Local commits a
   test_s3_losses, test_s2_exportfix (29), test_s2_cnn -k safmn (3); 953 cases of the per-arch and loss files
   collected only. **Not verified:** the full suite, anything on CUDA, the ONNX sweep of the ten exportable
   archs whose pad changed (`../STATUS.md`, "Waiting for the Linux machine").
+
+### Session 8 (2026-11-10, Linux machine): the full suite, the owner's goal, the small core items of the audit
+Not a stage-3 step; logged here because this is the current log.
+- **Full suite** at e0f387c (CPU + CUDA, RTX 4090): 2566 passed after a test-only fix (d1afe9f:
+  `test_s3_losses` built CUDA images for CPU critics; latent since A4 because every run since was CPU-only).
+- **Owner: the goal is the framework, not the archs** (`../DECISIONS.md`). Seven arch-specific audit findings
+  deferred (A-12, A-17, W-09, W-12, W-16, MX-15, MX-19).
+- **Small core items:** A-11 `convert.py --prune` calls any net's `switch_to_deploy(prune=True)`; MT-14 a
+  warning for a `better` against the metric's direction; MT-15 val/test datasets refuse paths that differ only
+  in suffix (`data_util.reject_shared_ids`, `image_id` moved there); MT-08 tiled validation stitches the
+  quantized grid as float16. The Codex review of the diff found that a uint8 stitch (the first version) turned
+  a diverged net's NaN into 0, finite metrics instead of NaN; float16 keeps the NaN and is still exact for
+  0..255. Its second finding (a Windows case alias of one file refused) is fixed too. Windows portability of
+  the tests (STATUS item 7) done, verified on Linux only.

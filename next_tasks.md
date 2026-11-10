@@ -7,7 +7,7 @@ the owner says so (local commits on `master`).
 | # | task | kind | where |
 |---|---|---|---|
 | 1 | Run on the Linux machine what session 7 could not: ~~the full suite (CPU + CUDA), the per-arch files~~ (done 2026-11-10 at e0f387c: 2566 passed, 0 failed), the ONNX sweep | verification | section 3 |
-| 2 | Remaining open findings of the stage-2 audit (15 of 167) | small fixes here, A/Bs there, three owner decisions | section 4, `docs/refactor/stage2/CLOSURE.md` |
+| 2 | Remaining open findings of the stage-2 audit (7 of 167; small fixes done, arch-specific deferred) | A/Bs on the Linux machine, three owner decisions | section 4, `docs/refactor/stage2/CLOSURE.md` |
 | 3 | NeoSR Studio: finish the UI | later, ask the owner before starting | section 5 |
 
 Parked by the owner: OTF realism (steps O4, O5, the A/B), `docs/refactor/stage3/otf/DESIGN.md`. Do not continue it.
@@ -114,11 +114,14 @@ Everything below changed code that the Windows machine checked only with the tes
    long run) is unchanged.
 
 ## 4. Task 2: the open audit findings
-`docs/refactor/stage2/CLOSURE.md` has the three ranked lists with the files and the size of each item:
-- **fixable on Windows** (6 entries: A-11 `convert.py --prune`, A-17, W-16, A-12, three optional sub-items, two
-  doc/code mismatches in `stage2/DECISIONS.md`): small, exact; W-16 touches the checkpoint format, ask first;
-- **needs the Linux machine** (7: A-04 the template discriminator, L-07 LDL, W-09, W-12, MX-19, L-16, L-15);
-- **the owner decides** (4: MX-15 microsr default windows, T-11, ST-14, D-16).
+**Owner, 2026-11-10: the goal is the framework, not the existing archs** (`docs/refactor/DECISIONS.md`):
+arch-specific findings are deferred (A-12, A-17, W-09, W-12, W-16, MX-15, MX-19). The small core items were done
+the same day on the Linux machine (A-11 generic `--prune` deploy, MT-08/14/15 sub-items, the A-07/W-09 doc
+mismatch). **7 open** (`docs/refactor/stage2/CLOSURE.md`):
+- **needs the Linux machine** (4): A-04 the template discriminator (P1; the same runs answer R6 A0/A1), L-07 LDL
+  (`scripts/term_grads.py` first), L-16 bf16 output tail, L-15 FDL grid (only if artifacts show);
+- **the owner decides** (3): T-11 (proposed: reject, < 1 %), ST-14 (proposed: defer, a new key), D-16 (parked
+  with OTF).
 Per item: smallest coherent change, a test, a Codex review of the diff, one commit; anything that changes
 training dynamics is opt-in until an A/B. Also open from the old Task 3: the TODO at
 `neosr/data/otf_dataset.py` (kernel size range 7..21 hard-coded) belongs to the parked OTF track; the rest of

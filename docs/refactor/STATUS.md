@@ -47,6 +47,11 @@ three tasks the owner had fixed: the registries (3 below), the audit closure mat
 items (1b). What is left: the Linux confirmation of that work, the 15 audit findings still open
 (`stage2/CLOSURE.md`), then Studio.
 
+**What "the core" means (owner, 2026-11-10, `DECISIONS.md`):** the training framework and its ecosystem
+(losses, metrics, schedulers, optimizers, the GAN implementations, utilities), its speed and stability, as the
+foundation for new architectures. The existing archs rank near last; arch-specific findings are deferred unless
+a framework contract needs them. Small, exact core fixes may be made without asking first.
+
 The owner sets the order; an agent does not promote a track on its own reading of the documents. Current order:
 1. **A stable, reliable core** ("works like a Swiss watch": fast, reliable, good quality) before any new feature
    work. Concretely: (a) the closure matrix of the stage-2 audit: **done** (`stage2/CLOSURE.md`: 167 findings =
@@ -79,11 +84,12 @@ model to follow.
 | R3GAN track | code done (R1-R3), data done (R5), qualification R4: bf16 PASS (provisional, no replicate), **cost gate FAIL**; **A/B (R6) not run: paused** | `stage3/PROGRESS.md` "PAUSED", `stage3/r3gan/RESULTS.md` |
 | Stage 3 Phase B (OTF realism, i-LN, KD/ECO, dynamo exporter, ...) | **parked by the owner (2026-11-10)**. OTF realism: **design draft 2** (Codex-reviewed); steps **O1-O3 done** (antialiased resampler and `resize_mode*` keys; per-sample `noise_prob*` / `jpeg_prob*` gates, `blur_prob`, the clean path; the unsharp mask `sharpen_*` at LQ scale; all opt-in, defaults bitwise unchanged), O4 (`degrade.py`) and O5 (readme, templates, Studio fields) open; the owner's answers Q1-Q4 open. The rest not started; the owner ordered Phase B after R3GAN | `stage3/otf/DESIGN.md`, `stage3/REVIEW.md` "Final list" |
 | Registries (design T7) | **done on Windows, waits for the Linux suite** | `design/T7_registration.md`, `neosr/utils/registry.py`, `tests/test_registry.py` |
-| Stage-2 audit closure | matrix done; 15 of 167 findings open (6 fixable on Windows, 7 need an A/B or a measurement, 4 owner decisions) | `stage2/CLOSURE.md` |
+| Stage-2 audit closure | matrix done; 2026-11-10: A-11 and the metrics sub-items done, 7 arch-specific findings deferred (owner's goal); **7 open**: 4 need an A/B or a measurement (A-04, L-07, L-16, L-15), 3 owner decisions (T-11, ST-14, D-16) | `stage2/CLOSURE.md` |
 | NeoSR Studio (`studio/`) | prototype: real recipe model, TOML compiler and validator; **training is simulated** (no adapter to `train.py`). Catalog synced to the trainer on 2026-11-10 and guarded by a contract | `studio/README.md`, "Studio contract" below |
 
-Last full suite: 2566 passed, 0 failed, 198 skipped, 5 xfailed (CPU + CUDA on the RTX 4090, commit e0f387c,
-10 min, 2026-11-10), after a test-only fix: `tests/test_s3_losses.py` took CUDA images from `test_gan.images`
+Last full suite: 2583 passed, 0 failed, 199 skipped, 5 xfailed (CPU + CUDA on the RTX 4090, 12 min,
+2026-11-10) on the session-8 commits after d1afe9f (the audit's small core items, the Windows test fixes).
+Before: 2566 passed at e0f387c, after a test-only fix: `tests/test_s3_losses.py` took CUDA images from `test_gan.images`
 with a CPU critic, so its two hinge tests failed wherever CUDA is visible (latent since stage 3 A4); the file now
 pins its images to the CPU. Before that: 2047 passed, 377 skipped (CPU only, 504ad50).
 
@@ -106,8 +112,8 @@ pins its images to the CPU. Before that: 2047 passed, 377 skipped (CPU only, 504
 7. Gradient clipping under R1/R2: D is clipped in ~50 % and G in ~90 % of the updates of the 2k R3GAN run; the
    `noclip` arm of round 2 decides.
 8. Opt-in switches waiting for an A/B (`stage2/DECISIONS.md`, last section): `tight_canvas`, `aug_antialias`, CRAFT
-   `pad_extra_window = false`, span_fast `fan_in_init`, `"spike"` clip, `rpgan`, R1/R2, `fdl_opt.checkpoint`,
-   realplksr norm init, RGT train/eval depth; realplksr `layer_norm`/`icnr` speed and 8k A/B (A6).
+   `pad_extra_window = false`, span_fast `fan_in_init`, `"spike"` clip, `rpgan`, R1/R2, `fdl_opt.checkpoint`;
+   realplksr `layer_norm`/`icnr` speed and 8k A/B (A6).
 9. Unverified offline (A1, A3): `save_best` under DDP (reasoning only), a real PIPAL weights load, official VGG-LPIPS
    lin parity, 1080p LPIPS peak memory; DDP with NCCL (only gloo on one GPU is tested).
 
@@ -118,11 +124,9 @@ The order of work is "Owner priorities" above; this list only says what fits thi
 1. **Phase B, OTF realism: design** (the owner's main goal: real-world photographs): **done as draft 2**,
    `stage3/otf/DESIGN.md`. Open: the owner's answers Q1-Q4 (above all 50+ real LQ samples for the holdout set R
    and the residual analysis O4b).
-2. **Stage-2 audit, the open findings fixable here** (`stage2/CLOSURE.md`, "Open, fixable on the Windows
-   machine"): A-11 (`convert.py --prune` never calls plainusr's `switch_to_deploy`), A-17 (rcan / cfsr nits),
-   W-16 (persistent `attn_mask` buffers; touches the checkpoint format, ask first), A-12 (esc `.contiguous()`),
-   three optional sub-items (MT-15, MT-14, MT-08), two doc/code mismatches in `stage2/DECISIONS.md` (A-07 and
-   W-09 are listed as opt-in but have no key). Owner decisions wanted: MX-15, T-11, ST-14, D-16.
+2. **Stage-2 audit, the open findings fixable here: done 2026-11-10** on the Linux machine (A-11, the MT-08/14/15
+   sub-items, the A-07/W-09 doc mismatch); the arch-specific ones (A-12, A-17, W-16) are deferred by the owner's
+   goal. Owner decisions wanted: T-11, ST-14, D-16 (`stage2/CLOSURE.md`).
 3. **Penalty-pass cost note** before the profiling session: read `r3gan_arch.py` and the `gan_loss` penalty path,
    list the double-backward candidates (grouped 3x3, depthwise FIR) and the cheap alternatives to try first.
 4. **Studio, next steps** (Node only): arch constructor parameters in the surface contract (ast of the arch
@@ -136,14 +140,11 @@ The order of work is "Owner priorities" above; this list only says what fits thi
    (this machine needs it most); the three fixture paths (`tests/test_checkpoint.py:19`, `tests/test_entry.py:27`,
    `tests/test_metrics.py:17`) from an environment variable with today's values as defaults; a GitHub Actions
    workflow for the fast subset plus the Studio checks (stage-1 follow-up S.4).
-7. **Windows portability of the tests** (found 2026-11-10 by the first runs here):
-   `tests/test_runtime.py::test_two_rank_gloo_shares_rank0_seed` fails with "unsupported gloo device" (the gloo
-   backend cannot resolve the Windows host name; the DDP tests need a skip or a loopback setting on win32, and the
-   readme should say DDP is Linux-only if that holds); text reads without an encoding break on a non-UTF-8 locale
-   (fixed in `test_s3_hygiene.py`; `test_entry.py:171,191`, `test_s3_exports.py:154`, `test_s3_bench.py:69` read
-   run-generated files the same way and were not run here); `tests/test_s2_data.py`:
-   `test_scandir_skips_hidden_and_non_images` needs the symlink privilege (WinError 1314) and `test_path_list`
-   decodes a subprocess's output as UTF-8.
+7. **Windows portability of the tests: done 2026-11-10** (Linux-verified only; the next Windows run confirms):
+   the gloo DDP test skips on win32 (gloo cannot resolve the Windows host name; whether DDP works on Windows at
+   all is unverified), run-generated files are read and written as UTF-8 (`test_entry.py`, `test_s3_exports.py`,
+   `test_s3_bench.py`), the symlink test skips without the privilege (WinError 1314), `test_path_list` keeps the
+   undecodable-bytes name to POSIX, and the `extract_subimages` subprocess output is decoded as UTF-8.
 8. **Phase B, OTF realism: code** steps O1-O5 of the design (resampler, probabilities and clean path, sharpening,
    `degrade.py`, schema/readme/Studio): opt-in, default-preserving, unit-tested on tiny tensors. Needs the owner's
    go-ahead (Q3: before or after the R3GAN A/B).

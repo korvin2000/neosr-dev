@@ -53,4 +53,6 @@ count as ties.
 
 ## Kept opt-in pending an A/B
 `tight_canvas` (OTF), `aug_antialias`, CRAFT `pad_extra_window = false`, span_fast `fan_in_init`, `"spike"`
-clip, `gan_type = "rpgan"`, R1/R2, `fdl_opt.checkpoint`, realplksr norm init (A-07), RGT train/eval depth (W-09).
+clip, `gan_type = "rpgan"`, R1/R2, `fdl_opt.checkpoint`.
+Not switches (corrected 2026-11-10): realplksr norm init (A-07) and the RGT train/eval depth (W-09) have no key
+in the code; both are arch-specific and deferred by the owner's goal (`../DECISIONS.md`, 2026-11-10).
