@@ -82,12 +82,15 @@ model to follow.
 | Stage-2 audit closure | matrix done; 15 of 167 findings open (6 fixable on Windows, 7 need an A/B or a measurement, 4 owner decisions) | `stage2/CLOSURE.md` |
 | NeoSR Studio (`studio/`) | prototype: real recipe model, TOML compiler and validator; **training is simulated** (no adapter to `train.py`). Catalog synced to the trainer on 2026-11-10 and guarded by a contract | `studio/README.md`, "Studio contract" below |
 
-Last full suite: 2047 passed, 0 failed, 377 skipped (CPU, commit 504ad50). Later commits ran scoped tests only.
+Last full suite: 2566 passed, 0 failed, 198 skipped, 5 xfailed (CPU + CUDA on the RTX 4090, commit e0f387c,
+10 min, 2026-11-10), after a test-only fix: `tests/test_s3_losses.py` took CUDA images from `test_gan.images`
+with a CPU critic, so its two hinge tests failed wherever CUDA is visible (latent since stage 3 A4); the file now
+pins its images to the CPU. Before that: 2047 passed, 377 skipped (CPU only, 504ad50).
 
 ## Open work, by priority
 ### Needs the Linux machine (GPU or the suite)
-1. **Full suite on the current head** (CPU + CUDA): covers f0738ee (hma), bbd935c (PLK), the Studio merge and
-   everything in "Waiting for the Linux machine".
+1. **Full suite on the current head** (CPU + CUDA): **done** at e0f387c (see "Last full suite" above); what the
+   suite does not cover is in "Waiting for the Linux machine".
 2. **R1/R2 penalty pass costs ~614 ms per update** (719 vs 105 ms; R4). Profile one regularised D update
    (`torch.profiler`; suspect: double backward of the grouped 3x3 and the depthwise FIR convs), fix it or fall back
    to lazy regularisation (`reg_every` 4 or 16, a measured deviation from the paper). The +30 % cost gate cannot pass
@@ -147,17 +150,16 @@ The order of work is "Owner priorities" above; this list only says what fits thi
 9. **Small core items: done in session 7** (see "Closed follow-ups"). Left: the Studio half of S.11 (window
    sizes and scales are hand-kept in `studio/shared/catalog/archs.ts`), with Studio step 4.
 
-### Waiting for the Linux machine (changes not yet covered by a full suite run)
+### Waiting for the Linux machine (what the full suite does not cover)
+The full suite at e0f387c (CPU + CUDA, 2026-11-10) covers the Windows-made changes of 2026-11-10: the Studio
+surface script and test, `test_s3_hygiene`, OTF O1-O3 (the CUDA rows and the no-host-sync tests ran, none
+skipped), the five registries (all per-arch files ran), `pad_reflect` in 14 archs (eager), `config.total_iter`,
+safmn below 8 px and `color = "y"`. Still open:
+
 | date | change | check there |
 |---|---|---|
-| 2026-11-10 | `scripts/studio_surface.py`, `tests/test_studio_surface.py` | passed on Windows CPU (3 tests) together with test_config, test_hygiene, test_imports, test_registry, test_runtime (minus the gloo test), test_s3_hygiene: about 370 passed; there: the full suite |
-| 2026-11-10 | `tests/test_s3_hygiene.py`: repo files read as UTF-8 | passed on Windows (6 tests); there: the same file |
-| 2026-11-10 | OTF O1: `neosr/data/resample.py`, `resize_mode*` keys in `otf_degradation.py` and `config.py`, `tests/test_s3_otf.py` | passed on Windows CPU: test_s3_otf, test_otf_degradation (frozen reference), test_config, test_studio_surface, test_s2_data (380 passed; 2 Windows-only failures, item 7). There: the CUDA rows of test_otf_degradation, `test_degrader_no_host_sync` with AA modes on, the full suite, and the cost (O6) |
-| 2026-11-10 | OTF O2: gates and clean path in `otf_degradation.py`, `blur_prob` in `otf_dataset.py`, schema keys, `tests/test_s3_otf.py` (O2 part) | passed on Windows CPU with the same files as O1 (454 passed). There: `test_no_host_sync_with_every_option_on` (CUDA only, skipped here), the CUDA generator path of `_mask`, a multi-worker loader run with `blur_prob`, the full suite |
-| 2026-11-10 | OTF O3: `sharpen_prob` / `sharpen_sigma` / `sharpen_amount` in `otf_degradation.py`, autocast disabled inside the Degrader call, schema keys, tests | passed on Windows CPU (499 passed with the files of O1). There: the CUDA rows, the no-host-sync test (it now includes sharpening), the full suite |
-| 2026-11-10 | session 7: the five registries (`neosr/utils/registry.py`, `factory.py`, 131 decorators in the arch, loss, metric, dataset and model files, tables deleted), ad84712 + f442724 | passed on Windows CPU: test_registry (167), test_imports, test_hygiene, test_config, test_studio_surface, test_s3_losses; the surface JSON regenerates unchanged; test_archs, test_archs_a2/a3, test_s2_cnn, test_losses_pipeline, test_losses, test_metrics were **collected only** (953 cases). There: the full suite |
-| 2026-11-10 | session 7: `arch_util.pad_reflect` in catanet, dctlsa, ditn, drct, esc, flexnet, grformer, hat, hma, lmlt, mfghmoe, microsr, srformer, swinir (3e5887a) | passed on Windows CPU: test_s2_exportfix (29, incl. the eager-bitwise rows of 8 of these archs and hma's dynamic ONNX at 5x7); eager forwards of 13 archs at 19x23 and 5x7. There: the ONNX sweep of the exportable ones (their graphs changed: index gathers instead of `Pad`), test_archs*, test_s2_window / test_s2_mixed, the full suite |
-| 2026-11-10 | session 7: `config.total_iter` (fd30790); safmn below 8 px, `color = "y"` with RGB-only losses (aebbf83) | passed on Windows CPU: test_config (186), test_s2_cnn -k safmn_runs_below (3), 85 templates through the validator. There: the full suite |
+| 2026-11-10 | `arch_util.pad_reflect` in the exportable archs (3e5887a) | the ONNX sweep of dctlsa, ditn, drct, grformer, hat, hma, mfghmoe, microsr, srformer, swinir at `convert.py`'s three shapes (their graphs changed: index gathers instead of `Pad`); re-check `STATIC_ONLY` for `srformer_medium` |
+| 2026-11-10 | OTF O1-O3 | the cost of the new options (O6); a multi-worker loader run with `blur_prob` (O2) |
 
 ## Studio contract
 `scripts/studio_surface.py` writes `studio/shared/catalog/neosr-surface.json` from the five registries (it loads

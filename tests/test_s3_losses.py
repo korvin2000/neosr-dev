@@ -2,6 +2,7 @@
 psnr_loss. CPU."""
 
 import math
+from functools import partial
 
 import pytest
 import torch
@@ -11,10 +12,13 @@ from neosr.config import ConfigError
 from neosr.losses import LOSS_REGISTRY, build_losses
 from neosr.losses.gan_loss import gan_loss
 from neosr.models.phase import Phase
-from tests.test_gan import Critic, Forbidden, images
+from tests.test_gan import Critic, Forbidden
 from tests.test_gan import ctx as gan_ctx
+from tests.test_gan import images as _images
 
 CPU = torch.device("cpu")
+# test_gan's images follow CUDA when present; this file's terms and critics live on the CPU
+images = partial(_images, dev="cpu")
 
 
 def _terms(**opts):

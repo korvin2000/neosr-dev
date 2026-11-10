@@ -6,7 +6,7 @@ the owner says so (local commits on `master`).
 
 | # | task | kind | where |
 |---|---|---|---|
-| 1 | Run on the Linux machine what session 7 could not: the full suite (CPU + CUDA), the per-arch files, the ONNX sweep | verification | section 3 |
+| 1 | Run on the Linux machine what session 7 could not: ~~the full suite (CPU + CUDA), the per-arch files~~ (done 2026-11-10 at e0f387c: 2566 passed, 0 failed), the ONNX sweep | verification | section 3 |
 | 2 | Remaining open findings of the stage-2 audit (15 of 167) | small fixes here, A/Bs there, three owner decisions | section 4, `docs/refactor/stage2/CLOSURE.md` |
 | 3 | NeoSR Studio: finish the UI | later, ask the owner before starting | section 5 |
 
@@ -103,7 +103,7 @@ Implemented as proposed without a separate question, open to revision: no aliase
 ## 3. Task 1: what the Linux machine must confirm for session 7
 Everything below changed code that the Windows machine checked only with the tests named in `STATUS.md`
 ("Waiting for the Linux machine"):
-1. **Full suite, CPU and CUDA**, on the head. It covers the registry migration (all per-arch files read the
+1. **Done 2026-11-10** (e0f387c: 2566 passed, 0 failed, 198 skipped; one test-only fix in `test_s3_losses.py`). **Full suite, CPU and CUDA**, on the head. It covers the registry migration (all per-arch files read the
    registries: `tests/test_archs*.py`, `tests/test_s2_cnn.py`, `tests/test_losses_pipeline.py` were only
    *collected* here: 953 cases), `pad_reflect` in 14 archs, `safmn`, `config.total_iter`.
 2. **ONNX sweep** of the exportable archs that now pad through `pad_reflect` (dctlsa, ditn, drct, grformer, hat,
