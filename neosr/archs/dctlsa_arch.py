@@ -1,10 +1,9 @@
 # type: ignore
 import torch
-import torch.nn.functional as F
 from collections import OrderedDict
 from torch import nn
 
-from neosr.archs.arch_util import to_2tuple
+from neosr.archs.arch_util import pad_reflect, to_2tuple
 from neosr.utils.registry import ARCH_REGISTRY
 
 
@@ -285,10 +284,7 @@ class BasicLayer(nn.Module):
         _, _, h, w = x.size()
         mod_pad_h = (self.window_size - h % self.window_size) % self.window_size
         mod_pad_w = (self.window_size - w % self.window_size) % self.window_size
-        if mod_pad_h != 0 or mod_pad_w != 0:
-            mode = "reflect" if mod_pad_h < h and mod_pad_w < w else "replicate"
-            x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), mode)
-        return x, h, w
+        return pad_reflect(x, mod_pad_h, mod_pad_w), h, w
 
     def forward(self, x):
         x, h, w = self.check_image_size(x)

@@ -3,6 +3,8 @@ from einops import rearrange
 from torch import nn
 from torch.nn import functional as F
 
+from neosr.archs.arch_util import pad_reflect
+
 from neosr.utils.registry import ARCH_REGISTRY
 
 
@@ -479,8 +481,7 @@ class catanet(nn.Module):
         # (negative slice start) and below 8 px the k-means pad failed; pad up, crop back
         m = max(self.patch_size)
         ph, pw = max(m - h, 0), max(m - w, 0)
-        if ph or pw:
-            x = F.pad(x, (0, pw, 0, ph), "reflect" if ph < h and pw < w else "replicate")
+        x = pad_reflect(x, ph, pw)
         if self.upscale != 1:
             base = F.interpolate(
                 x, scale_factor=self.upscale, mode="bilinear", align_corners=False

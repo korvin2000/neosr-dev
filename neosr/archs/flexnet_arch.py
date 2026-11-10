@@ -6,7 +6,7 @@ from einops import rearrange
 from torch import nn
 from torch.nn import functional as F
 
-from neosr.archs.arch_util import DySample
+from neosr.archs.arch_util import DySample, pad_reflect
 from neosr.archs.span_arch import cache_stale, fuse_online, param_key
 from neosr.utils.registry import ARCH_REGISTRY
 
@@ -686,9 +686,7 @@ class flexnet(nn.Module):
         scaled_size = self.pad_size
         mod_pad_h = (scaled_size - h % scaled_size) % scaled_size
         mod_pad_w = (scaled_size - w % scaled_size) % scaled_size
-        # reflect needs pad < size; tiny inputs fall back to replicate
-        mode = "reflect" if mod_pad_h < h and mod_pad_w < w else "replicate"
-        return F.pad(x, (0, mod_pad_w, 0, mod_pad_h), mode)
+        return pad_reflect(x, mod_pad_h, mod_pad_w)
 
     def forward(self, x):
         _, _, h, w = x.size()

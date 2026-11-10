@@ -2,12 +2,11 @@
 import math
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 from torch.nn.init import trunc_normal_
 from torch.utils import checkpoint
 
-from neosr.archs.arch_util import DropPath, shift_mask, to_2tuple, window_sdpa
+from neosr.archs.arch_util import DropPath, pad_reflect, shift_mask, to_2tuple, window_sdpa
 from neosr.utils.registry import ARCH_REGISTRY
 
 
@@ -1169,8 +1168,7 @@ class srformer(nn.Module):
         _, _, h, w = x.size()
         mod_pad_h = (self.window_size - h % self.window_size) % self.window_size
         mod_pad_w = (self.window_size - w % self.window_size) % self.window_size
-        mode = "reflect" if mod_pad_h < h and mod_pad_w < w else "replicate"  # reflect needs pad < size
-        return F.pad(x, (0, mod_pad_w, 0, mod_pad_h), mode)
+        return pad_reflect(x, mod_pad_h, mod_pad_w)
 
     def forward(self, x):
         H, W = x.shape[2:]

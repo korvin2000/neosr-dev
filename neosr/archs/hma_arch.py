@@ -7,7 +7,7 @@ from torch.nn import functional as F
 from torch.nn.init import trunc_normal_
 from torch.utils.checkpoint import checkpoint
 
-from neosr.archs.arch_util import to_2tuple
+from neosr.archs.arch_util import pad_reflect, to_2tuple
 from neosr.utils.registry import ARCH_REGISTRY
 
 
@@ -1370,13 +1370,9 @@ class hma(nn.Module):
         return x
 
     def check_image_size(self, x):
-        # pad to a multiple of lcm(window, interval) (reflect needs pad < size)
+        # pad to a multiple of lcm(window, interval)
         _, _, h, w = x.size()
-        ph, pw = (-h) % self.pad_size, (-w) % self.pad_size
-        if ph or pw:
-            mode = "reflect" if ph < h and pw < w else "replicate"
-            x = F.pad(x, (0, pw, 0, ph), mode)
-        return x
+        return pad_reflect(x, (-h) % self.pad_size, (-w) % self.pad_size)
 
     def forward(self, x):
         h, w = x.shape[2:]

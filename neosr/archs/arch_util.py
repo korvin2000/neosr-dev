@@ -310,3 +310,29 @@ def shift_mask(build: Callable, *args):
     if hit is None or hit[0] != key:
         hit = _MEMO[build] = (key, build(*args))
     return hit[1]
+
+
+def pad_reflect(x: Tensor, ph, pw) -> Tensor:
+    """Pad the bottom by `ph` and the right by `pw`: reflection, or replication when a pad reaches
+    the size (reflect needs pad < size).
+
+    A trace cannot keep that choice in Python: it would freeze the mode (and whether to pad at all)
+    of the trace input into the graph, and a dynamic ONNX export would then pad other sizes wrong.
+    While tracing, the same pixels are gathered by index and the choice is a tensor op. Eager code
+    takes `F.pad` as before.
+    """
+    h, w = x.shape[2:]
+    if not torch.jit.is_tracing():
+        if ph or pw:
+            mode = "reflect" if ph < h and pw < w else "replicate"
+            x = F.pad(x, (0, pw, 0, ph), mode)
+        return x
+    zero = torch.zeros((), dtype=torch.long, device=x.device)  # sizes may be ints or traced
+    reflect = (zero + ph < h) & (zero + pw < w)
+
+    def source(size, pad) -> Tensor:
+        i = torch.arange(size + pad, device=x.device)
+        d = i - (size - 1)  # > 0 inside the pad
+        return i - torch.where(reflect, d + d.abs(), d.clamp(min=0))
+
+    return x.index_select(2, source(h, ph)).index_select(3, source(w, pw))

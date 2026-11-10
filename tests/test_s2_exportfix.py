@@ -5,6 +5,7 @@ Each test patches the replaced code (verbatim, below) back in and compares full-
 fixed seed at aligned, non-aligned and batch-2 sizes.
 """
 
+import numpy as np
 import pytest
 import torch
 import torch.nn.functional as F
@@ -24,6 +25,7 @@ from neosr.archs import (
     microsr_arch,
     omnisr_arch,
 )
+from neosr.archs.arch_util import pad_reflect
 from neosr.cli import convert_args
 from tests.test_entry import convert_py
 
@@ -177,3 +179,60 @@ def test_hma_dynamic_export_runs_batch_2(tmp_path) -> None:
     with torch.inference_mode():
         err = abs(sess.run(None, {"input": x.numpy()})[0] - net(x).numpy()).max()
     assert err < 1e-5  # fixed: 6e-7
+    # a side below the pad (8 px): eager replicates, and the 20x20 trace used to keep reflect
+    x = torch.randn(1, 3, 5, 7, generator=torch.Generator().manual_seed(0))
+    with torch.inference_mode():
+        err = abs(sess.run(None, {"input": x.numpy()})[0] - net(x).numpy()).max()
+    assert err < 1e-5
+
+
+# ---- pad_reflect: the pad-to-window of 14 archs, its mode no longer frozen by the trace input ----
+
+
+class _Pad(nn.Module):
+    def forward(self, x):
+        _, _, h, w = x.size()
+        return pad_reflect(x, (-h) % 8, (-w) % 8)
+
+
+def _old_pad(x, m=8):
+    """The expression every arch carried: reflect, or replicate when a pad reaches the size."""
+    _, _, h, w = x.shape
+    ph, pw = (-h) % m, (-w) % m
+    if ph or pw:
+        x = F.pad(x, (0, pw, 0, ph), "reflect" if ph < h and pw < w else "replicate")
+    return x
+
+
+# aligned, reflect, replicate (a pad >= the side), singleton sides, mixed
+PAD_SIZES = [(20, 20), (16, 16), (3, 5), (5, 7), (1, 1), (9, 30), (4, 13), (8, 1), (15, 2)]
+
+
+def test_pad_reflect_eager_is_the_old_expression() -> None:
+    for h, w in PAD_SIZES:
+        x = torch.rand(2, 3, h, w)
+        assert torch.equal(pad_reflect(x, (-h) % 8, (-w) % 8), _old_pad(x)), (h, w)
+
+
+@pytest.mark.parametrize("trace", [(20, 20), (16, 16), (3, 5)], ids=["reflect", "aligned", "replicate"])
+def test_pad_reflect_dynamic_onnx_pads_every_size_like_eager(tmp_path, trace) -> None:
+    """Whatever the trace input needed (reflect, no pad at all, replicate), the graph pads each
+    other size as eager does: pure gathers, so the pixels are equal, not close."""
+    ort = pytest.importorskip("onnxruntime")
+    pytest.importorskip("onnx")
+    axes = {0: "batch", 2: "height", 3: "width"}
+    torch.onnx.export(
+        _Pad(),
+        (torch.rand(1, 3, *trace),),
+        str(tmp_path / "pad.onnx"),
+        opset_version=17,
+        dynamo=False,
+        input_names=["input"],
+        output_names=["output"],
+        dynamic_axes={"input": axes, "output": axes},
+    )
+    sess = ort.InferenceSession(str(tmp_path / "pad.onnx"), providers=["CPUExecutionProvider"])
+    for h, w in PAD_SIZES:
+        x = torch.rand(2, 3, h, w)
+        out = sess.run(None, {"input": x.numpy()})[0]
+        assert np.array_equal(out, _old_pad(x).numpy()), (trace, h, w)

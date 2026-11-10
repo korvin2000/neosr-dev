@@ -3,7 +3,7 @@ import math
 import torch
 from torch import nn
 
-from neosr.archs.arch_util import DropPath, to_2tuple
+from neosr.archs.arch_util import DropPath, pad_reflect, to_2tuple
 from neosr.utils.registry import ARCH_REGISTRY
 
 
@@ -749,13 +749,9 @@ class microsr(nn.Module):
         self.apply(self._init_weights)
 
     def check_image_size(self, x):
-        # pad to a multiple of the window (reflect needs pad < size)
+        # pad to a multiple of the window
         _, _, h, w = x.size()
-        ph, pw = (-h) % self.pad_size, (-w) % self.pad_size
-        if ph or pw:
-            mode = "reflect" if ph < h and pw < w else "replicate"
-            x = nn.functional.pad(x, (0, pw, 0, ph), mode)
-        return x
+        return pad_reflect(x, (-h) % self.pad_size, (-w) % self.pad_size)
 
     def forward_features(self, x):
         x_size = (x.shape[2], x.shape[3])

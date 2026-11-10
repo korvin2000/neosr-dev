@@ -7,7 +7,7 @@ from torch import nn
 from torch.nn.init import trunc_normal_
 from torch.utils.checkpoint import checkpoint
 
-from neosr.archs.arch_util import DropPath, to_2tuple, window_sdpa
+from neosr.archs.arch_util import DropPath, pad_reflect, to_2tuple, window_sdpa
 from neosr.utils.registry import ARCH_REGISTRY
 
 
@@ -1165,13 +1165,9 @@ class hat(nn.Module):
         return x
 
     def check_image_size(self, x):
-        # pad to a multiple of window_size (reflect needs pad < size)
+        # pad to a multiple of window_size
         _, _, h, w = x.size()
-        ph, pw = (-h) % self.window_size, (-w) % self.window_size
-        if ph or pw or torch.jit.is_tracing():  # a trace must keep the pad
-            mode = "reflect" if ph < h and pw < w else "replicate"
-            x = nn.functional.pad(x, (0, pw, 0, ph), mode)
-        return x
+        return pad_reflect(x, (-h) % self.window_size, (-w) % self.window_size)
 
     def forward(self, x):
         h, w = x.shape[2:]

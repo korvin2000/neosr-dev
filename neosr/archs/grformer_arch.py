@@ -6,7 +6,7 @@ from einops import rearrange
 from torch import nn
 from torch.nn import functional as F
 
-from neosr.archs.arch_util import DropPath
+from neosr.archs.arch_util import DropPath, pad_reflect
 from neosr.utils.registry import ARCH_REGISTRY
 
 
@@ -588,8 +588,7 @@ class grformer(nn.Module):
         max_window_size = max(self.window_size)
         mod_pad_h = (max_window_size - h % max_window_size) % max_window_size
         mod_pad_w = (max_window_size - w % max_window_size) % max_window_size
-        mode = "reflect" if mod_pad_h < h and mod_pad_w < w else "replicate"
-        return F.pad(x, (0, mod_pad_w, 0, mod_pad_h), mode)
+        return pad_reflect(x, mod_pad_h, mod_pad_w)
 
     def forward(self, x):
         H, W = x.shape[2:]

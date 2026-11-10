@@ -6,7 +6,7 @@ from torch import nn
 from torch.nn.init import trunc_normal_
 from torch.utils import checkpoint
 
-from neosr.archs.arch_util import DropPath, shift_mask, to_2tuple, window_sdpa
+from neosr.archs.arch_util import DropPath, pad_reflect, shift_mask, to_2tuple, window_sdpa
 from neosr.utils.registry import ARCH_REGISTRY
 
 
@@ -1028,14 +1028,10 @@ class swinir(nn.Module):
         return x
 
     def check_image_size(self, x):
-        # pad to a multiple of the effective window (reflect needs pad < size)
+        # pad to a multiple of the effective window
         _, _, h, w = x.size()
         ws = min(self.window_size, *self.patches_resolution)  # blocks clamp to img_size
-        ph, pw = (-h) % ws, (-w) % ws
-        if ph or pw or torch.jit.is_tracing():  # a trace must keep the pad
-            mode = "reflect" if ph < h and pw < w else "replicate"
-            x = nn.functional.pad(x, (0, pw, 0, ph), mode)
-        return x
+        return pad_reflect(x, (-h) % ws, (-w) % ws)
 
     def forward(self, x):
         h, w = x.shape[2:]

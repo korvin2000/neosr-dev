@@ -9,7 +9,7 @@ from torch import Tensor
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.nn.attention.flex_attention import flex_attention
 
-from neosr.archs.arch_util import DySample
+from neosr.archs.arch_util import DySample, pad_reflect
 from neosr.utils.registry import ARCH_REGISTRY
 
 
@@ -264,8 +264,7 @@ class WindowAttention(nn.Module):
     def pad_to_win(self, x: Tensor, h: int, w: int) -> Tensor:
         pad_h = (self.window_size[0] - h % self.window_size[0]) % self.window_size[0]
         pad_w = (self.window_size[1] - w % self.window_size[1]) % self.window_size[1]
-        mode = "reflect" if pad_h < h and pad_w < w else "replicate"
-        return F.pad(x, (0, pad_w, 0, pad_h), mode=mode)
+        return pad_reflect(x, pad_h, pad_w)
 
     def to_mobile(self):
         self.rpe_bias = nn.Parameter(self.rpe_bias_of())

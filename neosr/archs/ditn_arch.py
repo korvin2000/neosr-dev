@@ -3,6 +3,8 @@ import numbers
 
 import torch
 import torch.nn.functional as F
+
+from neosr.archs.arch_util import pad_reflect
 from einops import rearrange
 from torch import nn
 
@@ -307,8 +309,7 @@ class ditn(nn.Module):
         wsize = self.patch_size  # UFONE splits the map into patch_size windows (was fixed 8)
         mod_pad_h = (wsize - h % wsize) % wsize
         mod_pad_w = (wsize - w % wsize) % wsize
-        mode = "reflect" if mod_pad_h < h and mod_pad_w < w else "replicate"
-        return F.pad(x, (0, mod_pad_w, 0, mod_pad_h), mode)
+        return pad_reflect(x, mod_pad_h, mod_pad_w)
 
     def forward(self, inp_img):
         _, _, old_h, old_w = inp_img.shape
