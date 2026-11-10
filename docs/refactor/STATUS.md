@@ -35,6 +35,24 @@ Versions follow `uv.lock` except the CPU builds of torch/torchvision and `onnxru
 The `origin` URL in `.git/config` embeds a GitHub token. The owner keeps it deliberately (private single-user
 machines; `DECISIONS.md`, 2026-11-10). Do not report it again and do not print the URL in logs or docs.
 
+## Owner priorities (2026-11-10): read before picking work
+The owner sets the order; an agent does not promote a track on its own reading of the documents. Current order:
+1. **A stable, reliable core** ("works like a Swiss watch": fast, reliable, good quality) before any new feature
+   work. Concretely: (a) the closure matrix of the stage-2 audit (167 findings: done / opt-in / rejected / open) and
+   fixing what is still open; (b) the small core items (hma `check_image_size`, the dead `rep_rt4ksr` block, one
+   defaults table, per-arch capability metadata); (c) what the Linux machine must confirm (full suite, items of
+   "Needs the Linux machine").
+2. **NeoSR Studio / UI**: finish it (next steps in "Possible on the Windows machine", item 4).
+3. **Usability of registration**: bring back decorator-style registration (`@ARCH_REGISTRY.register()`,
+   `@LOSS_REGISTRY.register()`, ...) for the person adding an arch or a loss, without the old cost (no import of
+   every module, no work at import time). Design first, owner decides.
+
+**Parked: OTF realism (Phase B).** Steps O1-O3 are merged, opt-in and change no default; O4 (`degrade.py`), O5
+(readme, templates, Studio fields) and the A/B wait until the owner reopens the track. It was started on an
+agent's recommendation ahead of the owner's priorities; the recorded order was "Phase B after R3GAN". If it is
+reopened: check first what the upstream traiNNer-redux (the-database) already has that can be adapted instead of
+written from scratch (`stage3/competitor/data_degradation.md` compares the classic upstream chain, "CU").
+
 ## Tracks
 | track | state | evidence / where to resume |
 |---|---|---|
@@ -43,7 +61,7 @@ machines; `DECISIONS.md`, 2026-11-10). Do not report it again and do not print t
 | Stage 3 Phase A (A1-A9, port from traiNNer-redux) | done, merged | `stage3/PROGRESS.md` "Phase A closed" |
 | Stage 3 Phase 0 (E0-E5: evaluation protocol, config-only A/Bs) | **not started** (E0 partly covered by the R5 split) | `stage3/CONSENSUS.md` Phase 0 |
 | R3GAN track | code done (R1-R3), data done (R5), qualification R4: bf16 PASS (provisional, no replicate), **cost gate FAIL**; **A/B (R6) not run: paused** | `stage3/PROGRESS.md` "PAUSED", `stage3/r3gan/RESULTS.md` |
-| Stage 3 Phase B (OTF realism, i-LN, KD/ECO, dynamo exporter, ...) | OTF realism: **design draft 2** (Codex-reviewed); steps **O1-O3 done** (antialiased resampler and `resize_mode*` keys; per-sample `noise_prob*` / `jpeg_prob*` gates, `blur_prob`, the clean path; the unsharp mask `sharpen_*` at LQ scale; all opt-in, defaults bitwise unchanged), O4 (`degrade.py`) and O5 (readme, templates, Studio fields) open; the owner's answers Q1-Q4 open. The rest not started; the owner ordered Phase B after R3GAN | `stage3/otf/DESIGN.md`, `stage3/REVIEW.md` "Final list" |
+| Stage 3 Phase B (OTF realism, i-LN, KD/ECO, dynamo exporter, ...) | **parked by the owner (2026-11-10)**. OTF realism: **design draft 2** (Codex-reviewed); steps **O1-O3 done** (antialiased resampler and `resize_mode*` keys; per-sample `noise_prob*` / `jpeg_prob*` gates, `blur_prob`, the clean path; the unsharp mask `sharpen_*` at LQ scale; all opt-in, defaults bitwise unchanged), O4 (`degrade.py`) and O5 (readme, templates, Studio fields) open; the owner's answers Q1-Q4 open. The rest not started; the owner ordered Phase B after R3GAN | `stage3/otf/DESIGN.md`, `stage3/REVIEW.md` "Final list" |
 | NeoSR Studio (`studio/`) | prototype: real recipe model, TOML compiler and validator; **training is simulated** (no adapter to `train.py`). Catalog synced to the trainer on 2026-11-10 and guarded by a contract | `studio/README.md`, "Studio contract" below |
 
 Last full suite: 2047 passed, 0 failed, 377 skipped (CPU, commit 504ad50). Later commits ran scoped tests only.
@@ -73,6 +91,8 @@ Last full suite: 2047 passed, 0 failed, 377 skipped (CPU, commit 504ad50). Later
    lin parity, 1080p LPIPS peak memory; DDP with NCCL (only gloo on one GPU is tested).
 
 ### Possible on the Windows machine (ordered by the compute it needs; least first)
+The order of work is "Owner priorities" above; this list only says what fits this machine. Items 1 and 8
+(OTF realism) are parked.
 **No compute (reading, design, docs, TypeScript):**
 1. **Phase B, OTF realism: design** (the owner's main goal: real-world photographs): **done as draft 2**,
    `stage3/otf/DESIGN.md`. Open: the owner's answers Q1-Q4 (above all 50+ real LQ samples for the holdout set R

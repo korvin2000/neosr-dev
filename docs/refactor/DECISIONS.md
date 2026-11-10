@@ -88,3 +88,13 @@ order already is not on several).
 - **Windows machine, addendum (same day):** it has a weak CPU as well as no GPU. A CPU-only venv exists for targeted
   tests, but work there is prioritised by compute: no-compute tasks first, then tasks one test file can check; no
   suite runs, sweeps or training (`STATUS.md`, "Machines").
+
+## Owner decisions, 2026-11-10 (priorities)
+- Order of work: (1) a stable, reliable, fast core: close the audit findings and the small core items; (2) finish
+  NeoSR Studio; (3) only then new features. OTF realism (Phase B) is parked after its steps O1-O3; it was started
+  on an agent's recommendation, not on the owner's request.
+- Registration usability: the lazy tables in `__init__.py` (stage 1, T3) were right for start-up cost but lost
+  the convenience of `@ARCH_REGISTRY.register()` / `@LOSS_REGISTRY.register()` for the person adding a module.
+  Bring the decorator style back in a form that keeps the lazy import; design first.
+- Agents ask before opening a track; reuse upstream work (traiNNer-redux by the-database) where it can be adapted
+  instead of writing from scratch.

@@ -364,3 +364,6 @@ long run are the owner's; the penalty-pass speed (above); source independence of
   to cv2.GaussianBlur's unsharp mask to 2e-6). The Degrader call now runs with autocast disabled (an ambient
   autocast changed 8-bit codes). Codex diff review: no default-path difference (72 batches against HEAD), four
   findings fixed (table in `otf/DESIGN.md`).
+- 2026-11-10, end of the OTF work in this session: **the owner parked the track** after O3 (his priorities are a
+  stable core, closing the audit findings, Studio, and decorator-style registration: `../STATUS.md`, "Owner
+  priorities"). O4, O5 and the A/B are not started. Nothing in O1-O3 changes a default.
