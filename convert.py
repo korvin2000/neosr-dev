@@ -81,8 +81,13 @@ def load_net(args: argparse.Namespace, *, qat_only: bool = False) -> nn.Module:
     if is_qat(net):  # QDQ export: frozen ranges, fake quant on, folded norms
         net.set_qat_phase(fake_quant=True, observe=False, freeze_norm=True)
         net.fold_norms()
-    if args.prune:  # plainusr's block deploy is broken: export the trained form
-        log.warning("--prune: no network supports reparametrization; exported unfused")
+    # --prune: the network's deploy form, e.g. plainusr: fused blocks, tiny weights zeroed
+    if args.prune:
+        if (deploy := getattr(net, "switch_to_deploy", None)) is None:
+            msg = f"--prune: {args.network} has no switch_to_deploy; exported unfused"
+            log.warning(msg)
+        else:
+            deploy(prune=True)
     print(f"-------- Successfully loaded network [{args.network}].")
     return net
 

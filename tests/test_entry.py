@@ -643,28 +643,39 @@ def test_convert_load_net_reads_exports_and_prefixed_dicts(tmp_path, layout):
         assert torch.equal(v, sd[k])
 
 
-def test_convert_load_net_plainusr_loads_unfused(tmp_path):
+def test_convert_prune_exports_the_deploy_form(tmp_path):
+    """A-11: --prune calls the network's switch_to_deploy(prune=True); without it the trained form loads."""
     from neosr.archs import build_network  # noqa: PLC0415
     from neosr.cli import convert_args  # noqa: PLC0415
 
-    sd = build_network({"type": "plainusr"}, scale=2).state_dict()
+    torch.manual_seed(0)
+    trained = build_network({"type": "plainusr"}, scale=2).eval()
+    sd = trained.state_dict()
     torch.save({"params": sd}, tmp_path / "w.pth")
-    args = convert_args([
-        "--input",
-        str(tmp_path / "w.pth"),
-        "-net",
-        "plainusr",
-        "-s",
-        "2",
-        "--output",
-        str(tmp_path / "m.onnx"),
-        "--prune",
-    ])
-    net = convert_py.load_net(args)
+    argv = ["--input", str(tmp_path / "w.pth"), "-net", "plainusr", "-s", "2",
+            "--output", str(tmp_path / "m.onnx")]  # fmt: skip
+    assert convert_py.load_net(convert_args(argv)).state_dict().keys() == sd.keys()
+    net = convert_py.load_net(convert_args([*argv, "--prune"]))
     assert not net.training
-    assert net.state_dict().keys() == sd.keys()
+    assert net.state_dict().keys() != sd.keys()  # fused blocks
+    trained.switch_to_deploy(prune=True)  # the arch's own deploy form is the reference
+    x = torch.rand(1, 3, 8, 8)
     with torch.inference_mode():
-        assert net(torch.rand(1, 3, 8, 8)).shape == (1, 3, 16, 16)
+        out = net(x)
+        assert out.shape == (1, 3, 16, 16)
+        torch.testing.assert_close(out, trained(x), rtol=0, atol=0)
+
+
+def test_convert_prune_without_a_deploy_form_warns(tmp_path, monkeypatch):
+    from neosr.archs import build_network  # noqa: PLC0415
+
+    sd = build_network({"type": "compact"}, scale=2).state_dict()
+    torch.save({"params": sd}, tmp_path / "w.pth")
+    seen: list[str] = []
+    monkeypatch.setattr(convert_py.log, "warning", seen.append)
+    args = _convert_args(tmp_path / "w.pth", tmp_path / "m.onnx", "--prune")
+    assert convert_py.load_net(args).state_dict().keys() == sd.keys()
+    assert seen == ["--prune: compact has no switch_to_deploy; exported unfused"]
 
 
 @pytest.mark.parametrize("out", ["m.onnx", None])

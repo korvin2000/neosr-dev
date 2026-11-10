@@ -90,7 +90,8 @@ def convert_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "-prune",
         "--prune",
         action="store_true",
-        help="Enables network prune if supported.",
+        help="Export the network's deploy form if it has one (switch_to_deploy; "
+        "plainusr: fused blocks, weights below 1e-2 zeroed).",
     )
     add("-opset", "--opset", type=int, default=17, help="ONNX opset. (default: 17)")
     add(
