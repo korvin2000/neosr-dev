@@ -16,7 +16,8 @@ reproducible research.
 - **Reproducible**: `manual_seed` seeds every RNG; `deterministic = true` also turns on deterministic kernels. A resume is a stochastic continuation: weights,
   optimizer, EMA, scheduler, scaler and counters are restored exactly, model-side RNG on rank 0 only; data order
   and augmentations are not order-exact.
-- **Simple**: plain Python, no registries or import-time magic; each package has one lookup table. Managed with
+- **Simple**: plain Python, no import-time magic: a type is declared by one decorator in its own file and
+  only the module of the requested type is imported. Managed with
   [`uv`](https://docs.astral.sh/uv/) and [`ruff`](https://docs.astral.sh/ruff/).
 
 The [wiki](https://github.com/neosr-project/neosr/wiki) has per-arch options. Where it disagrees with this
@@ -323,41 +324,43 @@ Validation runs on rank 0 with the EMA (or evaluation) weights and leaves the tr
 
 ## adding an architecture
 
-Archs are listed in one lazy table, `ARCHS` in `neosr/archs/__init__.py`. The old `@ARCH_REGISTRY.register()`
-decorators were removed with the registry: they required importing every arch module (and parsing the config for
-the scale) when the package was imported. Now only the module of the requested type is imported, the run `scale`
-is passed explicitly under the arch's own kwarg name, and an unknown type is a configuration error with a
-suggestion. `tests/test_hygiene.py` rejects `_REGISTRY` under `neosr/`.
+An arch is one file: the class, and `@ARCH_REGISTRY.register(...)` above it. The registry reads these decorators
+from the source text (it never imports the package to learn what exists), so only the module of the requested
+type is imported; the run `scale` is passed explicitly under the arch's own kwarg name, and an unknown type is a
+configuration error with a suggestion. The same holds for `LOSS_REGISTRY`, `METRIC_REGISTRY`, `DATASET_REGISTRY`
+and `MODEL_REGISTRY` (`neosr/utils/registry.py`, design `docs/refactor/design/T7_registration.md`).
 
 1. Create `neosr/archs/<name>_arch.py` with a plain `nn.Module` class. Its constructor takes the scale as a
    keyword argument with a default; factories forward `**kwargs` and never set the scale themselves. No work at
    import time (no CUDA, argv, RNG or `torch.set_default_device`); create tensors on the input's device.
+   Register every class and factory that is a `type`: `scale=` names the constructor kwarg that receives the
+   run scale, `scale=None` marks a network without one (a discriminator).
 
    ```python
    from torch import nn
 
+   from neosr.utils.registry import ARCH_REGISTRY
+
+   @ARCH_REGISTRY.register(scale="upscale")
    class myarch(nn.Module):
        def __init__(self, in_ch: int = 3, dim: int = 64, upscale: int = 4) -> None:
            ...
 
+   @ARCH_REGISTRY.register(scale="upscale")
    def myarch_light(**kwargs):
        return myarch(dim=32, **kwargs)
    ```
 
-2. Add one `ARCHS` row per class and factory: `type -> (module, scale kwarg)`. The type is the Python name in
-   the module. Use `None` for networks without a scale (discriminators):
-
-   ```python
-   "myarch": ("myarch_arch", "upscale"), "myarch_light": ("myarch_arch", "upscale"),
-   "mydisc": ("mydisc_arch", None),
-   ```
+2. The decorator has one form: at the start of the line, directly above a module-level `class` or `def`
+   (other decorators go above it), with literal keyword arguments. The type is the Python name. Anything else
+   (an alias, a call, a decorator inside `if`) is refused with the file name when the registry is first used.
 
 3. Use it: `[network_g] type = "myarch"` (other keys go to the constructor) or `[network_d] type = "mydisc"`.
    The run `scale` is injected as `upscale`; an explicit contradicting `upscale` is an error.
-4. Test: `pytest tests/test_registry.py tests/test_archs.py -k myarch`. Both pick the rows up: the row resolves,
-   the scale kwarg reaches the constructor, the module imports without touching CUDA, and (on CUDA) the x2/x4
-   forward has the right shape and the backward is finite. A new scale-free row must also be added to
-   `NON_SR_ARCHS` in `tests/test_registry.py`.
+4. Test: `pytest tests/test_registry.py tests/test_archs.py -k myarch`. Both pick the type up: it resolves, the
+   scale kwarg reaches the constructor, the module imports without touching CUDA, and (on CUDA) the x2/x4
+   forward has the right shape and the backward is finite. No list has to be edited anywhere else; after adding
+   a type run `python scripts/studio_surface.py` so the Studio catalog knows it.
 
 ## adding a loss
 
@@ -367,8 +370,11 @@ suggestion. `tests/test_hygiene.py` rejects `_REGISTRY` under `neosr/`.
 
    ```python
    from torch import Tensor
-   from neosr.losses.base import Loss
 
+   from neosr.losses.base import Loss
+   from neosr.utils.registry import LOSS_REGISTRY
+
+   @LOSS_REGISTRY.register()
    class my_loss(Loss):
        def __init__(self, eps: float = 1e-6) -> None:
            super().__init__()
@@ -381,10 +387,10 @@ suggestion. `tests/test_hygiene.py` rejects `_REGISTRY` under `neosr/`.
 2. Override `evaluate(ctx)` only if the loss needs other inputs or models: the `Context` holds `sr`, `gt`, `lq`,
    `lq_up`, `it` (the update being computed) and the discriminator (`net_d`, `net_d_adv`); `ctx.log(key, value)`
    logs extra values (see `gan_loss.py`).
-3. Add a row to `LOSSES` in `neosr/losses/__init__.py`: `"my_loss": ("my_loss", None)` (module, scale kwarg or
-   `None`).
+3. Put it in a module under `neosr/losses/`; `@LOSS_REGISTRY.register()` is the whole registration (same form
+   as for archs, no arguments).
 4. Use it with `[train.my_opt] type = "my_loss"`, `loss_weight = 0.5`, `eps = 1e-4`; it logs `l_g_my`. The builder
-   moves it to the device and freezes its parameters. `tests/test_registry.py` checks the row.
+   moves it to the device and freezes its parameters. `tests/test_registry.py` checks it.
 
 ## features
 

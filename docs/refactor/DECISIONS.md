@@ -121,3 +121,19 @@ optimisations, not a revert. Old code for reference: this repository's history (
 https://github.com/delafer/neosr. The mechanism (how the lookup stays lazy) is not decided: design note
 `design/T7_registration.md` first, then the owner chooses. `tests/test_hygiene.py` bans `_REGISTRY` today; that
 rule changes with the implementation.
+
+## Owner decisions, 2026-11-10 (session 7: registry mechanism, small core items)
+- **Registry mechanism: A1 of `design/T7_registration.md`.** `@X_REGISTRY.register(...)` is a declaration and
+  returns the object unchanged; a registry reads the decorators of its package from the source text on first
+  use (no import) and imports only the module of the requested type. One accepted decorator form; every other
+  spelling fails the scan by file name; an `ast` reading in `tests/test_registry.py` is the independent check.
+- **Decorator arguments:** `scale=` is required on archs (the constructor kwarg that receives the run scale, or
+  `None`); metrics carry `choices=`. The tables `ARCHS`, `LOSSES`, `METRICS`, `CHOICES`, `DATASETS`, `MODELS`
+  and the test list `NON_SR_ARCHS` are gone.
+- **ONNX export gaps stay in `convert.py`** (`NO_ONNX`, `STATIC_ONLY`): they describe one exporter at one
+  opset, not the arch. This closes the registry half of follow-up S.11.
+- **Pad-to-window at trace time:** the reflect/replicate choice is frozen by a trace in every arch that pads
+  its input this way, not only in hma. The owner chose one shared trace-invariant helper for all of them.
+- **Commits:** one local commit per step in this session; pushed at the end on the owner's word.
+- Implemented as proposed without a separate question, open to revision: no aliases for type names, no
+  user plugin folders yet, `OPTIMIZERS` / `SCHEDULERS` stay tables (torch's own classes).
