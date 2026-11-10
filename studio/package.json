@@ -8,6 +8,9 @@
     "build": "ng build",
     "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p server/tsconfig.json --noEmit",
     "test": "ng test",
+    "surface": "python ../scripts/studio_surface.py",
+    "surface:check": "python ../scripts/studio_surface.py --check",
+    "contract": "npm run surface:check && tsx tools/contract.ts",
     "ng": "ng"
   },
   "private": true,

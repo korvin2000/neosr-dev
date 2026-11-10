@@ -19,20 +19,20 @@ const KEY = 'neosr-studio.node-presets.v1';
 const BUILT_IN: readonly NodePreset[] = [
   {
     id: 'builtin-optim-g-template',
-    name: 'Template G (adan_sf 1e-3)',
+    name: 'Template G (adamw 2e-4)',
     nodeType: 'optimizer-g',
     nodeLabel: 'Optimizer G',
-    description: 'adan_sf, lr 1e-3, betas 0.98/0.92/0.99, wd 0.01, warm-up 1600 — the shipped train_*.toml values.',
-    values: { type: 'adan_sf', lr: 0.001, betas: [0.98, 0.92, 0.99], weight_decay: 0.01, warmup_steps: 1600 },
+    description: 'adamw, lr 2e-4, betas 0.9/0.99, wd 0, no warm-up — the shipped train_*.toml values.',
+    values: { type: 'adamw', lr: 0.0002, betas: [0.9, 0.99], weight_decay: 0, warmup_steps: 0 },
     createdAt: '2026-10-27T00:00:00.000Z',
   },
   {
-    id: 'builtin-optim-g-plksr',
-    name: 'PLKSR-family G (adan_sf 5e-4)',
+    id: 'builtin-optim-g-sf',
+    name: 'Schedule-free G (adan_sf 5e-4)',
     nodeType: 'optimizer-g',
     nodeLabel: 'Optimizer G',
-    description: 'The lower generator LR the templates use for PLKSR, RealPLKSR, ESC, FlexNet, KRGN, PlainUSR, Sebica.',
-    values: { type: 'adan_sf', lr: 0.0005, betas: [0.98, 0.92, 0.99], weight_decay: 0.01, warmup_steps: 1600 },
+    description: 'The schedule-free option the shipped templates name: adan_sf, lr 5e-4, betas 0.98/0/0.99, wd 0.01, warm-up 1600.',
+    values: { type: 'adan_sf', lr: 0.0005, betas: [0.98, 0.0, 0.99], weight_decay: 0.01, warmup_steps: 1600 },
     createdAt: '2026-10-27T00:00:00.000Z',
   },
   {

@@ -50,6 +50,8 @@ export interface DiscriminatorInfo {
   readonly description: string;
   readonly params: readonly ParamInfo[];
   readonly note?: string;
+  /** The only GT crop (patch_size × scale) the head accepts (R3GAN scalar heads). */
+  readonly gtCrop?: number;
 }
 
 export type LossCategory = 'pixel' | 'structural' | 'perceptual' | 'frequency' | 'color' | 'adversarial' | 'distribution';

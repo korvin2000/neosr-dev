@@ -189,9 +189,14 @@ function sectionEntries(node: RecipeNode, spec: NodeSpec, sectionPath: string, p
       }
       continue;
     }
-    entries[key] = annotate(value, origin(node, field.key), isFloatKey(key, sectionPath));
+    entries[key] = annotate(tomlValue(value), origin(node, field.key), isFloatKey(key, sectionPath));
   }
   return entries;
+}
+
+/** Select options are strings; the boolean choices of a mixed-type key (`train.clamp`) are TOML booleans. */
+function tomlValue(value: unknown): unknown {
+  return value === 'true' ? true : value === 'false' ? false : value;
 }
 
 function buildDoc(
@@ -227,6 +232,9 @@ function buildDoc(
     root['compile'] = annotate(rt['compile'] === true ? true : undefined, origin(ctx.runtime, 'compile'));
     root['compile_mode'] = annotate(rt['compile'] === true && rt['compile_mode'] !== 'default' ? rt['compile_mode'] : undefined, origin(ctx.runtime, 'compile_mode'));
     root['manual_seed'] = annotate(numberOrUndefined(rt['manual_seed']), origin(ctx.runtime, 'manual_seed'));
+    for (const key of ['deterministic', 'fp16_accumulation', 'detect_anomaly']) {
+      root[key] = annotate(rt[key] === true ? true : undefined, origin(ctx.runtime, key));
+    }
     root['num_gpu'] = annotate(numberOrUndefined(rt['num_gpu']), origin(ctx.runtime, 'num_gpu'));
   }
 
@@ -275,14 +283,15 @@ function buildDoc(
         if (!info) {
           continue;
         }
-        sections.push({
-          path: `val.metrics.${name}`,
-          origin: origin(ctx.val, 'metrics'),
-          entries: {
-            type: annotate(info.type, origin(ctx.val, 'metrics')),
-            better: annotate(info.better === 'lower' ? 'lower' : undefined, origin(ctx.val, 'metrics')),
-          },
-        });
+        const entries: Record<string, unknown> = {
+          type: annotate(info.type, origin(ctx.val, 'metrics')),
+          better: annotate(info.better === 'lower' ? 'lower' : undefined, origin(ctx.val, 'metrics')),
+        };
+        for (const p of info.params.filter((p) => p.options)) {
+          const value = nodeValues(ctx.val)[`${name}_${p.key}`];
+          entries[p.key] = annotate(value !== p.default ? value : undefined, origin(ctx.val, `${name}_${p.key}`));
+        }
+        sections.push({ path: `val.metrics.${name}`, origin: origin(ctx.val, 'metrics'), entries });
       }
     }
   }
@@ -309,7 +318,12 @@ function buildDoc(
   }
 
   // --- train -------------------------------------------------------------
-  sections.push({ path: 'train', origin: origin(plan), entries: sectionEntries(plan, planSpec, 'train', phase.id) });
+  const trainEntries = sectionEntries(plan, planSpec, 'train', phase.id);
+  const planValues = nodeValues(plan);
+  if (planValues['grad_clip'] === 'norm') {
+    trainEntries['grad_clip'] = annotate(numberOrUndefined(planValues['grad_clip_norm']), origin(plan, 'grad_clip_norm'));
+  }
+  sections.push({ path: 'train', origin: origin(plan), entries: trainEntries });
   if (ctx.optimG) {
     sections.push({ path: 'train.optim_g', origin: origin(ctx.optimG), entries: optimizerEntries(ctx.optimG, NODE_TYPES.optimizerG, 'train.optim_g', phase) });
   }
@@ -317,7 +331,12 @@ function buildDoc(
     sections.push({ path: 'train.optim_d', origin: origin(ctx.optimD), entries: optimizerEntries(ctx.optimD, NODE_TYPES.optimizerD, 'train.optim_d', phase) });
   }
   if (ctx.schedule) {
-    sections.push({ path: 'train.scheduler', origin: origin(ctx.schedule), entries: sectionEntries(ctx.schedule, nodeSpec(NODE_TYPES.schedule), 'train.scheduler', phase.id) });
+    const entries = sectionEntries(ctx.schedule, nodeSpec(NODE_TYPES.schedule), 'train.scheduler', phase.id);
+    // `nets` may only name optimizers this phase has; none listed is NeoSR's default.
+    const nets = phaseNodeValues(ctx.schedule, phase.id)['nets'];
+    const kept = Array.isArray(nets) ? nets.filter((n) => n === 'g' || (n === 'd' && hasGan)) : [];
+    entries['nets'] = annotate(kept.length ? kept : undefined, origin(ctx.schedule, 'nets'));
+    sections.push({ path: 'train.scheduler', origin: origin(ctx.schedule), entries });
   }
 
   // --- losses ------------------------------------------------------------
@@ -362,7 +381,8 @@ function optimizerEntries(node: RecipeNode, type: string, sectionPath: string, p
   const entries = sectionEntries(node, spec, sectionPath, phase.id);
   const values = phaseNodeValues(node, phase.id, spec);
   const info = OPTIMIZERS.find((o) => o.type === values['type']);
-  if (info && !info.scheduleFree) {
+  // 0 is NeoSR's default (no warm-up); the templates leave it out.
+  if (!(Number(values['warmup_steps']) > 0)) {
     delete entries['warmup_steps'];
   }
   // Adam-family optimizers take two betas; trim a three-value list left over from Adan.

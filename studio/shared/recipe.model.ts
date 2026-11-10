@@ -69,8 +69,8 @@ export interface LossRow {
   readonly params: Readonly<Record<string, unknown>>;
   /**
    * Per-phase overrides. A phase without an entry uses `enabled` and `weight`.
-   * Weights are piecewise-constant: NeoSR has no native loss schedule, so a change of weight is
-   * a phase boundary (a new run).
+   * Per-phase weights are piecewise-constant (each phase is its own run); a ramp or switch within a
+   * run uses NeoSR's `start_iter` / `ramp_iters` / `end_iter` row parameters.
    */
   readonly schedule: Readonly<Record<string, LossPhaseSchedule>>;
 }

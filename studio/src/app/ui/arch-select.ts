@@ -34,7 +34,7 @@ const RECOMMENDED = ['compact', 'span', 'realplksr', 'hat_s'];
 
 /**
  * The architecture choice: a button that states the current model in one line and opens a
- * searchable sheet with size and type facets. 93 types never appear at once.
+ * searchable sheet with size and type facets. 95 types never appear at once.
  */
 @Component({
   selector: 'app-arch-select',

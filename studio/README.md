@@ -11,7 +11,7 @@ npm install
 npm start          # web on http://localhost:4300 (proxies /api) + simulated backend on :4310
 ```
 
-Or separately: `npm run web` and `npm run api`. Smoke-test the compiler with `npx tsx tools/smoke-compile.ts`.
+Or separately: `npm run web` and `npm run api`. Smoke-test the compiler with `npx tsx tools/smoke-compile.ts`; check the catalog against the trainer with `npm run contract` (see below).
 
 ## What it does (v2, "ask less, show what the decision needs")
 
@@ -31,23 +31,40 @@ Rules behind it (see `../design/NeoSR_Studio_UI_Concept_v2.md`): presets are com
 ## Layout
 
 ```text
-shared/     recipe model · NeoSR catalog (93 archs, 15 losses, 6 optimizers…) · compiler/validator/importer  (browser + server)
+shared/     recipe model · NeoSR catalog (95 archs, 9 discriminators, 16 losses, 6 optimizers, 5 metrics…) · compiler/validator/importer  (browser + server)
 server/     Express API + deterministic trainer simulator (see server/API.md)
 src/app/    Angular 22, standalone + signals + zoneless: core stores, ui primitives, feature pages
-tools/      smoke-compile.ts
+tools/      smoke-compile.ts, contract.ts (compiled TOMLs → the trainer's own validation)
 ```
 
 See `DEVELOPING.md` for the store/command API and conventions, and `server/API.md` for the backend contract.
 
 ## Quality gates run on this prototype
 
-- `npx ng build` (production) and `ng test` (29 compiler / importer / validator / sections cases) pass.
+- `npx ng build` (production) and `ng test` (39 compiler / importer / validator / sections / catalog-contract cases) pass, and so does `npm run contract`.
 - Independent reviews by a second model: one of the UX concept before building (12 findings, folded into `../design/NeoSR_Studio_UI_Concept.md` §15a), one of the v1 code (20 findings; 18 fixed, 2 mitigated), and two design critiques of the v2 rework (Opus 5.5 and Codex) folded into `../design/NeoSR_Studio_UI_Concept_v2.md`.
 - Browser walkthrough of every page against the simulated backend, including launch → live cockpit → graceful stop → resume.
 - Visual QA pass with pixel captures at 1440×900 and 390×844 (`tools/shot.mjs`, Chrome DevTools protocol so phone widths are exact) of every screen and every Build section; captures live in `../design/screenshots/qa/` and `qa-phone/`.
 
-Known limitations left open on purpose: the simulator keeps full-resolution series in memory until a run ends (snapshots are downsampled), and the TOML importer models metrics by name (parameters are preserved as extras rather than edited in the Validation node).
+Known limitations left open on purpose: the simulator keeps full-resolution series in memory until a run ends (snapshots are downsampled), and the TOML importer models metrics by name plus their fixed choices (TOPIQ `dataset`, LPIPS `net`); other metric parameters (`crop_border`, `test_y_channel`) are preserved as extras rather than edited in the Validation node.
 
 ## Facts the UI is built on
 
-The catalog and the validation rules were extracted from this repository's `neosr/` package (`../design/neosr_config_surface.md`): required keys, the GAN triple coupling (`network_d` ⇔ `optim_d` ⇔ `gan_opt`), the OTF bundle (`model_type = otf` + `[degradations]`), platform gates (`compile` not on Windows, `bfloat16` needs `use_amp`), per-arch scale limits and window sizes, and the fact that NeoSR keeps loss weights constant within a run — which is why a changed weight is a phase boundary, not a ramp.
+The catalog and the validation rules were extracted from this repository's `neosr/` package (`../design/neosr_config_surface.md`) and synced to the trainer state of 2026-11-10 (stage 3 Phase A + the R3GAN code): required keys, the GAN triple coupling (`network_d` ⇔ `optim_d` ⇔ `gan_opt`), the OTF bundle (`model_type = otf` + `[degradations]`), platform gates (`compile` not on Windows, `bfloat16` needs `use_amp`), per-arch scale limits (`nafnet` is ×1 only) and window sizes, the R3GAN scalar heads' fixed GT crop (128 / 256 px), and the `validate_train` rules (`val.save_best` names a metric, `train.clamp` / `train.grad_clip` value domains, `train.scheduler.nets` names existing optimizers, no R1/R2 with `dunet`).
+
+The templates follow the shipped `options/train_*.toml`: G `adamw` lr 2e-4, D `adan_sf` lr 1e-4 with warm-up 600, L1 + MS-SSIM + consistency + LDL + FDL (DINOv2, 0.02) + GAN 0.3, EMA 0.999 with `ema_power` 0.75, no batch augmentation.
+
+Phases are sequential runs: an objective change, a new discriminator or a separate fine-tune is a phase boundary, and a weight edited per phase holds for that whole run. Within one run NeoSR itself can switch or ramp a term: every loss row takes `start_iter`, `ramp_iters` and `end_iter` (row parameters, counted in the run's native updates).
+
+## Staying in sync with the trainer
+
+`shared/catalog/neosr-surface.json` is generated from the trainer's tables by `../scripts/studio_surface.py`; never edit it by hand.
+
+| Step | Command |
+|---|---|
+| Regenerate the surface after a trainer change | `npm run surface` |
+| Fail when the surface is stale | `npm run surface:check` |
+| Catalog vs surface (types, losses, metrics, `gan_type`, schema keys) | `npx ng test --watch=false` (`src/app/core/catalog-contract.spec.ts`) |
+| Compile every template, an all-options recipe and the shipped realplksr recipes, then run the trainer's `load_config` + `validate_train` on them | `npm run contract` |
+
+`--validate` covers the schema and the cross-key rules; constructor kwargs (`network_*`, `train.*_opt`, optimizers, scheduler, metrics) are opaque to it and come from reading the Python code.

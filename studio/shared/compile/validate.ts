@@ -4,7 +4,8 @@
  * Source: design/neosr_config_surface.md §10.
  */
 import { ARCH_BY_TYPE } from '../catalog/archs';
-import { LOSSES } from '../catalog/losses';
+import { DISCRIMINATORS } from '../catalog/discriminators';
+import { LOSS_SCHEDULE_PARAMS, LOSSES } from '../catalog/losses';
 import { NODE_TYPES, nodeSpec } from '../catalog/node-catalog';
 import { OPTIMIZERS } from '../catalog/optimizers';
 import { fieldVisible, portVisible } from '../catalog/types';
@@ -172,12 +173,21 @@ export function validateRecipe(recipe: Recipe, ctx: PlanContext, options: Valida
   if (!anyGan && (ctx.dmodel || ctx.optimD)) {
     add('warning', 'native', 'A Discriminator / Optimizer D is connected but no phase enables gan_loss; they will be left out of the TOML.', { nodeId: (ctx.dmodel ?? ctx.optimD)?.id });
   }
+  const dType = ctx.dmodel ? String(nodeValues(ctx.dmodel)['type']) : '';
   for (const row of rows) {
     if (row.type === 'gan_loss' && row.enabled && row.weight === 0) {
       add('warning', 'native', 'gan_loss with weight 0 still trains the discriminator; disable the row instead.', { nodeId: ctx.losses?.id, fieldKey: 'losses' });
     }
     if (!LOSSES.some((l) => l.type === row.type)) {
       add('blocker', 'native', `Unknown loss type "${row.type}".`, { nodeId: ctx.losses?.id, fieldKey: 'losses' });
+    }
+    if (row.type === 'gan_loss' && dType === 'dunet' && (Number(row.params['r1_gamma']) > 0 || Number(row.params['r2_gamma']) > 0)) {
+      add('blocker', 'native', 'r1_gamma / r2_gamma need a discriminator with a double backward; dunet has none.', { nodeId: ctx.losses?.id, fieldKey: 'losses', hint: 'Set both to 0 or use the r3gan discriminator.' });
+    }
+    const [start, ramp, end] = LOSS_SCHEDULE_PARAMS.map((p) => row.params[p.key]);
+    const counts = [start ?? 0, ramp ?? 0, end ?? 0];
+    if (!counts.every((v) => Number.isInteger(v) && Number(v) >= 0) || (end != null && Number(end) <= Number(start ?? 0))) {
+      add('blocker', 'native', `${row.type}: start_iter, ramp_iters and end_iter must be integers ≥ 0 with end_iter > start_iter.`, { nodeId: ctx.losses?.id, fieldKey: 'losses' });
     }
   }
 
@@ -211,9 +221,22 @@ export function validateRecipe(recipe: Recipe, ctx: PlanContext, options: Valida
     }
   }
   if (ctx.dmodel) {
-    const t = String(nodeValues(ctx.dmodel)['type']);
-    if (ARCH_BY_TYPE.has(t)) {
-      add('blocker', 'native', `"${t}" is a generator; network_d needs a discriminator type.`, { nodeId: ctx.dmodel.id, fieldKey: 'type' });
+    if (ARCH_BY_TYPE.has(dType)) {
+      add('blocker', 'native', `"${dType}" is a generator; network_d needs a discriminator type.`, { nodeId: ctx.dmodel.id, fieldKey: 'type' });
+    }
+    const head = DISCRIMINATORS.find((d) => d.type === dType);
+    if (head?.gtCrop && ctx.data) {
+      for (const { phase } of ranges.filter(({ phase }) => phaseHasGan(rows, phase.id))) {
+        const gt = Number(phaseNodeValues(ctx.data, phase.id)['patch_size']) * scale;
+        if (gt !== head.gtCrop) {
+          add('blocker', 'arch', `${head.label} needs a GT crop of exactly ${head.gtCrop} px (patch_size × scale), got ${gt}${recipe.phases.length > 1 ? ` in phase "${phase.name}"` : ''}.`, {
+            nodeId: ctx.data.id,
+            fieldKey: 'patch_size',
+            phaseId: phase.id,
+            hint: `Use patch_size ${head.gtCrop / scale} or the r3gan patch head.`,
+          });
+        }
+      }
     }
   }
 
@@ -288,6 +311,11 @@ export function validateRecipe(recipe: Recipe, ctx: PlanContext, options: Valida
     if (sets.every((s) => s.type === 'single') && Array.isArray(metrics) && metrics.length) {
       add('info', 'native', 'Metrics are skipped for visual-only ("single") validation sets.', { nodeId: ctx.val.id, fieldKey: 'metrics' });
     }
+    const best = String(vv['save_best'] ?? '');
+    const extraMetrics = (recipe.nativeExtras['val'] as { metrics?: Record<string, unknown> } | undefined)?.metrics ?? {};
+    if (best && !(Array.isArray(metrics) && metrics.includes(best)) && !(best in extraMetrics)) {
+      add('blocker', 'native', `val.save_best = "${best}" is not one of the validation metrics.`, { nodeId: ctx.val.id, fieldKey: 'save_best', hint: 'Enable that metric or turn Save best off.' });
+    }
     const valFreq = Number(vv['val_freq']);
     if (Number.isFinite(saveFreq) && valFreq > 0 && valFreq * 4 < saveFreq) {
       add('info', 'heuristic', `Validating every ${valFreq} updates while saving every ${saveFreq} costs time; most validation points will have no saved weights.`, { nodeId: ctx.val.id, fieldKey: 'val_freq' });
@@ -307,8 +335,25 @@ export function validateRecipe(recipe: Recipe, ctx: PlanContext, options: Valida
       add('blocker', 'native', 'Learning rate must be > 0.', { nodeId: node.id, fieldKey: 'lr' });
     }
   }
-  if (ctx.schedule && ctx.optimG && sfTypes.includes(String(nodeValues(ctx.optimG)['type']))) {
-    add('warning', 'heuristic', 'An LR Schedule is connected, but the generator optimizer is schedule-free; the scheduler will fight the optimizer.', { nodeId: ctx.schedule.id, hint: 'Remove the LR Schedule or switch to adamw / adan.' });
+  if (ctx.schedule) {
+    const nets = nodeValues(ctx.schedule)['nets'];
+    const listed = Array.isArray(nets) ? (nets as string[]) : [];
+    if (listed.includes('d') && !anyGan) {
+      add('blocker', 'native', 'train.scheduler.nets lists "d", but no phase trains a discriminator.', { nodeId: ctx.schedule.id, fieldKey: 'nets' });
+    }
+    // NeoSR schedules the optimizers in nets, else every optimizer that is not schedule-free.
+    const optimizers = [
+      ['g', ctx.optimG],
+      ['d', anyGan ? ctx.optimD : undefined],
+    ] as const;
+    const scheduled = optimizers.filter(([net, node]) => node && (listed.length ? listed.includes(net) : !sfTypes.includes(String(nodeValues(node)['type']))));
+    if (scheduled.length === 0) {
+      add('warning', 'native', 'The LR Schedule drives no optimizer: NeoSR leaves schedule-free optimizers out unless nets lists them.', {
+        nodeId: ctx.schedule.id,
+        fieldKey: 'nets',
+        hint: 'List g in Scheduled optimizers, switch to adamw / adan, or remove the LR Schedule.',
+      });
+    }
   }
 
   // --- runtime -----------------------------------------------------------------
@@ -333,6 +378,13 @@ export function validateRecipe(recipe: Recipe, ctx: PlanContext, options: Valida
   }
   if (/debug/i.test(name)) {
     add('info', 'native', '"debug" in the run name forces debug frequencies (validate/save every 8 updates).', { nodeId: plan.id, fieldKey: 'name' });
+  }
+  for (const key of ['clamp', 'grad_clip']) {
+    const widget = planSpec.fields.find((f) => f.key === key)?.widget;
+    const options = widget?.kind === 'select' ? widget.options.map((o) => o.value) : [];
+    if (!options.includes(String(pv[key]))) {
+      add('blocker', 'native', `train.${key} must be one of ${options.join(', ')} (got ${String(pv[key])}).`, { nodeId: plan.id, fieldKey: key });
+    }
   }
   if (pv['use_tb_logger'] !== true) {
     add('warning', 'heuristic', 'TensorBoard logger is off: Studio charts and TensorBoard will have no scalars.', { nodeId: plan.id, fieldKey: 'use_tb_logger' });
@@ -374,7 +426,7 @@ export function validateRecipe(recipe: Recipe, ctx: PlanContext, options: Valida
 }
 
 /** Native numeric rules NeoSR enforces at load time (config.py validate_train, train.py). */
-const NUMERIC_RULES: Record<string, { readonly min?: number; readonly exclusiveMin?: number; readonly integer?: boolean; readonly when?: (v: Record<string, unknown>) => boolean }> = {
+const NUMERIC_RULES: Record<string, { readonly min?: number; readonly max?: number; readonly exclusiveMin?: number; readonly integer?: boolean; readonly when?: (v: Record<string, unknown>) => boolean }> = {
   patch_size: { min: 1, integer: true },
   batch_size: { min: 1, integer: true },
   accumulate: { min: 1, integer: true },
@@ -385,6 +437,9 @@ const NUMERIC_RULES: Record<string, { readonly min?: number; readonly exclusiveM
   save_checkpoint_freq: { min: 1, integer: true },
   print_freq: { min: 1, integer: true },
   keep_states: { min: 0, integer: true },
+  keep_exports: { min: 0, integer: true },
+  grad_clip_norm: { exclusiveMin: 0 },
+  aug_multi_prob: { min: 0, max: 1 },
   max_skip_streak: { min: 1, integer: true },
   ema: { min: 0 },
   ema_power: { exclusiveMin: 0, when: (v) => Number(v['ema']) > 0 },
@@ -417,9 +472,10 @@ function checkNumbers(node: RecipeNode, label: string, add: (severity: Severity,
       !Number.isFinite(n) ||
       (rule.integer && !Number.isInteger(n)) ||
       (rule.min !== undefined && n < rule.min) ||
+      (rule.max !== undefined && n > rule.max) ||
       (rule.exclusiveMin !== undefined && n <= rule.exclusiveMin);
     if (bad) {
-      const bound = rule.exclusiveMin !== undefined ? `> ${rule.exclusiveMin}` : `≥ ${rule.min}`;
+      const bound = rule.exclusiveMin !== undefined ? `> ${rule.exclusiveMin}` : rule.max !== undefined ? `in [${rule.min}, ${rule.max}]` : `≥ ${rule.min}`;
       add('blocker', 'native', `${label}: ${field.label} must be ${rule.integer ? 'an integer ' : ''}${bound} (got ${String(raw)}).`, { nodeId: node.id, fieldKey: field.key });
     }
   }

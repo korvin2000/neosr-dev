@@ -35,13 +35,12 @@ function baseDraft(opts: {
   iters: number;
   patch?: number;
   batch?: number;
-  lr?: number;
   otf?: boolean;
   archParams?: Record<string, unknown>;
 }): RecipeDraft {
   const gan = opts.objective === 'perceptual';
   return {
-    plan: { name: opts.name, save_checkpoint_freq: 1000, ema: 0.999, use_tb_logger: true },
+    plan: { name: opts.name, save_checkpoint_freq: 1000, ema: 0.999, ema_power: 0.75, use_tb_logger: true },
     runtime: { precision: 'bf16', fast_matmul: true },
     dataset: {
       type: opts.otf ? 'otf' : 'paired',
@@ -49,6 +48,9 @@ function baseDraft(opts: {
       dataroot_lq: opts.otf ? '' : WIN('C:\\datasets\\train\\lq\\'),
       patch_size: opts.patch ?? 64,
       batch_size: opts.batch ?? 8,
+      // the shipped templates leave batch augmentation commented out
+      augmentation: [],
+      aug_prob: [],
     },
     degradation: opts.otf ? { ...DEGRADATION_TEMPLATE } : null,
     validation: {
@@ -60,7 +62,7 @@ function baseDraft(opts: {
     discriminator: gan ? { type: 'metagan' } : null,
     init: { mode: 'scratch' },
     losses: lossRowsFor(opts.objective),
-    optimG: { type: 'adan_sf', lr: opts.lr ?? 0.001, betas: [0.98, 0.92, 0.99], weight_decay: 0.01, warmup_steps: 1600 },
+    optimG: { type: 'adamw', lr: 0.0002, betas: [0.9, 0.99], weight_decay: 0, warmup_steps: 0 },
     optimD: gan ? { type: 'adan_sf', lr: 0.0001, betas: [0.98, 0.92, 0.99], weight_decay: 0.01, warmup_steps: 600 } : null,
     schedule: null,
     phases: [newPhase('Train', opts.iters, 'scratch')],
@@ -91,7 +93,7 @@ function curriculumDraft(): RecipeDraft {
       },
     };
   });
-  const base = baseDraft({ name: '4x_curriculum_realplksr', scale: 4, arch: 'realplksr', objective: 'perceptual', iters: 300_000, lr: 0.0005 });
+  const base = baseDraft({ name: '4x_curriculum_realplksr', scale: 4, arch: 'realplksr', objective: 'perceptual', iters: 300_000 });
   return { ...base, losses: rows, phases: [p1, p2] };
 }
 
@@ -133,12 +135,12 @@ const TEMPLATES: readonly TemplateDef[] = [
     totalIter: 200_000,
     tags: ['balanced', 'no gan'],
     provenance: 'neosr template',
-    draft: () => baseDraft({ name: '4x_realplksr_balanced', scale: 4, arch: 'realplksr', objective: 'balanced', iters: 200_000, lr: 0.0005 }),
+    draft: () => baseDraft({ name: '4x_realplksr_balanced', scale: 4, arch: 'realplksr', objective: 'balanced', iters: 200_000 }),
   },
   {
     id: '4x-neosr-gan',
     label: '×4 NeoSR template · GAN',
-    description: 'Exactly the shipped train_*.toml recipe: MS-SSIM + consistency + LDL + FDL + GAN (metagan), wavelet view from 80k.',
+    description: 'Exactly the shipped train_*.toml recipe: L1 + MS-SSIM + consistency + LDL + FDL + GAN (metagan), wavelet view from 80k.',
     scale: 4,
     arch: 'realplksr',
     objective: 'perceptual',
@@ -146,7 +148,7 @@ const TEMPLATES: readonly TemplateDef[] = [
     totalIter: 1_000_000,
     tags: ['gan', 'template'],
     provenance: 'neosr template',
-    draft: () => baseDraft({ name: '4x_realplksr_gan', scale: 4, arch: 'realplksr', objective: 'perceptual', iters: 1_000_000, lr: 0.0005 }),
+    draft: () => baseDraft({ name: '4x_realplksr_gan', scale: 4, arch: 'realplksr', objective: 'perceptual', iters: 1_000_000 }),
   },
   {
     id: '4x-curriculum',
@@ -172,7 +174,7 @@ const TEMPLATES: readonly TemplateDef[] = [
     totalIter: 500_000,
     tags: ['otf', 'gan', 'real-world'],
     provenance: 'neosr template',
-    draft: () => baseDraft({ name: '4x_realplksr_otf', scale: 4, arch: 'realplksr', objective: 'perceptual', iters: 500_000, lr: 0.0005, otf: true }),
+    draft: () => baseDraft({ name: '4x_realplksr_otf', scale: 4, arch: 'realplksr', objective: 'perceptual', iters: 500_000, otf: true }),
   },
   {
     id: '1x-restore-span',

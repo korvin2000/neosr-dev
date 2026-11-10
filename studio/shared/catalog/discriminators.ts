@@ -76,4 +76,42 @@ export const DISCRIMINATORS: readonly DiscriminatorInfo[] = [
     ],
     note: 'downloads torchvision ResNet18 weights on first use',
   },
+  {
+    type: 'r3gan',
+    label: 'R3GAN',
+    description: 'R3GAN discriminator without normalisation (double backward for R1/R2); patch head: one logit per 16 px of GT.',
+    params: [
+      { key: 'in_ch', type: 'int', default: 3 },
+      { key: 'widths', type: 'list', default: [32, 64, 128, 256, 256] },
+      { key: 'group_width', type: 'int', default: 16 },
+      { key: 'expansion', type: 'int', default: 2 },
+      { key: 'blocks', type: 'int', default: 1 },
+      { key: 'head', type: 'str', default: 'patch', options: ['patch', 'scalar'] },
+    ],
+    note: 'train_realplksr_r3gan.toml',
+  },
+  {
+    type: 'r3gan_scalar128',
+    label: 'R3GAN scalar 128',
+    description: "R3GAN with the paper's 4x4 scalar head (six stages); needs a GT crop of exactly 128 px.",
+    params: [
+      { key: 'in_ch', type: 'int', default: 3 },
+      { key: 'group_width', type: 'int', default: 16 },
+      { key: 'expansion', type: 'int', default: 2 },
+      { key: 'blocks', type: 'int', default: 1 },
+    ],
+    gtCrop: 128,
+  },
+  {
+    type: 'r3gan_scalar256',
+    label: 'R3GAN scalar 256',
+    description: "R3GAN with the paper's 4x4 scalar head (seven stages); needs a GT crop of exactly 256 px.",
+    params: [
+      { key: 'in_ch', type: 'int', default: 3 },
+      { key: 'group_width', type: 'int', default: 16 },
+      { key: 'expansion', type: 'int', default: 2 },
+      { key: 'blocks', type: 'int', default: 1 },
+    ],
+    gtCrop: 256,
+  },
 ];

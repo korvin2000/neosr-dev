@@ -1,4 +1,14 @@
-import type { LossInfo } from './data-types';
+import type { LossInfo, ParamInfo } from './data-types';
+
+/**
+ * Keys every `[train.<slot>_opt]` accepts besides its constructor kwargs (neosr/losses/base.py
+ * Loss.schedule). They count NeoSR's native update counter, which a fine-tune phase restarts.
+ */
+export const LOSS_SCHEDULE_PARAMS: readonly ParamInfo[] = [
+  { key: 'start_iter', type: 'int', default: 0, help: 'The term is off through this update (0: on from the start).' },
+  { key: 'ramp_iters', type: 'int', default: 0, help: 'Then the weight rises linearly to full over this many updates (0: at once).' },
+  { key: 'end_iter', type: 'int', default: null, help: 'Off again after this update (empty: never); must be > start_iter.' },
+];
 
 /** Loss types usable in `[train.<slot>_opt]` (design/neosr_config_surface.md section 7). */
 export const LOSSES: readonly LossInfo[] = [
@@ -13,7 +23,8 @@ export const LOSSES: readonly LossInfo[] = [
       { key: 'reduction', type: 'str', default: 'mean', options: ['none', 'mean', 'sum'] },
     ],
     cost: 'low',
-    presets: { fidelity: 1.0 },
+    templateWeight: 1.0,
+    presets: { fidelity: 1.0, balanced: 1.0, perceptual: 1.0 },
   },
   {
     type: 'MSELoss',
@@ -38,6 +49,20 @@ export const LOSSES: readonly LossInfo[] = [
     params: [
       { key: 'reduction', type: 'str', default: 'mean', options: ['none', 'mean', 'sum'] },
       { key: 'delta', type: 'float', default: 1.0 },
+    ],
+    cost: 'low',
+    presets: {},
+  },
+  {
+    type: 'psnr_loss',
+    slot: 'psnr',
+    label: 'PSNR',
+    description: 'Negative PSNR (peak 1) as a loss: 10·log10(MSE + eps) per image in dB, computed in fp32.',
+    category: 'pixel',
+    defaultWeight: 1.0,
+    params: [
+      { key: 'reduction', type: 'str', default: 'mean', options: ['mean', 'sum'] },
+      { key: 'eps', type: 'float', default: 1e-8 },
     ],
     cost: 'low',
     presets: {},
@@ -86,11 +111,17 @@ export const LOSSES: readonly LossInfo[] = [
     defaultWeight: 0.1,
     templateWeight: 0.3,
     params: [
-      { key: 'gan_type', type: 'str', default: 'bce', options: ['bce', 'mse', 'huber'] },
+      { key: 'gan_type', type: 'str', default: 'bce', options: ['bce', 'hinge', 'huber', 'mse', 'rpgan'], help: 'hinge and rpgan (R3GAN relativistic pairing) take no labels.' },
       { key: 'real_label_val', type: 'float', default: 1.0 },
       { key: 'fake_label_val', type: 'float', default: 0.0 },
       // (?) reader default is None (off); shipped templates use 80000 updates
-      { key: 'wavelet_init', type: 'int', default: null },
+      { key: 'wavelet_init', type: 'int', default: null, help: 'D sees the wavelet high-frequency view from this update on.' },
+      { key: 'r1_gamma', type: 'float', default: 0.0, help: 'R1 penalty on real inputs, gamma / 2 · |grad D|²; 0 = off. Needs a D with a double backward (not dunet).' },
+      { key: 'r2_gamma', type: 'float', default: 0.0, help: 'R2 penalty on fake inputs; 0 = off.' },
+      { key: 'reg_every', type: 'int', default: 16, help: 'The penalty runs every N updates, scaled by N (R3GAN: 1).' },
+      { key: 'gamma_decay', type: 'float', default: 1.0, help: 'Both gammas follow a cosine to this factor over gamma_iters (R3GAN: 0.1).' },
+      { key: 'gamma_iters', type: 'int', default: 0, help: 'Length of the gamma cosine in updates from the first GAN update; 0 = constant.' },
+      { key: 'penalty_fp32', type: 'bool', default: false, help: 'Run the penalty pass in fp32 also in a bf16 run (parity checks).' },
     ],
     requiresDiscriminator: true,
     cost: 'low',
@@ -228,7 +259,7 @@ export const LOSSES: readonly LossInfo[] = [
     description: 'Feature-distribution loss on DINOv2 (or VGG, ResNet, EffNet) features; fp32 backbone by default.',
     category: 'perceptual',
     defaultWeight: 1.0,
-    templateWeight: 0.75,
+    templateWeight: 0.02,
     params: [
       { key: 'model', type: 'str', default: 'dinov2', options: ['dinov2', 'vgg', 'resnet', 'effnet'] },
       { key: 'patch_size', type: 'int', default: 4 },
@@ -241,8 +272,9 @@ export const LOSSES: readonly LossInfo[] = [
       { key: 'dino_weights', type: 'list', default: [1, 0.5, 0.5, 1, 0.5, 0.5, 1, 0.1] },
       { key: 'dino_norm', type: 'bool', default: false },
       { key: 'vgg_weights', type: 'list', default: [0.5, 0.5, 1, 1, 1] },
+      { key: 'checkpoint', type: 'bool', default: false, help: 'DINOv2 only: recompute backbone activations in backward (less memory, slower).' },
     ],
     cost: 'high',
-    presets: { balanced: 0.75, perceptual: 0.75 },
+    presets: { balanced: 0.02, perceptual: 0.02 },
   },
 ];

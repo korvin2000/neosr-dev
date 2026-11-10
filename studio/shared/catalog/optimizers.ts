@@ -21,7 +21,7 @@ export const OPTIMIZERS: readonly OptimizerInfo[] = [
   {
     type: 'adamw',
     label: 'AdamW',
-    description: 'torch.optim.AdamW with decoupled weight decay; used by the Aether templates.',
+    description: 'torch.optim.AdamW with decoupled weight decay; the generator optimizer of the shipped train templates.',
     scheduleFree: false,
     params: [
       // (?) torch.optim default; the reference lists no default values for torch optimizers
@@ -88,7 +88,7 @@ export const OPTIMIZERS: readonly OptimizerInfo[] = [
   {
     type: 'adan_sf',
     label: 'Adan schedule-free',
-    description: 'Schedule-free Adan, the optimizer in every shipped train template; schedule_free = false gives plain Adan.',
+    description: 'Schedule-free Adan: the discriminator optimizer of the shipped train templates; schedule_free = false gives plain Adan.',
     scheduleFree: true,
     params: [
       { key: 'lr', type: 'float', default: 1.6e-3 },
@@ -102,7 +102,7 @@ export const OPTIMIZERS: readonly OptimizerInfo[] = [
       { key: 'schedule_free', type: 'bool', default: true },
     ],
     template: {
-      g: { lr: 1e-3, betas: [0.98, 0.92, 0.99], weight_decay: 0.01, warmup_steps: 1600 },
+      g: { lr: 5e-4, betas: [0.98, 0.0, 0.99], weight_decay: 0.01, warmup_steps: 1600 },
       d: { lr: 1e-4, betas: [0.98, 0.92, 0.99], weight_decay: 0.01, warmup_steps: 600 },
     },
   },

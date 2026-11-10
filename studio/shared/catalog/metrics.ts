@@ -39,7 +39,15 @@ export const METRIC_TYPES: readonly MetricTypeInfo[] = [
     name: 'topiq',
     label: 'TOPIQ',
     better: 'higher',
-    params: [],
+    params: [{ key: 'dataset', type: 'str', default: 'kadid', options: ['kadid', 'pipal'], help: 'Weights: kadid (KADID-10k) or pipal (trained on SR and GAN outputs).' }],
     description: 'TOPIQ learned image-quality score; higher is better.',
+  },
+  {
+    type: 'calculate_lpips',
+    name: 'lpips',
+    label: 'LPIPS',
+    better: 'lower',
+    params: [{ key: 'net', type: 'str', default: 'alex', options: ['alex', 'vgg'], help: 'LPIPS v0.1 backbone: AlexNet or VGG16.' }],
+    description: 'LPIPS v0.1 learned perceptual distance; downloads weights on first use, lower is better.',
   },
 ];

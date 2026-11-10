@@ -54,31 +54,26 @@ function optimizerOptions(side: 'g' | 'd'): SelectOption[] {
 /** Picking an optimizer type fills lr/betas/weight_decay/warmup with the template or ctor defaults. */
 function optimizerFills(o: OptimizerInfo, side: 'g' | 'd'): Record<string, unknown> {
   const fromTemplate = o.template?.[side] ?? {};
-  const fromCtor: Record<string, unknown> = {};
+  const fromCtor: Record<string, unknown> = { warmup_steps: 0 };
   for (const p of o.params) {
     if (['lr', 'betas', 'weight_decay', 'warmup_steps', 'eps'].includes(p.key)) {
       fromCtor[p.key] = p.default;
     }
   }
-  const fills = { ...fromCtor, ...fromTemplate };
-  if (!o.scheduleFree) {
-    delete fills['warmup_steps'];
-  }
-  return fills;
+  return { ...fromCtor, ...fromTemplate };
 }
 
 function optimizerFields(side: 'g' | 'd'): FieldSpec[] {
   const isG = side === 'g';
   const prefix = isG ? 'train.optim_g' : 'train.optim_d';
-  const sfTypes = OPTIMIZERS.filter((o) => o.scheduleFree).map((o) => o.type);
   return [
     {
       key: 'type',
       label: 'Optimizer',
-      help: 'Schedule-free optimizers (adan_sf, adamw_sf) need no LR schedule and are what the NeoSR templates use.',
+      help: 'Templates: adamw for G, schedule-free adan_sf for D. Schedule-free optimizers (adan_sf, adamw_sf) need no LR schedule.',
       tomlKey: `${prefix}.type`,
       widget: { kind: 'select', options: optimizerOptions(side) },
-      default: 'adan_sf',
+      default: isG ? 'adamw' : 'adan_sf',
       required: true,
       level: 'essentials',
     },
@@ -86,18 +81,18 @@ function optimizerFields(side: 'g' | 'd'): FieldSpec[] {
       key: 'lr',
       label: 'Learning rate',
       help: isG
-        ? 'Generator learning rate. Templates: 1e-3 for most archs, 5e-4 for PLKSR-like, 8e-4 for ESRGAN.'
-        : 'Discriminator learning rate. Templates use 1e-4, ten times lower than the generator.',
+        ? 'Generator learning rate. Templates: 2e-4 with adamw; their schedule-free adan_sf option uses 5e-4.'
+        : 'Discriminator learning rate. Templates use 1e-4 with adan_sf.',
       tomlKey: `${prefix}.lr`,
       widget: { kind: 'number', min: 0, step: 0.00001 },
-      default: isG ? 0.001 : 0.0001,
+      default: isG ? 0.0002 : 0.0001,
       required: true,
       level: 'essentials',
       phaseAware: true,
       suggestions: isG
         ? [
-            { label: '1e-3', value: 0.001, why: 'template default for most archs' },
-            { label: '5e-4', value: 0.0005, why: 'PLKSR / ESC / FlexNet templates' },
+            { label: '2e-4', value: 0.0002, why: 'template default (adamw)' },
+            { label: '5e-4', value: 0.0005, why: 'template adan_sf option' },
             { label: '1e-4', value: 0.0001, why: 'conservative fine-tune' },
           ]
         : [
@@ -111,27 +106,26 @@ function optimizerFields(side: 'g' | 'd'): FieldSpec[] {
       help: 'Momentum coefficients. Adan uses three values, Adam-family two.',
       tomlKey: `${prefix}.betas`,
       widget: { kind: 'numberlist', step: 0.001 },
-      default: [0.98, 0.92, 0.99],
+      default: isG ? [0.9, 0.99] : [0.98, 0.92, 0.99],
       level: 'advanced',
     },
     {
       key: 'weight_decay',
       label: 'Weight decay',
-      help: 'L2 regularisation. Templates use 0.01.',
+      help: isG ? 'Weight decay. Templates: 0 with adamw, 0.01 with adan_sf.' : 'Weight decay. Templates use 0.01.',
       tomlKey: `${prefix}.weight_decay`,
       widget: { kind: 'number', min: 0, step: 0.001 },
-      default: 0.01,
+      default: isG ? 0 : 0.01,
       level: 'advanced',
     },
     {
       key: 'warmup_steps',
       label: 'Warm-up steps',
-      help: 'Linear LR ramp at the start (schedule-free optimizers only). Templates: 1600 for G, 600 for D.',
+      help: 'Linear LR ramp over the first updates, for every optimizer; 0 = off. Templates: none for G, 600 for D.',
       tomlKey: `${prefix}.warmup_steps`,
       widget: { kind: 'number', min: 0, step: 100, unit: 'updates' },
-      default: isG ? 1600 : 600,
+      default: isG ? 0 : 600,
       level: 'advanced',
-      showWhen: { key: 'type', values: sfTypes },
       support: 'native',
     },
     {
@@ -198,6 +192,26 @@ const degradationFields: FieldSpec[] = DEGRADATION_FIELDS.map((f) => ({
   level: DEGRADATION_ESSENTIALS.has(f.key) ? 'essentials' : 'advanced',
   group: f.stage === 'final' ? 'Final' : `Stage ${f.stage} · ${f.group}`,
 }));
+
+/** One select per metric keyword with fixed choices (`[val.metrics.<name>] <key>`), shown while that metric is on. */
+function metricChoiceFields(): FieldSpec[] {
+  return METRIC_TYPES.flatMap((m) =>
+    m.params
+      .filter((p) => p.options)
+      .map(
+        (p): FieldSpec => ({
+          key: `${m.name}_${p.key}`,
+          label: `${m.label} ${p.key}`,
+          help: p.help ?? '',
+          tomlKey: `val.metrics.${m.name}.${p.key}`,
+          widget: { kind: 'select', options: (p.options ?? []).map((o) => ({ value: o, label: o })) },
+          default: p.default,
+          level: 'advanced',
+          showWhen: { key: 'metrics', values: [m.name] },
+        }),
+      ),
+  );
+}
 
 export const NODE_CATALOG: readonly NodeSpec[] = [
   {
@@ -331,6 +345,26 @@ export const NODE_CATALOG: readonly NodeSpec[] = [
         group: 'Augmentation',
       },
       {
+        key: 'aug_multi_prob',
+        label: 'Combine augmentations',
+        help: 'Chance that a batch combines several augmentations instead of drawing one.',
+        tomlKey: 'datasets.train.aug_multi_prob',
+        widget: { kind: 'number', min: 0, max: 1, step: 0.05 },
+        default: 0.3,
+        level: 'native',
+        group: 'Augmentation',
+      },
+      {
+        key: 'aug_antialias',
+        label: 'Antialiased resizemix',
+        help: 'Antialiased downscale in resizemix (opt-in until an A/B).',
+        tomlKey: 'datasets.train.aug_antialias',
+        widget: { kind: 'toggle' },
+        default: false,
+        level: 'native',
+        group: 'Augmentation',
+      },
+      {
         key: 'use_hflip',
         label: 'Horizontal flip',
         help: 'Random horizontal flips.',
@@ -388,6 +422,17 @@ export const NODE_CATALOG: readonly NodeSpec[] = [
         widget: { kind: 'number', min: 1, step: 1 },
         default: 180,
         level: 'advanced',
+        group: 'Loader',
+        showWhen: { key: 'type', values: ['otf'] },
+      },
+      {
+        key: 'tight_canvas',
+        label: 'Tight OTF canvas',
+        help: 'Degrades the GT patch plus a 32 px margin instead of a canvas of at least 512 px: less work (opt-in until an A/B).',
+        tomlKey: 'datasets.train.tight_canvas',
+        widget: { kind: 'toggle' },
+        default: false,
+        level: 'native',
         group: 'Loader',
         showWhen: { key: 'type', values: ['otf'] },
       },
@@ -462,12 +507,22 @@ export const NODE_CATALOG: readonly NodeSpec[] = [
       {
         key: 'metrics',
         label: 'Metrics',
-        help: 'PSNR/SSIM higher is better, DISTS lower is better, TOPIQ higher. Metrics are loose guides; inspect the images.',
+        help: 'PSNR/SSIM/TOPIQ higher is better, DISTS/LPIPS lower is better. Metrics are loose guides; inspect the images.',
         tomlKey: 'val.metrics',
         widget: { kind: 'multiselect', options: METRIC_TYPES.map((m) => ({ value: m.name, label: m.label, hint: m.description })) },
         default: ['psnr', 'ssim', 'dists'],
         level: 'essentials',
       },
+      {
+        key: 'save_best',
+        label: 'Save best by',
+        help: 'Exports net_g_best_<dataset>_<metric>.pth whenever this metric matches or improves its best. Prefer a metric that is not a training loss.',
+        tomlKey: 'val.save_best',
+        widget: { kind: 'select', options: [{ value: '', label: 'off' }, ...METRIC_TYPES.map((m) => ({ value: m.name, label: m.label }))] },
+        default: '',
+        level: 'advanced',
+      },
+      ...metricChoiceFields(),
       {
         key: 'save_img',
         label: 'Save images',
@@ -571,7 +626,7 @@ export const NODE_CATALOG: readonly NodeSpec[] = [
       {
         key: 'type',
         label: 'Architecture',
-        help: 'metagan is used by every shipped template.',
+        help: 'metagan is the template default; r3gan suits R1/R2 penalties (train_realplksr_r3gan.toml).',
         tomlKey: 'network_d.type',
         widget: { kind: 'select', options: discriminatorOptions },
         default: 'metagan',
@@ -721,7 +776,7 @@ export const NODE_CATALOG: readonly NodeSpec[] = [
     label: 'LR Schedule',
     family: 'optimization',
     icon: 'trending-down',
-    description: 'One learning-rate scheduler applied to both optimizers. Redundant with schedule-free optimizers.',
+    description: 'One learning-rate scheduler for the optimizers in nets (default: those that are not schedule-free).',
     owns: ['train.scheduler'],
     inputs: [],
     outputs: [{ key: 'schedule', label: 'Schedule', type: 'Schedule' }],
@@ -775,6 +830,15 @@ export const NODE_CATALOG: readonly NodeSpec[] = [
         default: 0.00004,
         level: 'essentials',
         showWhen: { key: 'type', values: ['cosineannealing'] },
+      },
+      {
+        key: 'nets',
+        label: 'Scheduled optimizers',
+        help: 'None selected: every optimizer that is not schedule-free. A schedule-free optimizer is scheduled only when listed.',
+        tomlKey: 'train.scheduler.nets',
+        widget: { kind: 'multiselect', options: [{ value: 'g', label: 'G' }, { value: 'd', label: 'D' }] },
+        default: [],
+        level: 'advanced',
       },
     ],
   },
@@ -845,11 +909,38 @@ export const NODE_CATALOG: readonly NodeSpec[] = [
       {
         key: 'manual_seed',
         label: 'Seed',
-        help: 'Fixed seed enables deterministic algorithms (slower). Empty = random seed, logged.',
+        help: 'Seeds the RNGs only; deterministic kernels are a separate switch. Empty = random seed, logged.',
         tomlKey: 'manual_seed',
         widget: { kind: 'number', min: 0, step: 1, optional: true },
         default: undefined,
         level: 'advanced',
+      },
+      {
+        key: 'deterministic',
+        label: 'Deterministic kernels',
+        help: 'Deterministic algorithms (cuDNN benchmark off); often slower.',
+        tomlKey: 'deterministic',
+        widget: { kind: 'toggle' },
+        default: false,
+        level: 'advanced',
+      },
+      {
+        key: 'fp16_accumulation',
+        label: 'fp16 accumulation',
+        help: 'fp16 GEMMs accumulate in fp16: faster, overflows above 65504. AMP fp16 only.',
+        tomlKey: 'fp16_accumulation',
+        widget: { kind: 'toggle' },
+        default: false,
+        level: 'native',
+      },
+      {
+        key: 'detect_anomaly',
+        label: 'Detect anomaly',
+        help: 'Debugging only: autograd anomaly detection names the op that produced a NaN; much slower.',
+        tomlKey: 'detect_anomaly',
+        widget: { kind: 'toggle' },
+        default: false,
+        level: 'native',
       },
       {
         key: 'num_gpu',
@@ -977,22 +1068,58 @@ export const NODE_CATALOG: readonly NodeSpec[] = [
         group: 'Logging',
       },
       {
+        key: 'keep_exports',
+        label: 'Keep exports',
+        help: 'Newest numbered net_*_<update>.pth kept per network; 0 keeps all. *_latest and *_best are never pruned.',
+        tomlKey: 'logger.keep_exports',
+        widget: { kind: 'number', min: 0, step: 1 },
+        default: 0,
+        level: 'native',
+        group: 'Logging',
+      },
+      {
         key: 'grad_clip',
         label: 'Gradient clipping',
-        help: 'Clips each network’s gradient norm to 1.0.',
+        help: 'Bounds each network’s gradient norm: 1.0 (default), a custom max-norm, off, or "spike" (clip only norms above 3× their running mean).',
         tomlKey: 'train.grad_clip',
-        widget: { kind: 'toggle' },
-        default: true,
+        widget: {
+          kind: 'select',
+          options: [
+            { value: 'true', label: 'max-norm 1.0' },
+            { value: 'norm', label: 'custom max-norm' },
+            { value: 'spike', label: 'spike', hint: 'clip only above 3× the running mean' },
+            { value: 'false', label: 'off' },
+          ],
+        },
+        default: 'true',
         level: 'advanced',
         group: 'Stability',
       },
       {
+        key: 'grad_clip_norm',
+        label: 'Max gradient norm',
+        help: 'The max-norm written as train.grad_clip.',
+        tomlKey: '',
+        widget: { kind: 'number', min: 0, step: 0.1 },
+        default: 1,
+        level: 'advanced',
+        group: 'Stability',
+        showWhen: { key: 'grad_clip', values: ['norm'] },
+      },
+      {
         key: 'clamp',
         label: 'Clamp output',
-        help: 'Clamps the generator output to [1/255, 1] before the losses.',
+        help: 'What the losses see of the generator output: "restore" (default) clamps to [0, 1] but keeps the gradient back into range; hard clamp is the old [1/255, 1].',
         tomlKey: 'train.clamp',
-        widget: { kind: 'toggle' },
-        default: true,
+        widget: {
+          kind: 'select',
+          options: [
+            { value: 'restore', label: 'restore' },
+            { value: 'true', label: 'hard clamp' },
+            { value: 'false', label: 'off' },
+          ],
+        },
+        default: 'restore',
         level: 'native',
         group: 'Stability',
       },
@@ -1040,7 +1167,7 @@ export const OBJECTIVES = [
   {
     id: 'balanced',
     label: 'Balanced',
-    description: 'Template losses without GAN: MS-SSIM + consistency + LDL + FDL. Sharper than fidelity, no hallucination.',
+    description: 'Template losses without GAN: L1 + MS-SSIM + consistency + LDL + FDL. Sharper than fidelity, no hallucination.',
   },
   {
     id: 'perceptual',

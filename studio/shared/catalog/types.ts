@@ -58,7 +58,7 @@ export interface FieldSpec {
   readonly level: 'essentials' | 'advanced' | 'native';
   /** Sub-section inside the inspector. */
   readonly group?: string;
-  /** Visible only when a sibling field has one of these values. */
+  /** Visible only when a sibling field has one of these values (a list sibling: contains one). */
   readonly showWhen?: { readonly key: string; readonly values: readonly unknown[] };
   /** Can be overridden per phase (loss weights, lr, patch size). */
   readonly phaseAware?: boolean;
@@ -123,7 +123,9 @@ export function fieldVisible(field: FieldSpec, values: Readonly<Record<string, u
   if (!field.showWhen) {
     return true;
   }
-  return field.showWhen.values.includes(values[field.showWhen.key]);
+  const { key, values: wanted } = field.showWhen;
+  const value = values[key];
+  return Array.isArray(value) ? value.some((v) => wanted.includes(v)) : wanted.includes(value);
 }
 
 export function portVisible(port: PortSpec, values: Readonly<Record<string, unknown>>): boolean {

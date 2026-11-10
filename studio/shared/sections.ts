@@ -135,7 +135,7 @@ export const SECTIONS: readonly SectionDef[] = [
     parts: [
       { nodeType: NODE_TYPES.optimizerG, basics: ['type', 'lr'], more: ['betas', 'weight_decay', 'warmup_steps', 'eps', 'extra'], addLabel: 'Add an optimizer' },
       { nodeType: NODE_TYPES.optimizerD, basics: ['type', 'lr'], more: ['betas', 'weight_decay', 'warmup_steps', 'eps', 'extra'], when: hasGanRow, addLabel: 'Add a discriminator optimizer' },
-      { nodeType: NODE_TYPES.schedule, title: 'Learning-rate schedule', basics: ['type', 'milestones', 'gamma', 'T_max', 'eta_min'], more: [], when: (ctx) => !!ctx.schedule },
+      { nodeType: NODE_TYPES.schedule, title: 'Learning-rate schedule', basics: ['type', 'milestones', 'gamma', 'T_max', 'eta_min'], more: ['nets'], when: (ctx) => !!ctx.schedule },
     ],
     summary: (recipe, ctx) => {
       if (!ctx.optimG) {
@@ -151,8 +151,8 @@ export const SECTIONS: readonly SectionDef[] = [
     title: 'Validation & saving',
     icon: 'check-image',
     parts: [
-      { nodeType: NODE_TYPES.validation, basics: ['val_freq', 'metrics'], more: ['save_img', 'tile', 'tile_overlap', 'save_lq'], custom: ['val-datasets'], addLabel: 'Add validation' },
-      { nodeType: NODE_TYPES.plan, title: 'Saving', basics: ['save_checkpoint_freq'], more: ['keep_states', 'print_freq', 'use_tb_logger', 'save_tb_img', 'wandb_project'] },
+      { nodeType: NODE_TYPES.validation, basics: ['val_freq', 'metrics'], more: ['save_best', 'topiq_dataset', 'lpips_net', 'save_img', 'tile', 'tile_overlap', 'save_lq'], custom: ['val-datasets'], addLabel: 'Add validation' },
+      { nodeType: NODE_TYPES.plan, title: 'Saving', basics: ['save_checkpoint_freq'], more: ['keep_states', 'keep_exports', 'print_freq', 'use_tb_logger', 'save_tb_img', 'wandb_project'] },
     ],
     summary: (recipe, ctx) => {
       const plan = ctx.plan ? nodeValues(ctx.plan) : {};
@@ -171,8 +171,8 @@ export const SECTIONS: readonly SectionDef[] = [
     title: 'Runtime',
     icon: 'gpu',
     parts: [
-      { nodeType: NODE_TYPES.runtime, basics: ['precision', 'fast_matmul'], more: ['compile', 'compile_mode', 'manual_seed', 'num_gpu'], addLabel: 'Add runtime settings' },
-      { nodeType: NODE_TYPES.plan, title: 'Stability', basics: ['ema'], more: ['ema_power', 'grad_clip', 'clamp', 'max_skip_streak'] },
+      { nodeType: NODE_TYPES.runtime, basics: ['precision', 'fast_matmul'], more: ['compile', 'compile_mode', 'manual_seed', 'deterministic', 'num_gpu', 'fp16_accumulation', 'detect_anomaly'], addLabel: 'Add runtime settings' },
+      { nodeType: NODE_TYPES.plan, title: 'Stability', basics: ['ema'], more: ['ema_power', 'grad_clip', 'grad_clip_norm', 'clamp', 'max_skip_streak'] },
     ],
     summary: (recipe, ctx) => {
       const rt = ctx.runtime ? nodeValues(ctx.runtime) : undefined;

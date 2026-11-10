@@ -1,7 +1,7 @@
 import type { ArchInfo } from './data-types';
 
 /**
- * Generator architectures: one entry per exact `[network_g] type` string (93 in 45 families).
+ * Generator architectures: one entry per exact `[network_g] type` string (95 in 46 families).
  * Source: design/neosr_config_surface.md section 5.1 and neosr/archs/architecture_categories.json;
  * preset values were cross-checked against neosr/archs/*_arch.py. `(?)` marks estimates.
  * Scale kwargs and input-channel kwargs are never listed (NeoSR injects the scale).
@@ -1375,6 +1375,50 @@ export const ARCHS: readonly ArchInfo[] = [
     speed: 'medium',
     onnx: true,
   },
+  // sizeClass from readme.md; (?) speed estimated. No train template: templatePatch/templateLr follow train_realplksr.toml
+  {
+    type: 'nafnet',
+    family: 'nafnet',
+    label: 'NAFNet',
+    description: '1x restoration U-Net (denoise, deblur, artifact removal): width 32, encoders [2, 2, 4, 8], 12 middle blocks.',
+    sizeClass: 'heavy',
+    scales: [1],
+    templatePatch: 64,
+    templateLr: 2e-4,
+    params: [
+      { key: 'width', type: 'int', default: 32 },
+      { key: 'middle_blk_num', type: 'int', default: 12 },
+      { key: 'enc_blk_nums', type: 'list', default: [2, 2, 4, 8] },
+      { key: 'dec_blk_nums', type: 'list', default: [2, 2, 2, 2] },
+      { key: 'drop_out_rate', type: 'float', default: 0.0 },
+    ],
+    tags: ['conv'],
+    speed: 'medium',
+    onnx: true,
+    note: '×1 only',
+  },
+  // sizeClass from readme.md; (?) speed estimated
+  {
+    type: 'nafnet_l',
+    family: 'nafnet',
+    label: 'NAFNet L',
+    description: 'NAFNet with width 64 (the official SIDD width-64 model); 1x restoration only.',
+    sizeClass: 'ultra-heavy',
+    scales: [1],
+    templatePatch: 64,
+    templateLr: 2e-4,
+    params: [
+      { key: 'width', type: 'int', default: 64 },
+      { key: 'middle_blk_num', type: 'int', default: 12 },
+      { key: 'enc_blk_nums', type: 'list', default: [2, 2, 4, 8] },
+      { key: 'dec_blk_nums', type: 'list', default: [2, 2, 2, 2] },
+      { key: 'drop_out_rate', type: 'float', default: 0.0 },
+    ],
+    tags: ['conv'],
+    speed: 'slow',
+    onnx: true,
+    note: '×1 only',
+  },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
     type: 'ninasr',
@@ -1595,6 +1639,8 @@ export const ARCHS: readonly ArchInfo[] = [
       { key: 'norm_groups', type: 'int', default: 4 },
       { key: 'dropout', type: 'float', default: 0.0 },
       { key: 'dysample', type: 'bool', default: false },
+      { key: 'layer_norm', type: 'bool', default: false, help: 'Opt-in pre-LayerNorm per block (replaces the post-branch GroupNorm).' },
+      { key: 'icnr', type: 'bool', default: false, help: 'Opt-in ICNR init: the PixelShuffle head starts as nearest-neighbour (ignored with dysample).' },
     ],
     tags: ['conv'],
     speed: 'medium',
@@ -1619,6 +1665,8 @@ export const ARCHS: readonly ArchInfo[] = [
       { key: 'norm_groups', type: 'int', default: 4 },
       { key: 'dropout', type: 'float', default: 0.0 },
       { key: 'dysample', type: 'bool', default: false },
+      { key: 'layer_norm', type: 'bool', default: false, help: 'Opt-in pre-LayerNorm per block (replaces the post-branch GroupNorm).' },
+      { key: 'icnr', type: 'bool', default: false, help: 'Opt-in ICNR init: the PixelShuffle head starts as nearest-neighbour (ignored with dysample).' },
     ],
     tags: ['conv'],
     speed: 'fast',
@@ -1643,6 +1691,8 @@ export const ARCHS: readonly ArchInfo[] = [
       { key: 'norm_groups', type: 'int', default: 4 },
       { key: 'dropout', type: 'float', default: 0.0 },
       { key: 'dysample', type: 'bool', default: false },
+      { key: 'layer_norm', type: 'bool', default: false, help: 'Opt-in pre-LayerNorm per block (replaces the post-branch GroupNorm).' },
+      { key: 'icnr', type: 'bool', default: false, help: 'Opt-in ICNR init: the PixelShuffle head starts as nearest-neighbour (ignored with dysample).' },
     ],
     tags: ['conv'],
     speed: 'medium',

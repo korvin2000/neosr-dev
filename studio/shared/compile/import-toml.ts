@@ -51,6 +51,9 @@ export function importToml(text: string, base: Recipe, name?: string): ImportRes
     compile: take<boolean>(doc, 'compile') ?? false,
     compile_mode: take<string>(doc, 'compile_mode') ?? 'default',
     manual_seed: take<number>(doc, 'manual_seed'),
+    deterministic: take<boolean>(doc, 'deterministic') ?? false,
+    fp16_accumulation: take<boolean>(doc, 'fp16_accumulation') ?? false,
+    detect_anomaly: take<boolean>(doc, 'detect_anomaly') ?? false,
     num_gpu: typeof doc['num_gpu'] === 'number' ? take<number>(doc, 'num_gpu') : (take(doc, 'num_gpu'), undefined),
   };
 
@@ -149,17 +152,21 @@ export function importToml(text: string, base: Recipe, name?: string): ImportRes
         const info = METRIC_TYPES.find((m) => m.type === type);
         const better = mv['better'];
         const betterMatches = better === undefined || better === info?.better;
-        const extraKeys = Object.keys(mv).filter((k) => k !== 'type' && k !== 'better');
-        if (info && info.name === mName && betterMatches && extraKeys.length === 0) {
-          // Exactly what the Validation node would write: model it.
+        if (info && info.name === mName && betterMatches) {
           names.push(info.name);
-          delete metricsTable[mName];
-        } else if (info && info.name === mName && betterMatches) {
-          // Known metric with extra parameters: model the name, keep the parameters as extras.
-          names.push(info.name);
-          delete mv['type'];
-          delete mv['better'];
-          warnings.push(`Metric "${mName}" keeps its parameters (${extraKeys.join(', ')}) as preserved extras.`);
+          for (const p of info.params.filter((p) => p.options && p.key in mv)) {
+            values[`${mName}_${p.key}`] = take(mv, p.key);
+          }
+          const extraKeys = Object.keys(mv).filter((k) => k !== 'type' && k !== 'better');
+          if (extraKeys.length === 0) {
+            // Exactly what the Validation node would write: model it.
+            delete metricsTable[mName];
+          } else {
+            // Known metric with other parameters: model the name, keep the parameters as extras.
+            delete mv['type'];
+            delete mv['better'];
+            warnings.push(`Metric "${mName}" keeps its parameters (${extraKeys.join(', ')}) as preserved extras.`);
+          }
         } else {
           warnings.push(`Metric "${mName}" (${type}) is not one the Validation node models; its table is preserved verbatim.`);
         }
@@ -225,6 +232,16 @@ export function importToml(text: string, base: Recipe, name?: string): ImportRes
         if (key in trainT) {
           planValues[f.key] = take(trainT, key);
         }
+      }
+    }
+    // Mixed-type keys become the select values of their fields (see the Training Plan catalog).
+    if (typeof planValues['grad_clip'] === 'number') {
+      planValues['grad_clip_norm'] = planValues['grad_clip'];
+      planValues['grad_clip'] = 'norm';
+    }
+    for (const key of ['grad_clip', 'clamp']) {
+      if (typeof planValues[key] === 'boolean') {
+        planValues[key] = String(planValues[key]);
       }
     }
     // Legacy wavelet keys map onto the gan row.

@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
-import { LOSSES } from '@shared/catalog/losses';
+import { LOSS_SCHEDULE_PARAMS, LOSSES } from '@shared/catalog/losses';
 import { OBJECTIVES, type ObjectiveId } from '@shared/catalog/node-catalog';
 import type { LossInfo, ParamInfo } from '@shared/catalog/data-types';
 import { lossRowsFor, newLossRow } from '@shared/recipe-builder';
@@ -27,8 +27,8 @@ interface CellView {
 /**
  * The Loss Recipe editor: one row per loss term, one column per phase. A cell without an override
  * inherits the row's shared weight (shown faded); editing a cell creates a per-phase override.
- * Weights are piecewise-constant per phase because NeoSR has no native loss schedule — a change of
- * weight means a new run, which is exactly what a phase compiles to.
+ * Per-phase weights are piecewise-constant: a phase compiles to its own run. Within a run, NeoSR's
+ * own `start_iter` / `ramp_iters` / `end_iter` (row parameters) switch or ramp a term.
  */
 @Component({
   selector: 'app-loss-editor',
@@ -72,7 +72,7 @@ export class LossEditor {
         info,
         expanded: this.expanded().has(row.id),
         needsD: row.type === 'gan_loss' && row.enabled && !this.hasDiscriminator(),
-        params: info?.params.filter((p) => p.key !== 'loss_weight') ?? [],
+        params: [...(info?.params.filter((p) => p.key !== 'loss_weight') ?? []), ...LOSS_SCHEDULE_PARAMS],
         cells: this.phases().map((phase) => {
           const s = row.schedule[phase.id];
           return { phase, active: s ? s.active : row.enabled, weight: s ? s.weight : row.weight, overridden: !!s };

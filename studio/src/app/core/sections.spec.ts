@@ -14,7 +14,7 @@ describe('sections', () => {
     expect(summaries['model']).toContain('RealPLKSR');
     expect(summaries['losses']).toMatch(/\d term/);
     expect(summaries['plan']).toContain('2 phases');
-    expect(summaries['optimizer']).toContain('adan_sf');
+    expect(summaries['optimizer']).toContain('adamw');
     expect(summaries['validation']).toContain('every 1k');
     expect(summaries['runtime']).toContain('AMP bf16');
   });

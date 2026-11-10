@@ -399,12 +399,14 @@ function metricCurve(name: string, f: number, g: number, ceiling: number, rng: R
       return 0.3 - 0.18 * f - 0.03 * g + noise(rng, 0.004);
     case 'topiq':
       return 0.45 + 0.25 * f + 0.04 * g + noise(rng, 0.006);
+    case 'lpips':
+      return 0.42 - 0.22 * f - 0.04 * g + noise(rng, 0.005);
     default:
       return 0.5 + 0.3 * f + noise(rng, 0.01);
   }
 }
 
-const METRIC_SPREAD: Readonly<Record<string, number>> = { psnr: 2, ssim: 0.04, dists: 0.04, topiq: 0.05 };
+const METRIC_SPREAD: Readonly<Record<string, number>> = { psnr: 2, ssim: 0.04, dists: 0.04, topiq: 0.05, lpips: 0.05 };
 
 function validationImage(s: SimState, set: ValSet, id: ImageId, metrics: Readonly<Record<string, number>>, rng: Rng): ValidationImage {
   const url = (kind: string) => `/api/runs/${s.plan.runId}/images/${id}?kind=${kind}&iter=${s.iter}`;

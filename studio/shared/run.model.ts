@@ -117,6 +117,7 @@ export const METRIC_INFO: Record<string, MetricInfo> = {
   ssim: { key: 'ssim', label: 'SSIM', better: 'higher' },
   dists: { key: 'dists', label: 'DISTS', better: 'lower' },
   topiq: { key: 'topiq', label: 'TOPIQ', better: 'higher' },
+  lpips: { key: 'lpips', label: 'LPIPS', better: 'lower' },
 };
 
 export interface GpuInfo {
