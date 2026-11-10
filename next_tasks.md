@@ -83,7 +83,20 @@ the convenience for the person who adds an arch or a loss: write the class, put 
 must also edit a table in another file (and for a scale-free net a list in a test). The owner wants the decorator
 style back, **more efficient than the old one**.
 
-### 2.2 How it was (removed in 8da8ae0, 2026-10-21; old code: `git show 8da8ae0^:neosr/utils/registry.py`)
+### 2.2 How it was
+Where to read the old implementation (two sources, both checked on 2026-11-10):
+| what | in this repository's history | in the owner's older fork https://github.com/delafer/neosr (branch `master`; also `helaman`, `marco`) |
+|---|---|---|
+| the `Registry` class and the five registries | `git show 8da8ae0^:neosr/utils/registry.py` (deleted by 8da8ae0) | `neosr/utils/registry.py` |
+| folder scan + import of every arch module | `git show 10876ed^:neosr/archs/__init__.py` | `neosr/archs/__init__.py` |
+| an arch file with decorators and `net_opt()` | `git show 10876ed^:neosr/archs/span_arch.py` (lines 7-10, 188, 301) | `neosr/archs/span_arch.py` |
+| losses / metrics / datasets / models with decorators | `git show 7e5082a^:neosr/losses/`, `4363b79^:neosr/metrics/`, `0c7b5b3^:neosr/data/`, `4d55315^:neosr/models/` | the same paths |
+
+The decorators left package by package on 2026-10-21: archs in 10876ed, metrics in 4363b79, datasets in 0c7b5b3,
+losses in 7e5082a, models in 4d55315; `registry.py` itself in 8da8ae0. The fork is the quickest way to browse the
+whole old layout at once; the history shows the exact state right before each removal.
+
+Summary of the old mechanism:
 - `neosr/utils/registry.py`: `class Registry` with `register()` (decorator or call), `get(name)`; registries
   `ARCH_REGISTRY`, `LOSS_REGISTRY`, `METRIC_REGISTRY`, `DATASET_REGISTRY`, `MODEL_REGISTRY`.
 - `neosr/archs/__init__.py` scanned the folder and **imported every `*_arch.py`** at the first `build_network`
