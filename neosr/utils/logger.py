@@ -4,6 +4,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from neosr.config import total_iter
 from neosr.utils.dist_util import get_dist_info, master_only
 from neosr.utils.misc import tc
 
@@ -101,7 +102,7 @@ class MessageLogger:
     def __init__(self, opt: dict[str, Any], tb_logger, start_iter: int = 0) -> None:
         self.exp_name = opt["name"]
         self.start_iter = start_iter
-        self.max_iters = opt["logger"].get("total_iter", 1000000)
+        self.max_iters = total_iter(opt)
         self.tb_logger = tb_logger
         self.start_time = time.time()
         self.logger = get_root_logger()

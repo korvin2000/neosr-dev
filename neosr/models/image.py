@@ -16,7 +16,7 @@ from torch.optim.lr_scheduler import LinearLR
 from tqdm import tqdm
 
 from neosr.archs import build_network
-from neosr.config import ConfigError, qat_schedule
+from neosr.config import ConfigError, qat_schedule, total_iter
 from neosr.data.augmentations import apply_augment
 from neosr.losses import build_losses
 from neosr.losses.base import Context, restoring_clamp
@@ -224,8 +224,7 @@ class image(base):
         if not self.is_train:
             net.set_qat_phase(fake_quant=True, observe=False, freeze_norm=True)
             return
-        total = (self.opt.get("logger") or {}).get("total_iter", 1000000)
-        self.qat = qat_schedule(tr, total)
+        self.qat = qat_schedule(tr, total_iter(self.opt))
         src = " from a QAT checkpoint" if pre else ""
         calib, norm_at, obs_at = self.qat
         log.info(

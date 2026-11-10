@@ -16,7 +16,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from neosr.cli import train_args
-from neosr.config import ConfigError, load_config, validate_train
+from neosr.config import ConfigError, load_config, total_iter, validate_train
 from neosr.data import build_dataloader, build_dataset
 from neosr.data.data_sampler import EnlargedSampler
 from neosr.data.prefetch_dataloader import CUDAPrefetcher
@@ -138,7 +138,7 @@ def build_loaders(
             f"\n-------- Dataset size: {len(ds)}"  # type: ignore[arg-type]
             f"\n-------- Batch size per process: {ds_cfg['batch_size']}, accumulate: {acc}"
             f"\n-------- Updates per epoch: {len(loader) / acc:.1f}"
-            f"\n-------- Total updates: {cfg['logger'].get('total_iter', 1000000)}"
+            f"\n-------- Total updates: {total_iter(cfg)}"
         )
     if loader is None or sampler is None:
         msg = "training needs a [datasets.train] section"
@@ -182,7 +182,7 @@ def train(cfg: dict[str, Any], rt: Runtime) -> None:
     """T2 §5.1. Call validate_train() and prepare_run() first. Every frequency counts completed
     updates (model.update)."""
     lg, val = cfg.setdefault("logger", {}), cfg.get("val") or {}
-    total = lg.get("total_iter", 1000000)
+    total = total_iter(cfg)
     print_freq = lg.get("print_freq", 100)
     save_freq = lg["save_checkpoint_freq"]
     val_freq = val.get("val_freq")

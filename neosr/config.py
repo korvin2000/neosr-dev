@@ -4,7 +4,7 @@ import difflib
 import math
 import tomllib
 import warnings
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
@@ -538,7 +538,7 @@ def _validate_scheduler(cfg: dict[str, Any], train: dict[str, Any]) -> None:
     ):
         msg = f"train.scheduler.nets must be a non-empty list of distinct names from {known}, got {nets!r}"
         raise ConfigError(msg)
-    total = (cfg.get("logger") or {}).get("total_iter", 1000000)
+    total = total_iter(cfg)
     kind = str(sched.get("type")).lower()
     t_max = sched.get("T_max") if kind == "cosineannealing" else None
     if isinstance(t_max, int) and t_max < total:
@@ -558,6 +558,11 @@ def _validate_scheduler(cfg: dict[str, Any], train: dict[str, Any]) -> None:
             ConfigWarning,
             stacklevel=3,
         )
+
+
+def total_iter(cfg: Mapping[str, Any]) -> int:
+    """`logger.total_iter`; its default lives here only (`load_config` fills no defaults)."""
+    return (cfg.get("logger") or {}).get("total_iter", 1_000_000)
 
 
 def qat_schedule(train: dict[str, Any], total_iter: int) -> tuple[int, int, int]:
@@ -592,8 +597,7 @@ def _validate_qat(cfg: dict[str, Any], train: dict[str, Any]) -> None:
             "needs fused_init=false, or set path.pretrain_network_g"
         )
         raise ConfigError(msg)
-    total = (cfg.get("logger") or {}).get("total_iter", 1000000)
-    calib, norm_at, obs_at = qat_schedule(train, total)
+    calib, norm_at, obs_at = qat_schedule(train, total_iter(cfg))
     if calib < 0:
         msg = f"train.calibration_iters must be >= 0, got {calib}"
         raise ConfigError(msg)
