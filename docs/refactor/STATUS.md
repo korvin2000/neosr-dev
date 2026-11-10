@@ -36,6 +36,10 @@ The `origin` URL in `.git/config` embeds a GitHub token. The owner keeps it deli
 machines; `DECISIONS.md`, 2026-11-10). Do not report it again and do not print the URL in logs or docs.
 
 ## Owner priorities (2026-11-10): read before picking work
+**The next session starts from `next_tasks.md` in the repository root**: the tasks below in the order the
+owner fixed (registration design first, then the audit closure matrix), with the files, invariants, tests
+and steps each one needs.
+
 The owner sets the order; an agent does not promote a track on its own reading of the documents. Current order:
 1. **A stable, reliable core** ("works like a Swiss watch": fast, reliable, good quality) before any new feature
    work. Concretely: (a) the closure matrix of the stage-2 audit (167 findings: done / opt-in / rejected / open) and
@@ -43,7 +47,7 @@ The owner sets the order; an agent does not promote a track on its own reading o
    defaults table, per-arch capability metadata); (c) what the Linux machine must confirm (full suite, items of
    "Needs the Linux machine").
 2. **NeoSR Studio / UI**: finish it (next steps in "Possible on the Windows machine", item 4).
-3. **Usability of registration**: bring back decorator-style registration (`@ARCH_REGISTRY.register()`,
+3. **Usability of registration** (the owner later put its **design first**, before 1a): bring back decorator-style registration (`@ARCH_REGISTRY.register()`,
    `@LOSS_REGISTRY.register()`, ...) for the person adding an arch or a loss, without the old cost (no import of
    every module, no work at import time). Design first, owner decides.
 

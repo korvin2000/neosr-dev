@@ -367,3 +367,6 @@ long run are the owner's; the penalty-pass speed (above); source independence of
 - 2026-11-10, end of the OTF work in this session: **the owner parked the track** after O3 (his priorities are a
   stable core, closing the audit findings, Studio, and decorator-style registration: `../STATUS.md`, "Owner
   priorities"). O4, O5 and the A/B are not started. Nothing in O1-O3 changes a default.
+- Handoff: `next_tasks.md` (repository root) describes the next tasks in the owner's order: (1) design of
+  decorator-style registration, (2) closure matrix of the 167 stage-2 findings and the fixes, (3) small core
+  items, (4) Studio. Nothing of it was started in this session.

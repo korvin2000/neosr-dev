@@ -9,7 +9,7 @@
 
 ## Project facts (read before working)
 
-- **Status and open work:** `docs/refactor/STATUS.md` is the single status page; start there, then the stage log it points to. Update it when a track changes state.
+- **Status and open work:** `docs/refactor/STATUS.md` is the single status page; start there, then the stage log it points to. Update it when a track changes state. **What to do next, with everything needed to do it: `next_tasks.md`** (repository root); keep it current or delete what is done.
 - **The owner sets the priorities** (`STATUS.md`, "Owner priorities"): a stable, reliable core first, then Studio, then new features. Do not start or promote a track because a document calls it a goal; when the next task is not named there, ask the owner which one before starting. Before writing something from scratch, check what upstream projects (traiNNer-redux by the-database) already have that can be adapted.
 - **Two machines, two roles:**
 
