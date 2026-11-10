@@ -449,13 +449,17 @@ class image(base):
                 for g, f in zip(phase.opt.param_groups, flags, strict=True):  # type: ignore[union-attr,arg-type]
                     g["train_mode"] = f
 
-    def _infer(self, net: nn.Module, lq: Tensor, warned: list[bool]) -> Tensor:
-        """Full image, or tiled when val.tile > 0. A CUDA OOM retries the image once tiled (val.tile or
-        256): the caching allocator is emptied first; a second OOM propagates (T-03)."""
+    def _infer(
+        self, net: nn.Module, lq: Tensor, warned: list[bool], *, grid: bool
+    ) -> Tensor:
+        """The output; with `grid` on the uint8 grid as fp32 0..255 (`quantize`), without it raw
+        (nothing consumes it). Full image, or tiled when val.tile > 0 (then on the CPU; the grid is
+        stitched as float16: `infer_tiled(quantized=True)`). A CUDA OOM retries the image once tiled
+        (val.tile or 256): the caching allocator is emptied first; a second OOM propagates (T-03)."""
         try:
             if self.tile <= 0:
-                return net(lq)
-            return infer_tiled(net, lq, self.scale, self.tile, self.tile_overlap)
+                return quantize(net(lq)) if grid else net(lq)
+            return self._tiled(net, lq, self.tile, grid)
         except torch.OutOfMemoryError:
             pass  # retried outside the handler: the traceback no longer pins the failed activations
         torch.cuda.empty_cache()
@@ -467,7 +471,11 @@ class image(base):
                 f"(tile {tile}, tile_overlap {self.tile_overlap}); tiled metrics can differ "
                 "slightly from full-image ones. Set val.tile to avoid this."
             )
-        return infer_tiled(net, lq, self.scale, tile, self.tile_overlap)
+        return self._tiled(net, lq, tile, grid)
+
+    def _tiled(self, net: nn.Module, lq: Tensor, tile: int, grid: bool) -> Tensor:
+        out = infer_tiled(net, lq, self.scale, tile, self.tile_overlap, quantized=grid)
+        return out.float() if grid else out
 
     @staticmethod
     def _metric(f, q: Tensor, gt: Tensor, warned: list[bool]) -> Tensor:
@@ -540,11 +548,9 @@ class image(base):
                         )
                     with torch.inference_mode():
                         lq = data["lq"].to(self.device, non_blocking=True)
-                        with autocast:
-                            sr = self._infer(net, lq, warned)
-                        if metrics or save_img or save_tb:  # else nothing consumes sr
-                            q = quantize(sr)  # where sr is (tiled: the CPU)
-                        del sr
+                        consumed = bool(metrics or save_img or save_tb)
+                        with autocast:  # q: the uint8 grid as fp32 (tiled: on the CPU)
+                            q = self._infer(net, lq, warned, grid=consumed)
                         if metrics:  # where q is: a tiled image stays on the CPU, whose
                             # fp64 SSIM statistics would not fit the device at that size
                             gt = quantize(data["gt"].to(q.device, non_blocking=True))

@@ -3,7 +3,9 @@ import torch
 from torch import nn
 
 from neosr.models.tiling import infer_tiled, tile_spans
+from neosr.utils.img_util import quantize
 
+CUDA = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
 SHAPES = [(37, 53), (64, 64), (10, 70), (100, 33), (5, 5), (1, 1)]
 
 
@@ -76,6 +78,45 @@ def test_output_on_out_device():
         assert out.device.type == "cpu"
         assert torch.allclose(out, ref.cpu(), rtol=0, atol=1e-12)
         assert infer_tiled(net, lq, 2, 24, 6, out_device=lq.device).device == lq.device
+
+
+class NaNCorner(nn.Module):
+    """A diverged net: its output has NaN in the top-left corner."""
+
+    def __init__(self, net: nn.Module) -> None:
+        super().__init__()
+        self.net = net
+
+    def forward(self, x):
+        out = self.net(x).clone()
+        out[..., :3, :3] = float("nan")
+        return out
+
+
+@pytest.mark.parametrize(
+    ("dev", "dtype"),
+    [
+        ("cpu", torch.float32),
+        pytest.param("cuda", torch.float32, marks=CUDA),
+        pytest.param("cuda", torch.bfloat16, marks=CUDA),
+        pytest.param("cuda", torch.float16, marks=CUDA),
+    ],
+)
+@pytest.mark.parametrize("nan", [False, True])
+def test_quantized_stitch_is_quantize_of_the_float_output(dev, dtype, nan):
+    """MT-08: float16 cores on the uint8 grid, stitched on the CPU, equal quantize() of the float
+    stitch exactly; a NaN stays a NaN (a uint8 stitch would hide a diverged net as 0)."""
+    net = conv_net(cout=3).to(dev, dtype)
+    net = NaNCorner(net) if nan else net
+    lq = torch.rand(1, 3, 37, 53, device=dev, dtype=dtype)
+    with torch.no_grad():
+        ref = quantize(infer_tiled(net, lq, 2, 24, 6))
+        out = infer_tiled(net, lq, 2, 24, 6, quantized=True)
+    assert out.dtype == torch.float16
+    assert out.device.type == "cpu"
+    torch.testing.assert_close(out.float(), ref, rtol=0, atol=0, equal_nan=True)
+    assert ref.isnan().any() == nan
+    assert ref.nan_to_num().unique().numel() > 16  # not a trivially clamped image
 
 
 @pytest.mark.parametrize(
