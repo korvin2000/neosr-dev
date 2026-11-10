@@ -66,7 +66,8 @@ def test_bench_drives_the_loop_across_epochs_and_logs_by_update(
 ):  # noqa: F811
     """6 images, batch 2, accumulate 2: 1.5 updates per epoch; print_freq 3 reads at updates 3 and 6."""
     cfg = toml(tmp_path, data, total=1000, accumulate=2)
-    cfg.write_text(cfg.read_text().replace("print_freq = 1", "print_freq = 3"))
+    text = cfg.read_text(encoding="utf-8").replace("print_freq = 1", "print_freq = 3")
+    cfg.write_text(text, encoding="utf-8")
     reads, real = [], image.get_current_log
     monkeypatch.setattr(
         image, "get_current_log", lambda self: reads.append(self.update) or real(self)

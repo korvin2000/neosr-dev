@@ -168,7 +168,9 @@ def states(tmp: Path) -> list[int]:
 
 
 def logs(tmp: Path) -> str:
-    return "".join(p.read_text() for p in run_dir(tmp).glob("train_*.log"))
+    return "".join(
+        p.read_text(encoding="utf-8") for p in run_dir(tmp).glob("train_*.log")
+    )
 
 
 def archived(tmp: Path) -> list[Path]:
@@ -188,7 +190,8 @@ def test_train_save_validate_resume(tmp_path, data, cpu):
     assert (d / "visualization" / "valset" / "im0" / "im0_2.png").is_file()
     assert (d / "visualization" / "valset" / "im0" / "im0_4.png").is_file()
     assert list(d.glob("cfg_*.toml"))  # config copy with provenance header
-    assert list(d.glob("cfg_*.toml"))[0].read_text().startswith("# GENERATE TIME")
+    cfg_copy = list(d.glob("cfg_*.toml"))[0]
+    assert cfg_copy.read_text(encoding="utf-8").startswith("# GENERATE TIME")
     text = logs(tmp_path)
     assert "[ iter:      4 ]" in text and "Best:" in text
 

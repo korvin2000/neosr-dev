@@ -194,7 +194,10 @@ def _tree(root: Path) -> None:
 
 def test_scandir_skips_hidden_and_non_images(tmp_path):
     _tree(tmp_path)
-    (tmp_path / "GT" / "link").symlink_to(tmp_path / "GT" / "sub", target_is_directory=True)
+    try:
+        (tmp_path / "GT" / "link").symlink_to(tmp_path / "GT" / "sub", target_is_directory=True)
+    except OSError as e:  # Windows without the symlink privilege (WinError 1314)
+        pytest.skip(f"no symlinks here: {e}")
     names = [Path(p).relative_to(tmp_path / "GT").as_posix()
              for p in du.image_paths(str(tmp_path / "GT"), recursive=True)]  # fmt: skip
     assert names == ["a.PNG", "b.png", "sub/c.jpg"]  # sorted; no symlinked folder
@@ -253,14 +256,16 @@ def test_meta_info_names(tmp_path):
 
 # D-18: compact path lists
 def test_path_list():
-    paths = ["a/b.png", "ü/ç d.png", "", os.fsdecode(b"bad\xff.png")]
+    paths = ["a/b.png", "ü/ç d.png", ""]
+    if os.name == "posix":  # undecodable bytes in a name exist only there (surrogateescape)
+        paths.append(os.fsdecode(b"bad\xff.png"))
     pl = du.PathList(paths)
-    assert len(pl) == 4
+    assert len(pl) == len(paths)
     assert list(pl) == paths
     assert pl[-1] == paths[-1]
     assert pl[1] == paths[1]
     with pytest.raises(IndexError):
-        pl[4]
+        pl[len(paths)]
     assert list(pickle.loads(pickle.dumps(pl))) == paths  # spawn workers pickle the dataset
     assert list(du.PathList([])) == []
 
@@ -536,7 +541,8 @@ def test_extract_subimages_refuses_shared_stems(tmp_path):
         cv2.imwrite(str(tmp_path / "src" / n), _img(8, 8, 0))
     run = subprocess.run([sys.executable, "-m", "scripts.extract_subimages", "-i", str(tmp_path / "src"),
                           "-o", str(tmp_path / "out"), "--crop", "4", "--step", "4", "--workers", "1"],
-                         cwd=Path(__file__).parents[1], capture_output=True, text=True, check=False)  # fmt: skip
+                         cwd=Path(__file__).parents[1], capture_output=True, encoding="utf-8", errors="replace",
+                         env={**os.environ, "PYTHONIOENCODING": "utf-8"}, check=False)  # fmt: skip
     assert run.returncode != 0
     assert "share a file stem" in run.stderr
     assert not (tmp_path / "out").exists()

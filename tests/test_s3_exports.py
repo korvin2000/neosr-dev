@@ -150,8 +150,10 @@ def test_a_failed_best_export_records_nothing(tmp_path, monkeypatch):
 @pytest.mark.usefixtures("cpu")
 def test_the_final_state_records_the_best_of_the_final_validation(tmp_path, data):
     f = toml(tmp_path, data, total=4, save=2, val_freq=10)
+    text = f.read_text(encoding="utf-8")
     f.write_text(
-        f.read_text().replace("pbar = false", 'pbar = false\nsave_best = "psnr"')
+        text.replace("pbar = false", 'pbar = false\nsave_best = "psnr"'),
+        encoding="utf-8",
     )
     assert train_py.main(["-opt", str(f)]) == 0
     d = tmp_path / "exp" / "tiny"

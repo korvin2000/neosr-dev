@@ -176,6 +176,9 @@ dist.destroy_process_group()
 """
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="gloo cannot resolve the Windows host name"
+)
 def test_two_rank_gloo_shares_rank0_seed(tmp_path: Path) -> None:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
