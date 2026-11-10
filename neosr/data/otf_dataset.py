@@ -58,6 +58,8 @@ def _check_kernel_keys(opt: dict[str, Any]) -> None:
 
     def checks() -> Any:  # (key, expected, test), in order: later tests rely on earlier ones
         yield "final_sinc_prob", "a number", number
+        yield ("blur_prob", "a probability in [0, 1]",
+               lambda v: v is None or (number(v) and 0 <= v <= 1))  # fmt: skip
         for s in ("", "2"):
             kinds = opt.get(f"kernel_list{s}")
             yield f"sinc_prob{s}", "a number", number
@@ -149,6 +151,8 @@ class otf(data.Dataset):
         # betap used in plateau blur kernels
         self.betap_range = opt.get("betap_range")
         self.sinc_prob = opt.get("sinc_prob")  # the probability for sinc filters
+        # the first blur is applied with this probability (opt-in; absent: always, as before)
+        self.blur_prob = 1 if opt.get("blur_prob") is None else opt["blur_prob"]
 
         self.rotation = opt.get("rotation", [-math.pi, math.pi])
         # blur settings for the second degradation
@@ -281,6 +285,10 @@ class otf(data.Dataset):
         img_gt = img2tensor([to_float32(img_gt)], bgr2rgb=True, float32=True)[0]  # type: ignore[reportArgumentType,arg-type]
         # from_numpy stays on the CPU regardless of the default device
         kernel = torch.from_numpy(kernel).float()
+        # blur_prob: the kernel above is drawn either way; 0 and 1 (the default) draw nothing
+        p = self.blur_prob
+        if p <= 0 or (p < 1 and rng.uniform() >= p):
+            kernel = self.pulse_tensor
         kernel2 = torch.from_numpy(kernel2).float()
 
         return {

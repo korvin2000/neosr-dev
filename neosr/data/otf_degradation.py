@@ -37,12 +37,23 @@ _STAGE_KEYS = {
 }
 # F.interpolate without antialiasing: the default of every mode list
 _MODES = ("area", "bilinear", "bicubic")
-# resize of stage 1, of stage 2 and the final one to the LQ size: a list of _MODES / KERNELS names
-# -> its optional weight list (absent: uniform); the stage suffix stays last, as in resize_prob2
+# resize of stage 1, of stage 2, the final one to the LQ size and the clean path's: a list of
+# _MODES / KERNELS names -> (its optional weight list (absent: uniform), the default list); the
+# stage suffix stays last, as in resize_prob2
 _MODE_KEYS = {
-    "resize_mode": "resize_mode_prob",
-    "resize_mode2": "resize_mode_prob2",
-    "final_resize_mode": "final_resize_mode_prob",
+    "resize_mode": ("resize_mode_prob", _MODES),
+    "resize_mode2": ("resize_mode_prob2", _MODES),
+    "final_resize_mode": ("final_resize_mode_prob", _MODES),
+    "clean_mode": ("clean_mode_prob", ("aa_bicubic",)),
+}
+# per-sample gates -> default (1: every sample, as before the key existed; 0: none). A gate at 0 or
+# 1 draws nothing; in between it draws one mask per batch from the device RNG.
+_GATES = {
+    "noise_prob": 1.0,
+    "noise_prob2": 1.0,
+    "jpeg_prob": 1.0,
+    "jpeg_prob2": 1.0,
+    "clean_prob": 0.0,
 }
 # BT.601 luma, the weights of cv2's BGR2GRAY that the paired datasets use for color='y'
 _LUMA = (0.299, 0.587, 0.114)
@@ -69,6 +80,10 @@ def _no_cudnn_autotune() -> Generator[None]:
 class Degrader:
     """Two-stage degradation (blur, resize, noise, JPEG; then the final resize + sinc filter and
     JPEG in random order). `cfg` is the merged `datasets.train` section; its keys are checked once.
+
+    Opt-in (stage 3 OTF design): `noise_prob{,2}` / `jpeg_prob{,2}` apply that step to a sample with
+    the given probability; `clean_prob` replaces a sample's whole chain by one resize of the gt
+    (`clean_mode`). The first blur's `blur_prob` lives in the otf dataset, where its kernel is drawn.
     """
 
     def __init__(
@@ -90,7 +105,8 @@ class Degrader:
                 )
                 raise ConfigError(msg, key=k)
         self.cfg = {k: cfg[k] for k in keys}
-        self.modes = {k: _modes(cfg, k, p) for k, p in _MODE_KEYS.items()}
+        self.modes = {k: _modes(cfg, k, *v) for k, v in _MODE_KEYS.items()}
+        self.prob = {k: _prob(cfg, k, d) for k, d in _GATES.items()}
         self.scale = scale
         self.gray = cfg.get("color") == "y"
         self.jpeger = DiffJPEG(differentiable=False).to(device) if self.jpeg else None
@@ -104,6 +120,19 @@ class Degrader:
             return self._degrade(gt, kernel1, kernel2, sinc_kernel)
 
     def _degrade(
+        self, gt: Tensor, kernel1: Tensor, kernel2: Tensor, sinc_kernel: Tensor
+    ) -> Tensor:
+        clean, h, w = self.prob["clean_prob"], *gt.shape[2:]
+        size = (h // self.scale, w // self.scale)
+        if clean >= 1:  # no chain and none of its draws
+            return _quantize(self._interp(gt, "clean_mode", size=size))
+        out = self._chain(gt, kernel1, kernel2, sinc_kernel)
+        if clean > 0:  # both paths are computed: looking at the mask would be a host sync
+            mask = self._mask(out, clean)
+            out = torch.where(mask, self._interp(gt, "clean_mode", size=size), out)
+        return _quantize(out)
+
+    def _chain(
         self, gt: Tensor, kernel1: Tensor, kernel2: Tensor, sinc_kernel: Tensor
     ) -> Tensor:
         k1, k2, sinc = (
@@ -129,7 +158,12 @@ class Degrader:
         else:
             out = self._jpeg(out, "2")
             out = filter2D(self._interp(out, "final_resize_mode", size=size), sinc)
-        return _quantize(out)
+        return out
+
+    @staticmethod
+    def _mask(x: Tensor, p: float) -> Tensor:
+        """(b,1,1,1) gate, True with probability `p` per sample; from the device RNG, no host sync."""
+        return torch.rand(x.size(0), 1, 1, 1, device=x.device) < p
 
     def degrade(
         self, gt: Tensor, kernel1: Tensor, kernel2: Tensor, sinc_kernel: Tensor
@@ -177,43 +211,65 @@ class Degrader:
         )
 
     def _noise(self, out: Tensor, s: str) -> Tensor:
-        c, gray = self.cfg, self.cfg[f"gray_noise_prob{s}"]
-        if rng.uniform() < c[f"gaussian_noise_prob{s}"]:
-            return random_add_gaussian_noise_pt(
+        c, gray, p = self.cfg, self.cfg[f"gray_noise_prob{s}"], self.prob[f"noise_prob{s}"]
+        # drawn at every noise_prob: the resize factors of a seed do not depend on it
+        gaussian = rng.uniform() < c[f"gaussian_noise_prob{s}"]
+        if p <= 0:  # a skipped sample is clamped like a noisy one: an image stays in range
+            return out.clamp(0, 1)
+        if gaussian:
+            noisy = random_add_gaussian_noise_pt(
                 out,
                 sigma_range=c[f"noise_range{s}"],
                 clip=True,
                 rounds=False,
                 gray_prob=gray,
             )
-        return random_add_poisson_noise_pt(
-            out,
-            scale_range=c[f"poisson_scale_range{s}"],
-            gray_prob=gray,
-            clip=True,
-            rounds=False,
-        )
+        else:
+            noisy = random_add_poisson_noise_pt(
+                out,
+                scale_range=c[f"poisson_scale_range{s}"],
+                gray_prob=gray,
+                clip=True,
+                rounds=False,
+            )
+        if p >= 1:
+            return noisy
+        return torch.where(self._mask(out, p), noisy, out.clamp(0, 1))
 
     def _jpeg(self, out: Tensor, s: str) -> Tensor:
-        if self.jpeger is None:
+        p = self.prob[f"jpeg_prob{s}"]
+        if self.jpeger is None or p <= 0:  # before any draw
             return out
         quality = out.new_zeros(out.size(0)).uniform_(*self.cfg[f"jpeg_range{s}"])
         # clamp to [0, 1], otherwise DiffJPEG gives unpleasant artifacts; its output is a strided
         # crop, which filter2D cannot view once a CPU reflect pad keeps that layout
-        return self.jpeger(torch.clamp(out, 0, 1), quality=quality).contiguous()
+        coded = self.jpeger(torch.clamp(out, 0, 1), quality=quality).contiguous()
+        return coded if p >= 1 else torch.where(self._mask(out, p), coded, out)
+
+
+def _prob(cfg: dict[str, Any], key: str, default: float) -> float:
+    """An optional probability key; absent: `default`."""
+    p = cfg.get(key)
+    if p is None:
+        return default
+    if isinstance(p, bool) or not isinstance(p, int | float) or not 0 <= p <= 1:
+        msg = f"[degradations] {key} must be a probability in [0, 1], got {p!r}"
+        raise ConfigError(msg, key=key)
+    return float(p)
 
 
 def _modes(
-    cfg: dict[str, Any], key: str, prob_key: str
+    cfg: dict[str, Any], key: str, prob_key: str, default: tuple[str, ...]
 ) -> tuple[tuple[str, ...], list[float] | None]:
-    """(names, weights | None) of the `key` mode list; absent: the legacy modes, drawn as before."""
+    """(names, weights | None) of the `key` mode list; absent: `default`, drawn uniformly (for the
+    resize keys the legacy modes, as before the keys existed)."""
     names, weights = cfg.get(key), cfg.get(prob_key)
     known = (*_MODES, *KERNELS)
     if names is None:
         if weights is not None:
             msg = f"[degradations] {prob_key} needs {key} (the list its weights belong to)"
             raise ConfigError(msg, key=key)
-        return _MODES, None
+        return default, None
     if not isinstance(names, list | tuple) or not names:
         msg = f"[degradations] {key} must be a non-empty list of {', '.join(known)}, got {names!r}"
         raise ConfigError(msg, key=key)

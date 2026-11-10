@@ -351,3 +351,10 @@ long run are the owner's; the penalty-pass speed (above); source independence of
   Codex diff review: no default-path regression (90 batches against HEAD, all RNG states); 6 findings fixed
   (box boundary ties in integers, empty size raises, autocast off inside the resampler, finite weight sum, D6
   wording, RNG-state test against the frozen reference); table at the end of `otf/DESIGN.md`.
+- OTF O2 (same session, Windows CPU): per-sample gates `noise_prob`, `noise_prob2`, `jpeg_prob`, `jpeg_prob2`
+  (one mask per batch from the device RNG; a gate at 0 or 1 draws nothing; the Gaussian/Poisson coin is still drawn
+  at every setting, so the geometry of a seed does not depend on the gates), the clean path `clean_prob` with
+  `clean_mode` / `clean_mode_prob` (default `aa_bicubic`; mixed before the RGB quantisation, shortcuts on the
+  configured probability only), `blur_prob` in the dataset worker (pulse kernel; the kernel is drawn either way).
+  Defaults stay bitwise including all RNG states (frozen-reference tests unchanged). Schema keys, Studio surface
+  regenerated.

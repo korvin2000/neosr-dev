@@ -86,8 +86,10 @@ weight list of the same length: `resize_mode_prob`, `resize_mode_prob2` (the sta
 
 Per sample, because noise and JPEG already draw their strength per sample and a mask is one `torch.where`; the op
 still runs on the whole batch (cheap), which keeps shapes static and needs no host sync.
-Boundary rules: a skipped noise row is clamped to [0, 1] exactly as the noise functions clamp an applied row (an
-intermediate image is always in range); JPEG keeps its input clamp and contiguous output; with
+Boundary rules: the existing Gaussian/Poisson coin is drawn at every `noise_prob`, also 0, so the resize factors
+and modes of a seed do not depend on the gate; a skipped noise row is clamped to [0, 1] exactly as the noise
+functions clamp an applied row (an intermediate image is always in range); a skipped JPEG row is passed on as is
+(as with `jpeg_compress = false` today); JPEG keeps its input clamp and contiguous output; with
 `jpeg_compress = false` the JPEG gates return before any mask or quality draw. `gaussian_noise_prob` keeps its meaning
 (Gaussian vs Poisson **given** noise); the readme row must say so, the names are close.
 `jpeg_compress = false` stays the global off switch.
@@ -218,7 +220,7 @@ V1-V5 come from the simulator under test (only the JPEG tail is independent): th
 | step | content | size | machine |
 |---|---|---|---|
 | O1 | `data/resample.py`, `resize_mode*` keys, tests | S | Windows (code + tests). **Done 2026-11-10**, `tests/test_s3_otf.py` |
-| O2 | `blur_prob`, `noise_prob*`, `jpeg_prob*`, `clean_prob`/`clean_mode`, tests | S | Windows |
+| O2 | `blur_prob`, `noise_prob*`, `jpeg_prob*`, `clean_prob`/`clean_mode`, tests | S | Windows. **Done 2026-11-10** |
 | O3 | `sharpen_*`, tests | S | Windows |
 | O4 | `scripts/degrade.py` (+ the Pillow-only generator of set X), `options/degrade/*.toml`, tests | M | Windows; the sets are generated on Linux |
 | O4b | residual analysis: real LQ samples (Q1) next to the previews; decides the evidence-gated items of D8 | S | Windows (needs the owner's samples) |
@@ -301,3 +303,16 @@ also JPEG off, channels_last, transposed inputs). Six findings, all fixed before
 | weights with an infinite sum passed validation and failed later in `random.choices` | finite positive sum required |
 | an explicit list without weights used `random.choice`, D6 said `random.choices` | D6 reworded: intended (the spelled-out legacy list equals the default) |
 | the RNG test replayed python `random` only | outputs and python / numpy / torch states against the frozen reference, with and without JPEG. Worker coverage belongs to O2 (`blur_prob`), O1 does not touch the worker |
+
+### O2 diff review (Codex gpt-6.1-sol, read-only, 2026-11-10)
+Default path: no difference found (54 CPU Degrader batches against HEAD with JPEG on/off, batch 1/2/3,
+contiguous / channels_last / transposed inputs, and 36 worker samples incl. tight canvases: outputs, dtypes,
+strides and all three RNG streams equal). Gate and clean-path semantics, validation, the shared pulse tensor:
+nothing found; the design choices (coin at every `noise_prob`, clamp of skipped noise rows, shortcuts on the
+configured probability, clean mode drawn after the chain) were not found wrong. Two findings:
+| finding | fix |
+|---|---|
+| the worker parity test compared the new worker with itself (`blur_prob` absent vs 1): no old-code oracle | `test_worker_coin_count_per_sample`: exactly the three argument-free coins of the old worker per sample at the default and at 0/1, four in between. A frozen copy of the kernel code or golden values was not added (platform-dependent numerics, 70 duplicated lines); the one-off comparison against HEAD above is the evidence for the outputs |
+| an explicit `blur_prob = None` in a programmatic dict passed the check and failed in the worker | read as the default |
+Also after the review: the per-sample gate tests run under four seeds (both final orders).
+Not verified here: CUDA generator parity, a spawned multi-worker loader with pinned memory.

@@ -1,5 +1,6 @@
-"""Stage 3 OTF realism (docs/refactor/stage3/otf/DESIGN.md), O1: the antialiased resampler and the
-`resize_mode*` keys of the Degrader. CPU, tiny tensors."""
+"""Stage 3 OTF realism (docs/refactor/stage3/otf/DESIGN.md). O1: the antialiased resampler and the
+`resize_mode*` keys of the Degrader. O2: per-sample noise/JPEG gates, the clean path and the
+`blur_prob` of the dataset worker. CPU, tiny tensors."""
 
 import math
 import random
@@ -13,12 +14,16 @@ from torch.nn import functional as F
 
 from neosr import config
 from neosr.config import ConfigError
+from neosr.data import build_dataset
 from neosr.data import otf_degradation as od
 from neosr.data.otf_degradation import Degrader
 from neosr.data.resample import KERNELS, resample, scaled_size
 from neosr.utils import rng as rng_util
-from neosr.utils.diffjpeg import DiffJPEG
+from neosr.utils.diffjpeg import DiffJPEG, filter2D
 from tests import test_otf_degradation as base
+from tests import test_s2_data as data
+
+pairs = data.pairs  # the fixture: three x4 GT/LQ pairs in tmp_path
 
 CFG, S, _batch, _seed = base.CFG, base.S, base._batch, base._seed
 
@@ -335,3 +340,311 @@ def test_default_consumes_every_rng_like_the_frozen_reference(cfg, seed):
     assert after[0] == ref_after[0]
     assert after[1] == ref_after[1]
     assert torch.equal(after[2], ref_after[2])
+
+
+# ---------------------------------------------------------------- O2: gates and the clean path
+GATES = ("noise_prob", "noise_prob2", "jpeg_prob", "jpeg_prob2")
+NOISE_OFF = {"noise_prob": 0, "noise_prob2": 0}
+JPEG_OFF = {"jpeg_prob": 0, "jpeg_prob2": 0}
+
+
+def _lq(cfg, seed=7):
+    """One textured batch of two under fixed seeds; with the stubbed mask the runs differ by the
+    gates only (the stub draws nothing, so every stream stays aligned)."""
+    d = Degrader(cfg, scale=S, device="cpu")
+    _seed(seed)
+    return d(*_textured())
+
+
+@pytest.fixture
+def first_row_only(monkeypatch):
+    """Every gate lets sample 0 through and holds sample 1 back; records the probabilities."""
+    asked = []
+
+    def mask(x, p):
+        asked.append(p)
+        return torch.tensor([True, False]).view(2, 1, 1, 1).expand(x.size(0), 1, 1, 1)
+
+    monkeypatch.setattr(Degrader, "_mask", staticmethod(mask))
+    return asked
+
+
+def test_gates_at_their_defaults_change_nothing():
+    explicit = {**CFG, **dict.fromkeys(GATES, 1), "clean_prob": 0, "jpeg_prob2": 1.0}
+    runs = []
+    for cfg in (CFG, explicit):
+        d = Degrader(cfg, scale=S, device="cpu")
+        _seed(4)
+        runs.append(([d(*_batch(seed=i, dev="cpu")) for i in range(3)], _states()))
+    (out_a, st_a), (out_b, st_b) = runs
+    for a, b in zip(out_a, out_b, strict=True):
+        assert torch.equal(a, b)
+    assert st_a[:2] == st_b[:2]
+    assert torch.equal(st_a[2], st_b[2])
+
+
+SEEDS = [0, 1, 2, 7]  # both final orders and several resize kinds
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_noise_gate_is_per_sample(first_row_only, seed):
+    full = _lq(base.NO_JPEG, seed)
+    none = _lq({**base.NO_JPEG, **NOISE_OFF}, seed)
+    assert first_row_only == []  # gates at 0 and 1 never ask for a mask
+    mixed = _lq({**base.NO_JPEG, "noise_prob": 0.25, "noise_prob2": 0.75}, seed)
+    assert first_row_only == [0.25, 0.75]
+    assert not torch.equal(full[1], none[1])
+    assert torch.equal(mixed[0], full[0])
+    assert torch.equal(mixed[1], none[1])
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_jpeg_gate_is_per_sample(first_row_only, seed):
+    full = _lq({**CFG, **NOISE_OFF}, seed)
+    none = _lq({**CFG, **NOISE_OFF, **JPEG_OFF}, seed)
+    assert first_row_only == []
+    mixed = _lq({**CFG, **NOISE_OFF, "jpeg_prob": 0.25, "jpeg_prob2": 0.75}, seed)
+    assert first_row_only == [0.25, 0.75]
+    assert not torch.equal(full[1], none[1])
+    assert torch.equal(mixed[0], full[0])
+    assert torch.equal(mixed[1], none[1])
+
+
+def test_jpeg_gate_without_jpeg_draws_nothing(first_row_only):
+    cfg = {**base.NO_JPEG, **NOISE_OFF, "jpeg_prob": 0.5, "jpeg_prob2": 0.5}
+    d = Degrader(cfg, scale=S, device="cpu")
+    _seed(1)
+    before = torch.get_rng_state()
+    d(*_textured())
+    assert first_row_only == []
+    assert torch.equal(
+        torch.get_rng_state(), before
+    )  # no noise, no quality, no mask draw
+
+
+def test_noise_off_keeps_the_resize_draws_of_a_seed():
+    """The Gaussian/Poisson coin is drawn at every noise_prob, so python and numpy streams, and
+    with them the resize factors and modes of a seed, do not depend on the gate."""
+    states = []
+    for extra in ({}, NOISE_OFF):
+        d = Degrader({**base.NO_JPEG, **extra}, scale=S, device="cpu")
+        _seed(2)
+        d(*_textured())
+        states.append(_states())
+    assert states[0][:2] == states[1][:2]
+
+
+@pytest.mark.usefixtures("first_row_only")
+def test_skipped_noise_is_clamped_like_noisy():
+    x = torch.linspace(-0.5, 1.5, 2 * 3 * 4 * 4).view(2, 3, 4, 4)
+    off = Degrader({**CFG, **NOISE_OFF}, scale=S, device="cpu")
+    assert torch.equal(off._noise(x, ""), x.clamp(0, 1))
+    half = Degrader({**CFG, "noise_prob": 0.5}, scale=S, device="cpu")
+    _seed(0)
+    out = half._noise(x, "")
+    assert torch.equal(out[1], x[1].clamp(0, 1))
+    assert not torch.equal(out[0], x[0].clamp(0, 1))
+    assert out.min() >= 0
+    assert out.max() <= 1
+
+
+def test_mask_shape_rate_and_stream():
+    torch.manual_seed(0)
+    m = Degrader._mask(torch.zeros(4000, 3, 2, 2), 0.3)
+    assert m.shape == (4000, 1, 1, 1)
+    assert m.dtype == torch.bool
+    assert 0.27 < m.float().mean() < 0.33  # 4 sigma of a binomial(4000, 0.3)
+    torch.manual_seed(0)
+    assert torch.equal(m, Degrader._mask(torch.zeros(4000, 1, 1, 1), 0.3))
+
+
+def test_all_gates_ask_in_chain_order(first_row_only):
+    cfg = {**CFG, "noise_prob": 0.1, "jpeg_prob": 0.2, "noise_prob2": 0.3}
+    _lq({**cfg, "jpeg_prob2": 0.4, "clean_prob": 0.5})
+    assert first_row_only == [0.1, 0.2, 0.3, 0.4, 0.5]
+
+
+def _clean_ref(gt, mode="aa_bicubic"):
+    size = (gt.shape[2] // S, gt.shape[3] // S)
+    if mode in KERNELS:
+        return od._quantize(resample(gt, size, mode))
+    return od._quantize(F.interpolate(gt, size=size, mode=mode))
+
+
+def test_clean_only_is_one_resize_and_no_chain(first_row_only):
+    gt, *kernels = _textured()
+    d = Degrader({**CFG, "clean_prob": 1}, scale=S, device="cpu")
+    _seed(5)
+    before = _states()
+    lq = d(gt, *kernels)
+    after = _states()
+    assert torch.equal(lq, _clean_ref(gt))
+    assert first_row_only == []
+    assert after[1] == before[1]  # no chain: numpy untouched
+    assert torch.equal(after[2], before[2])  # no noise, JPEG or mask draw
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_clean_gate_is_per_sample(first_row_only, seed):
+    gt, *_ = _textured()
+    chain = _lq(CFG, seed)
+    assert first_row_only == []
+    mixed = _lq({**CFG, "clean_prob": 0.5}, seed)
+    assert first_row_only == [0.5]
+    assert torch.equal(mixed[0], _clean_ref(gt)[0])
+    assert torch.equal(mixed[1], chain[1])
+    assert not torch.equal(mixed[0], chain[0])
+
+
+@pytest.mark.parametrize(
+    ("modes", "weights", "expect"),
+    [
+        (["area"], None, "area"),  # a legacy mode: F.interpolate
+        (["aa_lanczos3"], None, "aa_lanczos3"),
+        (["aa_lanczos3", "aa_box"], [0, 1], "aa_box"),
+    ],
+)
+def test_clean_mode_list(modes, weights, expect):
+    gt, *kernels = _textured()
+    cfg = {**CFG, "clean_prob": 1, "clean_mode": modes, "clean_mode_prob": weights}
+    assert torch.equal(
+        Degrader(cfg, scale=S, device="cpu")(gt, *kernels), _clean_ref(gt, expect)
+    )
+
+
+def test_clean_with_luma_requantises_after_the_rgb_quantisation():
+    gt, *kernels = _textured()
+    d = Degrader({**CFG, "clean_prob": 1, "color": "y"}, scale=S, device="cpu")
+    gy, ly = d.degrade(gt, *kernels)
+    w = torch.tensor(od._LUMA).view(1, 3, 1, 1)
+    assert gy.shape == (2, 1, 96, 96)
+    assert torch.equal(ly, od._quantize((_clean_ref(gt) * w).sum(1, keepdim=True)))
+    assert torch.equal(
+        (ly * 255).round() / 255, ly
+    )  # what the pair pool stores as uint8
+
+
+@pytest.mark.parametrize("key", [*GATES, "clean_prob"])
+@pytest.mark.parametrize("value", [-0.1, 1.5, True, "0.5", [0.5], float("nan")])
+def test_bad_probability_raises(key, value):
+    with pytest.raises(
+        ConfigError, match=rf"\[degradations\] {key} must be a probability"
+    ):
+        Degrader({**CFG, key: value}, scale=S, device="cpu")
+
+
+def test_bad_clean_mode_raises():
+    with pytest.raises(ConfigError, match=r"\[degradations\] clean_mode: unknown mode"):
+        Degrader({**CFG, "clean_mode": ["clean"]}, scale=S, device="cpu")
+    with pytest.raises(ConfigError, match=r"\[degradations\] clean_mode_prob needs"):
+        Degrader({**CFG, "clean_mode_prob": [1]}, scale=S, device="cpu")
+
+
+def test_schema_knows_the_o2_keys():
+    keys = {*GATES, "blur_prob", "clean_prob", "clean_mode", "clean_mode_prob"}
+    for section in ("degradations", "datasets.*"):
+        assert keys <= config.SCHEMA[section].keys()
+    assert all(config.SCHEMA["degradations"][k] is float for k in (*GATES, "blur_prob"))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_no_host_sync_with_every_option_on():
+    cfg = {**CFG, **dict.fromkeys(GATES, 0.5), "clean_prob": 0.5}
+    cfg |= {k: ["aa_bicubic", "aa_lanczos2", "aa_box", "bicubic"] for k in MODE_KEYS}
+    d = Degrader(cfg, scale=4, device="cuda")
+    gt = torch.rand(4, 3, 96, 96, device="cuda")
+    ks = [torch.full((4, n, n), 1 / n**2, device="cuda") for n in (7, 9, 21)]
+    d(gt, *ks)
+    torch.cuda.synchronize()
+    torch.cuda.set_sync_debug_mode("error")
+    try:
+        for i in range(20):
+            _seed(i)
+            d(gt, *ks)
+    finally:
+        torch.cuda.set_sync_debug_mode(0)
+
+
+# ---------------------------------------------------------------- O2: blur_prob in the worker
+def _worker_items(root, n=12, **kw):
+    ds = build_dataset(data._otf_opt(root, **kw))
+    items = data._items(ds, n)  # seeds python, numpy and torch with 3, then loads
+    return ds, items, _states()
+
+
+def _is_pulse(ds, kernel):
+    return torch.equal(kernel, ds.pulse_tensor)
+
+
+def test_blur_prob_one_and_none_are_the_default(pairs):
+    _, ref, ref_state = _worker_items(pairs)
+    for p in (1, 1.0, None):
+        _, got, state = _worker_items(pairs, blur_prob=p)
+        data._assert_items_equal(got, ref)
+        assert state[:2] == ref_state[:2]
+        assert torch.equal(state[2], ref_state[2])
+
+
+class _CountingRng:
+    """neosr's rng with its argument-free coins counted (the probability draws of the worker)."""
+
+    def __init__(self, real):
+        self.real, self.coins = real, 0
+
+    def uniform(self, *args):
+        self.coins += not args
+        return self.real.uniform(*args)
+
+    def __getattr__(self, name):
+        return getattr(self.real, name)
+
+
+@pytest.mark.parametrize(("blur_prob", "coins"), [(None, 3), (1, 3), (0, 3), (0.5, 4)])
+def test_worker_coin_count_per_sample(pairs, monkeypatch, blur_prob, coins):
+    """The worker before `blur_prob` drew three argument-free coins per sample (sinc_prob,
+    sinc_prob2, final_sinc_prob). The default and the endpoints must not add one: a draw there
+    would shift every later kernel of a seeded run; in between the gate adds exactly one."""
+    counting = _CountingRng(od.rng)
+    monkeypatch.setattr(data.otf_dataset, "rng", counting)
+    ds = build_dataset(data._otf_opt(pairs, blur_prob=blur_prob))
+    items = data._items(ds, 10)
+    assert counting.coins == coins * 10
+    for item in items:
+        assert item["kernel1"].dtype == torch.float32
+        assert item["kernel1"].shape == (21, 21)
+
+
+def test_blur_prob_zero_skips_every_first_blur_without_a_draw(pairs):
+    _, ref, ref_state = _worker_items(pairs)
+    ds, got, state = _worker_items(pairs, blur_prob=0)
+    assert all(_is_pulse(ds, item["kernel1"]) for item in got)
+    assert not any(_is_pulse(ds, item["kernel1"]) for item in ref)
+    for a, b in zip(got, ref, strict=True):  # everything else is the same sample
+        assert torch.equal(a["gt"], b["gt"])
+        assert torch.equal(a["kernel2"], b["kernel2"])
+        assert torch.equal(a["sinc_kernel"], b["sinc_kernel"])
+    assert state[:2] == ref_state[:2]
+    assert torch.equal(state[2], ref_state[2])
+
+
+def test_blur_prob_between_draws_one_coin_per_sample(pairs):
+    ds, got, state = _worker_items(pairs, n=200, blur_prob=0.5)
+    _, _, ref_state = _worker_items(pairs, n=200)
+    skipped = sum(_is_pulse(ds, item["kernel1"]) for item in got)
+    assert 72 <= skipped <= 128  # 4 sigma of a binomial(200, 0.5)
+    assert state[1] != ref_state[1]  # the coin comes from neosr's numpy stream
+
+
+def test_a_skipped_first_blur_is_the_identity():
+    gt = _x(torch.float32, 32, 32)
+    pulse = torch.zeros(2, 21, 21)
+    pulse[:, 10, 10] = 1
+    assert torch.equal(filter2D(gt, pulse), gt)
+
+
+@pytest.mark.parametrize("value", [-0.1, 1.5, True, "0.5", [1]])
+def test_bad_blur_prob_raises(pairs, value):
+    with pytest.raises(
+        ConfigError, match=r"\[degradations\] blur_prob must be a probability"
+    ):
+        build_dataset(data._otf_opt(pairs, blur_prob=value))
