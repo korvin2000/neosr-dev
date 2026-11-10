@@ -38,9 +38,9 @@ class Registry(Mapping[str, Row]):
 
     The one accepted form: the decorator at column 0, directly above a module-level `class` or
     `def` (other decorators go above it), with keyword arguments that are literals. A module of
-    the package may use the marker name for nothing else than its import and these decorators, so
-    every other spelling (an alias, a call, an indented or commented-out decorator) fails the
-    scan by file name instead of being skipped. `__init__.py` is not scanned.
+    the package that names the marker must use it for its import and these decorators and nothing
+    else, so every other spelling (an alias, a call, an indented or commented-out decorator)
+    fails the scan by file name instead of being skipped. `__init__.py` is not scanned.
     """
 
     def __init__(
@@ -74,12 +74,16 @@ class Registry(Mapping[str, Row]):
         )
         used = re.compile(rf"\b{marker}\b")
         rows: dict[str, Row] = {}
-        for file in sorted(self.path.glob("*.py")):
+        files = sorted(self.path.glob("*.py"))
+        if not files:
+            msg = f"{self.path}: no source files to scan for {self.marker}"
+            raise RuntimeError(msg)
+        for file in files:
             text = file.read_text("utf-8-sig")
             if self.marker not in text or file.stem == "__init__":
                 continue
             found = declared.findall(text)
-            if len(used.findall(text)) != len(found) + 1:
+            if not found or len(used.findall(text)) != len(found) + 1:
                 msg = (
                     f"{file}: {self.marker} may appear only in its import and in "
                     f"@{self.marker}.register(...) at column 0, directly above a module-level "

@@ -88,11 +88,30 @@ def test_registry_module_is_stdlib_only() -> None:
     assert roots <= sys.stdlib_module_names, roots
 
 
-def bound(node: ast.stmt) -> list[str]:
-    if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
-        return [node.name]
-    targets = getattr(node, "targets", [getattr(node, "target", None)])
-    return [t.id for t in targets if isinstance(t, ast.Name)]
+def module_bindings(tree: ast.Module) -> list[str]:
+    """Every name the module scope binds: definitions, imports, assignments (also unpacked or
+    inside module-level control flow); function and class bodies are other scopes."""
+    names: list[str] = []
+    stack: list[ast.AST] = list(tree.body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            names.append(node.name)
+            continue
+        if isinstance(node, ast.Import | ast.ImportFrom):
+            names += [(a.asname or a.name).split(".")[0] for a in node.names]
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            names.append(node.id)
+        stack += ast.iter_child_nodes(node)
+    return names
+
+
+def test_module_bindings_sees_every_rebinding() -> None:
+    src = (
+        "class A: pass\nfrom m import A\nA, b = 1, 2\nif b:\n    A = 3\n"
+        "def f():\n    A = 4\n"
+    )
+    assert module_bindings(ast.parse(src)).count("A") == 4
 
 
 @pytest.mark.parametrize("reg", REGISTRIES, ids=[reg.marker for reg in REGISTRIES])
@@ -104,7 +123,7 @@ def test_scan_equals_an_independent_ast_reading(reg: Registry) -> None:
     rows = {}
     for file in sorted(reg.path.glob("*.py")):
         tree = ast.parse(file.read_text("utf-8"))
-        names = [name for node in tree.body for name in bound(node)]
+        names = module_bindings(tree)
         for node in ast.walk(tree):
             for deco in getattr(node, "decorator_list", []):
                 if reg.marker in ast.unparse(deco):
@@ -223,6 +242,11 @@ def test_register_returns_the_object_unchanged() -> None:
         ("@FAKE.register(scale=[])\nclass A: pass\n", "keyword literals"),
         ("@FAKE.register (scale=None)\nclass A: pass\n", "readable"),
         ("REG = FAKE\n@REG.register(scale=None)\nclass A: pass\n", "readable"),
+        ("class A: pass\n", "readable"),  # imports the marker (HEAD), registers nothing
+        (
+            "from fakepkg import FAKE as R\n@R.register(scale=None)\nclass A: pass\n",
+            "readable",
+        ),
         ("# @FAKE.register(scale=None)\nclass A: pass\n", "readable"),
         (OTHER + OTHER, "already registered"),
     ],
