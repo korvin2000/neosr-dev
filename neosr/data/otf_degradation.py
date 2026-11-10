@@ -54,6 +54,14 @@ _GATES = {
     "jpeg_prob": 1.0,
     "jpeg_prob2": 1.0,
     "clean_prob": 0.0,
+    "sharpen_prob": 0.0,
+}
+# unsharp mask at LQ scale: per-sample ranges -> (default, lowest, highest allowed value).
+# sigma <= 3 keeps the kernel radius (3 sigma) at 9 px, inside the reflect padding the 21 px sinc
+# filter already needs, so sharpening adds no limit on the LQ size.
+_SHARPEN = {
+    "sharpen_sigma": ((0.5, 2.0), 0.1, 3.0),  # Gaussian sigma in LQ pixels
+    "sharpen_amount": ((0.3, 1.5), 0.0, 5.0),  # out + amount * (out - blurred)
 }
 # BT.601 luma, the weights of cv2's BGR2GRAY that the paired datasets use for color='y'
 _LUMA = (0.299, 0.587, 0.114)
@@ -84,6 +92,8 @@ class Degrader:
     Opt-in (stage 3 OTF design): `noise_prob{,2}` / `jpeg_prob{,2}` apply that step to a sample with
     the given probability; `clean_prob` replaces a sample's whole chain by one resize of the gt
     (`clean_mode`). The first blur's `blur_prob` lives in the otf dataset, where its kernel is drawn.
+    `sharpen_prob` applies an unsharp mask (`sharpen_sigma`, `sharpen_amount`) to a sample right
+    after the final resize + sinc filter, i.e. at LQ scale, where real pipelines sharpen.
     """
 
     def __init__(
@@ -107,6 +117,7 @@ class Degrader:
         self.cfg = {k: cfg[k] for k in keys}
         self.modes = {k: _modes(cfg, k, *v) for k, v in _MODE_KEYS.items()}
         self.prob = {k: _prob(cfg, k, d) for k, d in _GATES.items()}
+        self.sharpen = {k: _range(cfg, k, *v) for k, v in _SHARPEN.items()}
         self.scale = scale
         self.gray = cfg.get("color") == "y"
         self.jpeger = DiffJPEG(differentiable=False).to(device) if self.jpeg else None
@@ -116,7 +127,8 @@ class Degrader:
         self, gt: Tensor, kernel1: Tensor, kernel2: Tensor, sinc_kernel: Tensor
     ) -> Tensor:
         """`gt` (b,c,h,w) in [0, 1] -> LQ (b,c,h/scale,w/scale), quantised to 8 bit."""
-        with _no_cudnn_autotune():
+        # an ambient autocast would run the filters in bf16/fp16 and change the 8-bit codes
+        with _no_cudnn_autotune(), torch.autocast(gt.device.type, enabled=False):
             return self._degrade(gt, kernel1, kernel2, sinc_kernel)
 
     def _degrade(
@@ -154,11 +166,31 @@ class Degrader:
         size = (h // self.scale, w // self.scale)
         if rng.uniform() < 0.5:
             out = filter2D(self._interp(out, "final_resize_mode", size=size), sinc)
-            out = self._jpeg(out, "2")
+            out = self._jpeg(self._sharpen(out), "2")
         else:
             out = self._jpeg(out, "2")
             out = filter2D(self._interp(out, "final_resize_mode", size=size), sinc)
+            out = self._sharpen(out)
         return out
+
+    def _sharpen(self, out: Tensor) -> Tensor:
+        """Unsharp mask with per-sample sigma and amount; a sharpened sample is clamped to [0, 1]."""
+        p = self.prob["sharpen_prob"]
+        if p <= 0:  # before any draw
+            return out
+        b = out.size(0)
+        (s_lo, s_hi), (a_lo, a_hi) = self.sharpen.values()
+        kw = {"device": out.device, "dtype": out.dtype}
+        sigma = torch.rand(b, 1, **kw) * (s_hi - s_lo) + s_lo
+        amount = torch.rand(b, 1, 1, 1, **kw) * (a_hi - a_lo) + a_lo
+        # one kernel size for the configured range (3 sigma of its upper bound): static conv shape
+        radius = math.ceil(3 * s_hi)
+        x = torch.arange(-radius, radius + 1, **kw)
+        g = torch.exp(-(x**2) / (2 * sigma**2))
+        g = g / g.sum(1, keepdim=True)
+        blurred = filter2D(out, g[:, :, None] * g[:, None, :])
+        sharp = (out + amount * (out - blurred)).clamp(0, 1)
+        return sharp if p >= 1 else torch.where(self._mask(out, p), sharp, out)
 
     @staticmethod
     def _mask(x: Tensor, p: float) -> Tensor:
@@ -256,6 +288,29 @@ def _prob(cfg: dict[str, Any], key: str, default: float) -> float:
         msg = f"[degradations] {key} must be a probability in [0, 1], got {p!r}"
         raise ConfigError(msg, key=key)
     return float(p)
+
+
+def _range(
+    cfg: dict[str, Any], key: str, default: tuple[float, float], low: float, high: float
+) -> tuple[float, float]:
+    """An optional [lo, hi] key with `low` <= lo <= hi <= `high`; absent: `default`."""
+    v = cfg.get(key)
+    if v is None:
+        return default
+    if (
+        not isinstance(v, list | tuple)
+        or len(v) != 2
+        or not all(
+            isinstance(n, int | float) and not isinstance(n, bool) and math.isfinite(n)
+            for n in v
+        )
+        or not low <= v[0] <= v[1] <= high
+    ):
+        msg = (
+            f"[degradations] {key} must be [lo, hi] with {low} <= lo <= hi <= {high}, got {v!r}"
+        )
+        raise ConfigError(msg, key=key)
+    return float(v[0]), float(v[1])
 
 
 def _modes(

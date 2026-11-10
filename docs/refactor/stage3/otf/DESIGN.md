@@ -106,7 +106,8 @@ Independent probabilities alone do not give this sample: the chain still resampl
 ### D4. Sharpening at LQ scale (G3)
 Unsharp mask right after the final resize + sinc, in both orders (so it sits before the last JPEG in one order and
 after it in the other, as in real pipelines): `out + a (out - G_sigma * out)`, clamped. Keys: `sharpen_prob`
-(default 0, per sample), `sharpen_sigma = [0.5, 2.0]` (LQ px), `sharpen_amount = [0.3, 1.5]`; parameters per sample
+(default 0, per sample), `sharpen_sigma = [0.5, 2.0]` (LQ px, allowed 0.1-3: the 3 sigma kernel then stays inside
+the padding the 21 px sinc filter already needs), `sharpen_amount = [0.3, 1.5]` (allowed 0-5); parameters per sample
 from the torch RNG; one `filter2D` with a per-sample 13 x 13 Gaussian (`filter2D` already takes per-sample kernels).
 With `sharpen_prob = 0` the step returns before any draw or filtering. No threshold parameter: sharpening noise
 and JPEG blocks is what re-sharpened downloads look like, but the `degrade.py` previews of O4 must confirm it
@@ -221,7 +222,7 @@ V1-V5 come from the simulator under test (only the JPEG tail is independent): th
 |---|---|---|---|
 | O1 | `data/resample.py`, `resize_mode*` keys, tests | S | Windows (code + tests). **Done 2026-11-10**, `tests/test_s3_otf.py` |
 | O2 | `blur_prob`, `noise_prob*`, `jpeg_prob*`, `clean_prob`/`clean_mode`, tests | S | Windows. **Done 2026-11-10** |
-| O3 | `sharpen_*`, tests | S | Windows |
+| O3 | `sharpen_*`, tests | S | Windows. **Done 2026-11-10** |
 | O4 | `scripts/degrade.py` (+ the Pillow-only generator of set X), `options/degrade/*.toml`, tests | M | Windows; the sets are generated on Linux |
 | O4b | residual analysis: real LQ samples (Q1) next to the previews; decides the evidence-gated items of D8 | S | Windows (needs the owner's samples) |
 | O5 | config schema, readme OTF section, commented template rows, Studio surface + catalog | S | Windows |
@@ -316,3 +317,17 @@ configured probability, clean mode drawn after the chain) were not found wrong. 
 | an explicit `blur_prob = None` in a programmatic dict passed the check and failed in the worker | read as the default |
 Also after the review: the per-sample gate tests run under four seeds (both final orders).
 Not verified here: CUDA generator parity, a spawned multi-worker loader with pinned memory.
+
+### O3 diff review (Codex gpt-6.1-sol, read-only, 2026-11-10)
+Default path: no difference found (72 CPU batches against HEAD with `sharpen_prob` absent or 0, JPEG on/off, O2
+options, the clean path: outputs and all RNG states equal). Kernel, broadcasting, draw order, both call sites,
+the cv2 reference test: nothing found. Realism: post-resize unsharp masking is a normal delivery step; the strong
+end (amount 1.5) amplifies high frequencies about 2.5x, a threshold stays optional (D4). Four findings, fixed:
+| finding | fix |
+|---|---|
+| a large sigma fails late in the reflect padding (sigma 8 on a 24 px LQ), also when no sample is sharpened | static bounds: sigma 0.1-3 (radius <= 9, inside the sinc filter's own padding need), amount 0-5 |
+| huge finite values passed (`1e39`: inf * 0 = nan) | the same bounds |
+| an ambient autocast changed the 8-bit codes; fp32 draws against a non-fp32 input | the whole Degrader call runs with autocast disabled; the draws use the input dtype |
+| the per-sample test passed with one of the two parameters shared across the batch | replaced by a replay of the draws against per-row references; added: skipped rows stay unclamped, bounds, autocast |
+Open: no evidence yet on representative photographs that the strong end of the default ranges looks real (the
+previews of O4 and the residual analysis O4b decide).

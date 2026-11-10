@@ -1,6 +1,6 @@
 """Stage 3 OTF realism (docs/refactor/stage3/otf/DESIGN.md). O1: the antialiased resampler and the
 `resize_mode*` keys of the Degrader. O2: per-sample noise/JPEG gates, the clean path and the
-`blur_prob` of the dataset worker. CPU, tiny tensors."""
+`blur_prob` of the dataset worker. O3: the unsharp mask at LQ scale. CPU, tiny tensors."""
 
 import math
 import random
@@ -8,6 +8,7 @@ import re
 from fractions import Fraction
 from itertools import starmap
 
+import cv2
 import pytest
 import torch
 from torch.nn import functional as F
@@ -524,7 +525,7 @@ def test_clean_with_luma_requantises_after_the_rgb_quantisation():
     )  # what the pair pool stores as uint8
 
 
-@pytest.mark.parametrize("key", [*GATES, "clean_prob"])
+@pytest.mark.parametrize("key", [*GATES, "clean_prob", "sharpen_prob"])
 @pytest.mark.parametrize("value", [-0.1, 1.5, True, "0.5", [0.5], float("nan")])
 def test_bad_probability_raises(key, value):
     with pytest.raises(
@@ -549,7 +550,7 @@ def test_schema_knows_the_o2_keys():
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
 def test_no_host_sync_with_every_option_on():
-    cfg = {**CFG, **dict.fromkeys(GATES, 0.5), "clean_prob": 0.5}
+    cfg = {**CFG, **dict.fromkeys(GATES, 0.5), "clean_prob": 0.5, "sharpen_prob": 0.5}
     cfg |= {k: ["aa_bicubic", "aa_lanczos2", "aa_box", "bicubic"] for k in MODE_KEYS}
     d = Degrader(cfg, scale=4, device="cuda")
     gt = torch.rand(4, 3, 96, 96, device="cuda")
@@ -648,3 +649,171 @@ def test_bad_blur_prob_raises(pairs, value):
         ConfigError, match=r"\[degradations\] blur_prob must be a probability"
     ):
         build_dataset(data._otf_opt(pairs, blur_prob=value))
+
+
+# ---------------------------------------------------------------- O3: sharpening at LQ scale
+def _fixed_sharpen(sigma, amount, prob=1):
+    cfg = {"sharpen_sigma": [sigma, sigma], "sharpen_amount": [amount, amount]}
+    return Degrader({**CFG, **cfg, "sharpen_prob": prob}, scale=S, device="cpu")
+
+
+@pytest.mark.parametrize(("sigma", "amount"), [(0.5, 1.5), (1.0, 1.0), (2.0, 0.3)])
+def test_sharpen_is_the_unsharp_mask_of_cv2(sigma, amount):
+    """out + amount * (out - Gaussian(out)), against cv2.GaussianBlur with the same kernel size
+    and reflect-101 border (what filter2D pads with)."""
+    x = _x(torch.float32, 40, 48)[:1]
+    got = _fixed_sharpen(sigma, amount)._sharpen(x)
+    k = 2 * math.ceil(3 * sigma) + 1
+    img = x[0].permute(1, 2, 0).numpy()
+    blur = cv2.GaussianBlur(img, (k, k), sigma, borderType=cv2.BORDER_REFLECT_101)
+    ref = torch.from_numpy(img + amount * (img - blur)).permute(2, 0, 1).clamp(0, 1)
+    assert (got[0] - ref).abs().max() < 2e-6
+
+
+def test_sharpen_overshoots_an_edge_and_keeps_flat_areas():
+    x = torch.full((1, 3, 16, 32), 0.25)
+    x[..., 16:] = 0.75
+    out = _fixed_sharpen(1.0, 1.0)._sharpen(x)
+    row = out[0, 0, 8]
+    assert row[15] < 0.25  # the dark side dips
+    assert row[16] > 0.75  # the bright side overshoots
+    # 6 px or more from the edge (beyond the 3 sigma kernel): untouched up to rounding
+    assert (row[:10] - 0.25).abs().max() < 1e-6
+    assert (row[22:] - 0.75).abs().max() < 1e-6
+
+
+def test_sharpen_identities_and_clamp():
+    x = _x(torch.float32, 24, 24)
+    assert torch.equal(_fixed_sharpen(1.0, 0)._sharpen(x), x)  # zero amount
+    flat = torch.full((2, 3, 24, 24), 0.4)
+    assert (_fixed_sharpen(2.0, 1.5)._sharpen(flat) - 0.4).abs().max() < 1e-6
+    hot = _fixed_sharpen(1.0, 1.5)._sharpen(x)
+    assert hot.min() >= 0
+    assert hot.max() <= 1
+    assert (hot == 0).any()  # the clamp is active on this noise image
+    assert (hot == 1).any()
+
+
+def test_sharpen_draws_sigma_and_amount_per_sample():
+    """Each row equals the unsharp mask with its own sigma and its own amount: the draws are
+    replayed (sigma first, then amount) and every row is held against a fixed-parameter run."""
+    d = Degrader({**CFG, "sharpen_prob": 1}, scale=S, device="cpu")  # default ranges
+    x = _x(torch.float32, 24, 24)[:1].expand(6, -1, -1, -1)
+    torch.manual_seed(0)
+    out = d._sharpen(x)
+    torch.manual_seed(0)
+    sigma = torch.rand(6, 1) * 1.5 + 0.5
+    amount = torch.rand(6, 1, 1, 1) * 1.2 + 0.3
+    assert len({round(v, 4) for v in sigma.flatten().tolist()}) == 6
+    assert len({round(v, 4) for v in amount.flatten().tolist()}) == 6
+    for i in range(6):
+        k = 13  # the kernel size of the default range: 3 sigma of its upper bound
+        img = x[i].permute(1, 2, 0).numpy()
+        s, a = sigma[i].item(), amount[i].item()
+        blur = cv2.GaussianBlur(img, (k, k), s, borderType=cv2.BORDER_REFLECT_101)
+        ref = torch.from_numpy(img + a * (img - blur)).permute(2, 0, 1).clamp(0, 1)
+        assert (out[i] - ref).abs().max() < 2e-6
+        if i:  # and it is not row 0's sigma or amount
+            assert (out[i] - out[0]).abs().max() > 1e-3
+
+
+@pytest.mark.usefixtures("first_row_only")
+def test_sharpened_rows_are_clamped_and_skipped_rows_passed_on():
+    x = torch.linspace(-0.5, 1.5, 2 * 3 * 24 * 24).view(2, 3, 24, 24)
+    out = _fixed_sharpen(1.0, 1.0, prob=0.5)._sharpen(x)
+    assert out[0].min() >= 0
+    assert out[0].max() <= 1
+    assert torch.equal(
+        out[1], x[1]
+    )  # as it came, excursions included: quantisation clamps later
+
+
+def test_ambient_autocast_does_not_change_the_lq():
+    cfg = {**CFG, "sharpen_prob": 1, "final_resize_mode": ["aa_lanczos3"]}
+    d = Degrader(cfg, scale=S, device="cpu")
+    _seed(6)
+    plain = d(*_textured())
+    _seed(6)
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        cast = d(*_textured())
+    assert cast.dtype == torch.float32
+    assert torch.equal(cast, plain)
+
+
+@pytest.mark.usefixtures("first_row_only")
+def test_sharpen_off_draws_nothing_and_default_is_off():
+    x = _x(torch.float32, 24, 24)
+    for cfg in (CFG, {**CFG, "sharpen_prob": 0}):
+        d = Degrader(cfg, scale=S, device="cpu")
+        before = torch.get_rng_state()
+        assert d._sharpen(x) is x
+        assert torch.equal(torch.get_rng_state(), before)
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_sharpen_gate_is_per_sample(first_row_only, seed):
+    full = _lq({**base.NO_JPEG, "sharpen_prob": 1}, seed)
+    none = _lq(base.NO_JPEG, seed)
+    assert first_row_only == []
+    mixed = _lq({**base.NO_JPEG, "sharpen_prob": 0.5}, seed)
+    assert first_row_only == [0.5]
+    assert not torch.equal(full[1], none[1])
+    assert torch.equal(mixed[0], full[0])
+    assert torch.equal(mixed[1], none[1])
+
+
+@pytest.mark.parametrize(
+    ("order", "asked"),
+    [
+        (0.05, [0.1, 0.2, 0.3, 0.6, 0.4, 0.5]),  # resize + sinc, sharpen, JPEG
+        (0.95, [0.1, 0.2, 0.3, 0.4, 0.6, 0.5]),  # JPEG, resize + sinc, sharpen
+    ],
+)
+def test_sharpen_follows_the_final_resize_in_both_orders(
+    monkeypatch, first_row_only, order, asked
+):
+    monkeypatch.setattr(
+        od, "rng", type("R", (), {"uniform": staticmethod(lambda *_: order)})()
+    )
+    monkeypatch.setattr(od.random, "choices", lambda seq, _weights: [seq[2]])  # keep
+    cfg = {**CFG, "noise_prob": 0.1, "jpeg_prob": 0.2, "noise_prob2": 0.3}
+    cfg |= {"jpeg_prob2": 0.4, "clean_prob": 0.5, "sharpen_prob": 0.6}
+    seen = []
+    real = Degrader._sharpen
+    monkeypatch.setattr(
+        Degrader,
+        "_sharpen",
+        lambda self, x: seen.append(tuple(x.shape)) or real(self, x),
+    )
+    Degrader(cfg, scale=S, device="cpu")(*_textured())
+    assert first_row_only == asked
+    assert seen == [(2, 3, 24, 24)]  # once, on the LQ-sized image
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("sharpen_sigma", [0.05, 1]),  # below the smallest sigma
+        ("sharpen_sigma", [2, 1]),
+        ("sharpen_sigma", [1]),
+        ("sharpen_sigma", 1.0),
+        ("sharpen_sigma", [1, float("inf")]),
+        ("sharpen_sigma", [1, 3.5]),  # radius beyond the sinc filter's padding
+        ("sharpen_amount", [1, 1e39]),
+        ("sharpen_amount", [-0.1, 1]),
+        ("sharpen_amount", [1, 0.5]),
+        ("sharpen_amount", [0.5, True]),
+    ],
+)
+def test_bad_sharpen_range_raises(key, value):
+    with pytest.raises(
+        ConfigError, match=rf"\[degradations\] {key} must be \[lo, hi\]"
+    ):
+        Degrader({**CFG, key: value}, scale=S, device="cpu")
+
+
+def test_schema_knows_the_o3_keys():
+    for section in ("degradations", "datasets.*"):
+        assert config.SCHEMA[section]["sharpen_prob"] is float
+        assert config.SCHEMA[section]["sharpen_sigma"] is list
+        assert config.SCHEMA[section]["sharpen_amount"] is list

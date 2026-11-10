@@ -69,6 +69,9 @@ _DEGRADATIONS: dict[str, Any] = {
     "clean_prob": float,
     "clean_mode": list,
     "clean_mode_prob": list,
+    "sharpen_prob": float,
+    "sharpen_sigma": list,
+    "sharpen_amount": list,
     "second_blur_prob": float,
     "jpeg_compress": bool,
 }

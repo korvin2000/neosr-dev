@@ -358,3 +358,9 @@ long run are the owner's; the penalty-pass speed (above); source independence of
   configured probability only), `blur_prob` in the dataset worker (pulse kernel; the kernel is drawn either way).
   Defaults stay bitwise including all RNG states (frozen-reference tests unchanged). Schema keys, Studio surface
   regenerated.
+- OTF O3 (same session, Windows CPU): unsharp mask at LQ scale right after the final resize + sinc filter in both
+  final orders (`sharpen_prob` per sample, default 0; `sharpen_sigma` [0.5, 2.0] within 0.1-3, `sharpen_amount`
+  [0.3, 1.5] within 0-5; one static 3-sigma kernel size, per-sample sigma and amount from the device RNG; equal
+  to cv2.GaussianBlur's unsharp mask to 2e-6). The Degrader call now runs with autocast disabled (an ambient
+  autocast changed 8-bit codes). Codex diff review: no default-path difference (72 batches against HEAD), four
+  findings fixed (table in `otf/DESIGN.md`).
