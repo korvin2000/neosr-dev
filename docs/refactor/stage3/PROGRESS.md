@@ -336,4 +336,9 @@ long run are the owner's; the penalty-pass speed (above); source independence of
 - Not run here (no torch): pytest. First step of the next Linux session: `git pull`, merge `master` into
   `refactor/stabilize`, full suite (see `../STATUS.md`, "Waiting for the Linux machine").
 - The R3GAN track is still paused at the point described above; nothing in it changed.
-
+- OTF realism (Phase B) design: `otf/DESIGN.md`, draft 2 after a read-only Codex gpt-6.1-sol critique (8 findings: 6
+  accepted, 2 partly; table in its section 10). Decisions: one separable resampler with a kernel table (formula
+  verified against torch `antialias=True` on the CPU, 2.3e-15), per-sample gates for noise/JPEG, worker-side
+  `blur_prob`, a clean path, USM at LQ scale, `scripts/degrade.py` for fixed validation sets; defaults bitwise
+  today's including RNG consumption. Validation sets V0-V5 are diagnostics only; real-photo evidence needs the
+  owner's real holdout (question Q1). No code yet.

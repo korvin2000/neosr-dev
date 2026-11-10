@@ -26,8 +26,8 @@ What to take from traiNNer-redux: `stage3/CONSENSUS.md` (3-model verdict), `stag
 phased list), `stage3/TASK_OPUS.md` (Phase A implementation brief), `stage3/PROGRESS.md`, `stage3/competitor/` (lane reports).
 Phase A (A1-A9) is done (commits and follow-ups at the end of `stage3/PROGRESS.md`); user docs: `docs/training_guide.md`.
 R3GAN track (`stage3/r3gan/`: `DESIGN.md`, `TASK_R3GAN.md`, `RESULTS.md`): discriminator, loss path and template are
-in; the GPU qualification failed the cost gate and the A/B is paused (`STATUS.md`). Phase 0 (A/Bs) and Phase B are
-not started.
+in; the GPU qualification failed the cost gate and the A/B is paused (`STATUS.md`). Phase 0 (A/Bs) is not started.
+Phase B: the OTF realism design is `stage3/otf/DESIGN.md` (draft 2, no code); the rest is not started.
 
 ## NeoSR Studio (2026-10-28, synced 2026-11-10)
 `studio/` is a web UI prototype (Angular + Node) that edits a recipe and compiles it to a NeoSR TOML; training is

@@ -43,7 +43,7 @@ machines; `DECISIONS.md`, 2026-11-10). Do not report it again and do not print t
 | Stage 3 Phase A (A1-A9, port from traiNNer-redux) | done, merged | `stage3/PROGRESS.md` "Phase A closed" |
 | Stage 3 Phase 0 (E0-E5: evaluation protocol, config-only A/Bs) | **not started** (E0 partly covered by the R5 split) | `stage3/CONSENSUS.md` Phase 0 |
 | R3GAN track | code done (R1-R3), data done (R5), qualification R4: bf16 PASS (provisional, no replicate), **cost gate FAIL**; **A/B (R6) not run: paused** | `stage3/PROGRESS.md` "PAUSED", `stage3/r3gan/RESULTS.md` |
-| Stage 3 Phase B (OTF realism, i-LN, KD/ECO, dynamo exporter, ...) | **not started**; the owner ordered it after R3GAN | `stage3/REVIEW.md` "Final list" |
+| Stage 3 Phase B (OTF realism, i-LN, KD/ECO, dynamo exporter, ...) | OTF realism: **design draft 2** (Codex-reviewed), waiting for the owner's answers Q1-Q4; no code. The rest not started; the owner ordered Phase B after R3GAN | `stage3/otf/DESIGN.md`, `stage3/REVIEW.md` "Final list" |
 | NeoSR Studio (`studio/`) | prototype: real recipe model, TOML compiler and validator; **training is simulated** (no adapter to `train.py`). Catalog synced to the trainer on 2026-11-10 and guarded by a contract | `studio/README.md`, "Studio contract" below |
 
 Last full suite: 2047 passed, 0 failed, 377 skipped (CPU, commit 504ad50). Later commits ran scoped tests only.
@@ -74,10 +74,9 @@ Last full suite: 2047 passed, 0 failed, 377 skipped (CPU, commit 504ad50). Later
 
 ### Possible on the Windows machine (ordered by the compute it needs; least first)
 **No compute (reading, design, docs, TypeScript):**
-1. **Phase B, OTF realism: design** (the owner's main goal: real-world photographs). It does not depend on the
-   discriminator, only on the owner's ordering "after R3GAN". Write the design first: antialiased/lanczos resize
-   modes, independent noise/JPEG/blur/clean probabilities with defaults that reproduce today's draws, the offline
-   `degrade.py` reusing `Degrader`, the A/B plan for the Linux machine.
+1. **Phase B, OTF realism: design** (the owner's main goal: real-world photographs): **done as draft 2**,
+   `stage3/otf/DESIGN.md`. Open: the owner's answers Q1-Q4 (above all 50+ real LQ samples for the holdout set R
+   and the residual analysis O4b).
 2. **Closure matrix of the stage-2 audit**: 167 findings, `stage2/PLAN.md` assigns ~96 ids to lanes; the disposition
    of the rest (done / opt-in / rejected / open) is not recorded.
 3. **Penalty-pass cost note** before the profiling session: read `r3gan_arch.py` and the `gan_loss` penalty path,
@@ -99,7 +98,9 @@ Last full suite: 2047 passed, 0 failed, 377 skipped (CPU, commit 504ad50). Later
    readme should say DDP is Linux-only if that holds); text reads without an encoding break on a non-UTF-8 locale
    (fixed in `test_s3_hygiene.py`; `test_entry.py:171,191`, `test_s3_exports.py:154`, `test_s3_bench.py:69` read
    run-generated files the same way and were not run here).
-8. **Phase B, OTF realism: code** after the design: opt-in, default-preserving, unit-tested on tiny tensors.
+8. **Phase B, OTF realism: code** steps O1-O5 of the design (resampler, probabilities and clean path, sharpening,
+   `degrade.py`, schema/readme/Studio): opt-in, default-preserving, unit-tested on tiny tensors. Needs the owner's
+   go-ahead (Q3: before or after the R3GAN A/B).
 9. **Small core items**: hma `check_image_size` picks reflect/replicate at trace time (dynamic ONNX pads wrong
    for inputs under 8/16 px; `neosr/archs/hma_arch.py:1375`); the dead `rep_rt4ksr` block in `convert.py:32`;
    one defaults table for `total_iter = 1000000` (6 call sites; S.5); per-arch capability metadata (S.11).
