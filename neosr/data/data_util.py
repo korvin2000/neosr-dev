@@ -25,6 +25,28 @@ def image_paths(folder: str, *, recursive: bool = False) -> list[str]:
     return sorted(scandir(folder, suffix=IMG_EXTENSIONS, recursive=recursive, full_path=True))
 
 
+def image_id(path: str, root: str | None) -> Path:
+    """The path of an image below its dataroot without suffix; the stem for LMDB keys or outside it.
+    Validation and test outputs (files, TensorBoard tags) are named by it."""
+    p = Path(path)
+    try:
+        return p.relative_to(root).with_suffix("") if root else Path(p.stem)
+    except ValueError:
+        return Path(p.stem)
+
+
+def reject_shared_ids(paths: Iterable[str], root: str) -> None:
+    """MT-15: two val/test images whose paths differ only in suffix (a.png, a.jpg) share an image_id,
+    so their outputs would overwrite each other; refused when the dataset is built."""
+    seen: dict[Path, str] = {}
+    for p in paths:
+        first = seen.setdefault(image_id(p, root), p)
+        # one file named twice (a.png, A.png on Windows) writes one output: no clash
+        if Path(first) != Path(p):
+            msg = f"{first} and {p} would write the same validation outputs: rename one"
+            raise ValueError(msg)
+
+
 def meta_info_names(meta_info: str) -> list[str]:
     """File names listed in a meta_info file, one per line; names may contain spaces."""
     with Path(meta_info).open(encoding="utf-8") as fin:

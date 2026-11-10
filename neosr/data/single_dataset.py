@@ -10,6 +10,7 @@ from neosr.data.data_util import (
     paths_from_lmdb,
     read_img,
     reject_normalization,
+    reject_shared_ids,
 )
 from neosr.data.file_client import FileClient
 from neosr.utils import img2tensor
@@ -61,6 +62,8 @@ class single(data.Dataset):
             paths = [str(Path(self.lq_folder) / n) for n in meta_info_names(meta_info)]
         else:
             paths = image_paths(self.lq_folder)
+        if not lmdb and opt.get("phase") in {"val", "test"}:
+            reject_shared_ids(paths, self.lq_folder)
         self.paths = PathList(paths)
 
     def __getitem__(self, index):

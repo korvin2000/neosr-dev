@@ -18,6 +18,7 @@ from tqdm import tqdm
 from neosr.archs import build_network
 from neosr.config import ConfigError, qat_schedule, total_iter
 from neosr.data.augmentations import apply_augment
+from neosr.data.data_util import image_id
 from neosr.losses import build_losses
 from neosr.losses.base import Context, restoring_clamp
 from neosr.models.base import base, build_optimizer, build_schedulers
@@ -97,15 +98,6 @@ def no_cudnn_autotune() -> Generator[None]:
         yield
     finally:
         torch.backends.cudnn.benchmark = was
-
-
-def image_id(lq_path: str, root: str | None) -> Path:
-    """The path of an image below its dataroot without suffix; the stem for LMDB keys or outside it."""
-    p = Path(lq_path)
-    try:
-        return p.relative_to(root).with_suffix("") if root else Path(p.stem)
-    except ValueError:
-        return Path(p.stem)
 
 
 @MODEL_REGISTRY.register()

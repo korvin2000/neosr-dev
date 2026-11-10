@@ -206,6 +206,31 @@ def test_scandir_skips_hidden_and_non_images(tmp_path):
     assert [Path(p).name for p in otf.paths] == ["a.PNG", "b.png"]
 
 
+@pytest.mark.parametrize("phase", ["train", "val", "test"])
+def test_val_images_that_differ_only_in_suffix_are_refused(pairs, phase):
+    """MT-15: p0.png and p0.jpg share the image_id that names validation outputs; training keeps both."""
+    for sub, img in (("GT", _img(200, 296, 0)), ("LQ", _img(50, 74, 0))):
+        cv2.imwrite(str(pairs / sub / "p0.jpg"), img)
+    single = {"type": "single", "phase": phase, "dataroot_lq": str(pairs / "LQ"), "scale": 4}
+    for opt in (_paired_opt(pairs, phase), single):
+        if phase == "train":
+            assert len(build_dataset(opt)) == 4
+        else:
+            with pytest.raises(ValueError, match=r"p0\.jpg and .*p0\.png would write the same"):
+                build_dataset(opt)
+
+
+def test_one_file_named_twice_is_no_shared_id():
+    du.reject_shared_ids(["d/a.png", "d/a.png"], "d")  # the same file twice writes the same output
+    with pytest.raises(ValueError, match="would write the same"):
+        du.reject_shared_ids(["d/a.png", "d/a.jpg"], "d")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="case-insensitive paths")
+def test_case_aliases_of_one_file_are_no_shared_id():
+    du.reject_shared_ids(["C:/d/a.png", "C:/d/A.png"], "C:/d")
+
+
 def test_folder_pairing_sorted(tmp_path, monkeypatch):
     _tree(tmp_path)
     folders, keys = [str(tmp_path / "LQ"), str(tmp_path / "GT")], ["lq", "gt"]

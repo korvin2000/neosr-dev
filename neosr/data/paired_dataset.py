@@ -10,6 +10,7 @@ from neosr.data.data_util import (
     paired_paths_from_meta_info_file,
     read_img,
     reject_normalization,
+    reject_shared_ids,
     to_float32,
     train_retry,
 )
@@ -83,6 +84,8 @@ class paired(data.Dataset):
             paths = paired_paths_from_folder(
                 [self.lq_folder, self.gt_folder], ["lq", "gt"]
             )
+        if not lmdb and opt.get("phase") in {"val", "test"}:
+            reject_shared_ids((p["lq_path"] for p in paths), self.lq_folder)  # type: ignore[index]
         self.gt_paths = PathList(p["gt_path"] for p in paths)  # type: ignore[index]
         self.lq_paths = PathList(p["lq_path"] for p in paths)  # type: ignore[index]
 
