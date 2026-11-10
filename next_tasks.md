@@ -17,9 +17,13 @@ Parked by the owner: OTF realism (steps O4, O5, the A/B), `docs/refactor/stage3/
   is not named here, ask. (`AGENTS.md`, `docs/refactor/STATUS.md` "Owner priorities".)
 - **Goal of the current phase:** a core that "works like a Swiss watch": stable, reliable, fast, good quality. New
   features wait.
-- **Reuse before writing:** check what upstream traiNNer-redux (the-database,
-  https://github.com/the-database/traiNNer-redux) and the owner's fork already have; adapt, never copy as is
-  (`docs/refactor/DECISIONS.md`, competitor policy).
+- **What this project is:** a reworked, optimised trainer of its own. The measure of every change is clean,
+  well-thought-out code, speed, a small footprint, good structure and compactness.
+- **traiNNer-redux (https://github.com/the-database/traiNNer-redux) is a competitor**, often with bloated code
+  and god classes. It may be read for ideas and examples; nothing is imitated or copied, and "it has this" is
+  no argument (`docs/refactor/DECISIONS.md`, owner clarification of 2026-11-10).
+- **No hasty decisions.** Where this file says "preliminary", "candidate" or "question", that is exactly what it
+  is: ask the owner on anything disputed or open instead of settling it; say what is verified and what is assumed.
 - **This machine (Windows, Ryzen 5 5500U, no GPU):** analysis, docs, small core changes, Studio. Run single test
   files only; never the full suite, per-arch sweeps, ONNX sweeps, benchmarks or training. Everything GPU-bound and
   the full suite belong to the Linux 4090 machine; list such leftovers in `STATUS.md` ("Waiting for the Linux
@@ -123,7 +127,7 @@ name)`). Factories (`def hat_s(**kwargs)`) are rows too.
 | C | **Decorator as declaration, table kept.** The decorator only marks and validates; the table stays the lookup | two places, as today | none | does not solve the request |
 | D | **Entry points / plugin folders** for third-party modules | n/a for in-tree | n/a | scope creep; mention as a later extension of A (a user folder added to the scan) |
 
-Preliminary recommendation of session 6 (not reviewed): **A**, with the scan result cached in memory per process, the
+Preliminary opinion of session 6 (not reviewed, **not a decision**: the owner chooses after the design note): **A**, with the scan result cached in memory per process, the
 decorator carrying what the table's second column carries today, and `scripts/studio_surface.py` reusing the same
 scan function so the Studio contract keeps working without importing torch.
 
@@ -160,9 +164,9 @@ neosr-surface.json` (must come out **identical** after the migration: that is th
 ### 2.8 Steps
 1. Read `T3.md` (sections 0, 1 D3, 3.1-3.3, 4 R1/R4, 7), `neosr/utils/factory.py`, the four `__init__.py` tables,
    `tests/test_registry.py`, `tests/test_imports.py`, `tests/test_hygiene.py`, `scripts/studio_surface.py`.
-2. Look at how upstream does it today (traiNNer-redux keeps the BasicSR registry: look for `utils/registry.py` and
-   `archs/__init__.py` under `traiNNer/`; paths not verified from this machine; spandrel's arch registry is a
-   second reference) for ideas only.
+2. Optional, for ideas only: how other projects register modules (spandrel's arch registry; the BasicSR-style
+   registry that the competitor traiNNer-redux still uses is the mechanism this project removed, so it shows
+   what to avoid rather than what to build). The design is judged by this project's own goals (2.4, 2.6).
 3. Write `docs/refactor/design/T7_registration.md`: the comparison of 2.5 with numbers, answers to 2.6, the
    migration plan, the tests. Keep it short (2-3 pages).
 4. Codex consult on the draft (this is an architecture decision: effort `xhigh`), apply what holds.
@@ -240,7 +244,7 @@ Anything that changes training dynamics or an objective is opt-in until an A/B (
 | dead code in `convert.py` | `convert.py:32-83` | a module-level string literal holding an old `rep_rt4ksr` under "TODO" | delete; no behaviour change |
 | one defaults table (follow-up S.5) | `total_iter` default `1000000` at `neosr/config.py:541,595`, `neosr/models/image.py:227`, `neosr/utils/logger.py:104`, `train.py:141,185`; also `max_skip_streak`, `keep_states` | one constant or table instead of repeated literals | T3 rule: `load_config` fills no defaults (readers keep their `.get`), so the design choice is "a constants module the readers import", not "fill the config" |
 | per-arch capability metadata (follow-up S.11) | today in three places: `convert.py:321-341` (`NO_ONNX`, `STATIC_ONLY`), `studio/shared/catalog/archs.ts` (window sizes, scales), scattered constructor checks | one source per arch | **decide inside Task 1** (decorator arguments), do not build it twice |
-| open TODO | `neosr/data/otf_dataset.py:168` | kernel size range 7..21 is hard-coded | upstream makes it configurable (lane item C10); low priority |
+| open TODO | `neosr/data/otf_dataset.py:168` | kernel size range 7..21 is hard-coded | low priority; belongs to the parked OTF track, ask the owner before touching it |
 
 Line numbers move; `grep -n` the quoted text.
 

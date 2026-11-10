@@ -9,6 +9,9 @@
 
 ## Project facts (read before working)
 
+- **What this project is:** neosr-dev is a reworked, optimised SISR trainer of its own. Its goals are clean and well-thought-out code, speed, a small footprint, good structure and compactness, and a core that is stable and reliable.
+- **traiNNer-redux is a competitor, not an upstream.** It is an alternative project whose code is often bloated (god classes, duplicated and dead paths). Use it only as a source of ideas and examples: take an idea when it is good, re-think and rewrite it to this project's standard, and never imitate its structure or copy its code. "traiNNer-redux has it" is not a reason to add something here.
+- **No hasty decisions or conclusions.** On a disputed or open question (priorities, architecture, a default, how to read an ambiguous note in the docs) ask the owner instead of deciding; state what is verified and what is an assumption.
 - **Status and open work:** `docs/refactor/STATUS.md` is the single status page; start there, then the stage log it points to. Update it when a track changes state. **What to do next, with everything needed to do it: `next_tasks.md`** (repository root); keep it current or delete what is done.
 - **The owner sets the priorities** (`STATUS.md`, "Owner priorities"): a stable, reliable core first, then Studio, then new features. Do not start or promote a track because a document calls it a goal; when the next task is not named there, ask the owner which one before starting. Before writing something from scratch, check what upstream projects (traiNNer-redux by the-database) already have that can be adapted.
 - **Two machines, two roles:**

@@ -96,5 +96,16 @@ order already is not on several).
 - Registration usability: the lazy tables in `__init__.py` (stage 1, T3) were right for start-up cost but lost
   the convenience of `@ARCH_REGISTRY.register()` / `@LOSS_REGISTRY.register()` for the person adding a module.
   Bring the decorator style back in a form that keeps the lazy import; design first.
-- Agents ask before opening a track; reuse upstream work (traiNNer-redux by the-database) where it can be adapted
-  instead of writing from scratch.
+- Agents ask before opening a track.
+
+## Owner clarification, 2026-11-10 (what the project is; the competitor)
+- neosr-dev is a new, reworked and optimised project of its own: clean and well-thought-out code, speed, a small
+  footprint, good structure, compactness.
+- traiNNer-redux (the-database; the local fork `traiNNer-redux-dev`) is a **competitor / alternative project**,
+  often with badly written, bloated code and god classes. It is a source of ideas and examples only: an idea is
+  taken when it is good and is then re-thought and rewritten here; its structure is not imitated and its code is
+  not copied. This narrows the competitor policy above ("newer sibling project"): checking it is optional
+  research, never a requirement, and its having a feature is no argument for adding it here.
+- An earlier note of the same day called it "upstream" and told agents to reuse its work before writing their own:
+  that was an agent's misreading of the owner and is withdrawn.
+- Agents make no hasty decisions or conclusions: disputed or open questions go to the owner.

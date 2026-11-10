@@ -35,6 +35,12 @@ Versions follow `uv.lock` except the CPU builds of torch/torchvision and `onnxru
 The `origin` URL in `.git/config` embeds a GitHub token. The owner keeps it deliberately (private single-user
 machines; `DECISIONS.md`, 2026-11-10). Do not report it again and do not print the URL in logs or docs.
 
+## What the project is (owner, 2026-11-10)
+neosr-dev is a reworked, optimised trainer of its own: clean and well-thought-out code, speed, a small footprint,
+good structure, compactness, and a stable, reliable core. traiNNer-redux is not its upstream but a competitor with
+often bloated code: a source of ideas and examples at most, never something to imitate (`DECISIONS.md`).
+Disputed or open questions go to the owner; agents do not settle them alone.
+
 ## Owner priorities (2026-11-10): read before picking work
 **The next session starts from `next_tasks.md` in the repository root**: the tasks below in the order the
 owner fixed (registration design first, then the audit closure matrix), with the files, invariants, tests
@@ -54,8 +60,9 @@ The owner sets the order; an agent does not promote a track on its own reading o
 **Parked: OTF realism (Phase B).** Steps O1-O3 are merged, opt-in and change no default; O4 (`degrade.py`), O5
 (readme, templates, Studio fields) and the A/B wait until the owner reopens the track. It was started on an
 agent's recommendation ahead of the owner's priorities; the recorded order was "Phase B after R3GAN". If it is
-reopened: check first what the upstream traiNNer-redux (the-database) already has that can be adapted instead of
-written from scratch (`stage3/competitor/data_degradation.md` compares the classic upstream chain, "CU").
+reopened, the owner decides its scope first. The competitor traiNNer-redux has comparable degradation options;
+they may serve as ideas (`stage3/competitor/data_degradation.md` reviews them, defects included), not as a
+model to follow.
 
 ## Tracks
 | track | state | evidence / where to resume |
