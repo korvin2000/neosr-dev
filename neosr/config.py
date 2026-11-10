@@ -462,6 +462,15 @@ def validate_train(cfg: dict[str, Any]) -> None:
         if metric.get("better", "higher") not in {"higher", "lower"}:
             msg = f"val.metrics.{name}.better must be 'higher' or 'lower', got {metric['better']!r}"
             raise ConfigError(msg)
+        known = "lower" if metric.get("type") in METRIC_LOWER else "higher"
+        # MT-14: an explicit direction against the type's makes save_best keep the worst
+        if metric.get("better", known) != known:
+            warnings.warn(
+                f"val.metrics.{name}.better = {metric['better']!r}, but {metric.get('type')} is "
+                f"{known}-is-better: the best record and save_best follow {metric['better']!r}",
+                ConfigWarning,
+                stacklevel=2,
+            )
     _validate_scheduler(cfg, train)
     if (best := val.get("save_best")) is not None and best not in (
         metrics := val.get("metrics") or {}

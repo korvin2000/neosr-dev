@@ -708,6 +708,32 @@ def test_val_dataset_name_defaults_to_its_phase(tmp_path):
 
 
 @pytest.mark.parametrize(
+    ("kind", "better", "warns"),
+    [
+        ("calculate_dists", "higher", True),
+        ("calculate_psnr", "lower", True),
+        ("calculate_lpips", "lower", False),
+        ("calculate_ssim", "higher", False),
+    ],
+)
+def test_validate_train_warns_on_a_contradicting_better(tmp_path, kind, better, warns):
+    """MT-14: an explicit `better` against the type's known direction makes save_best keep the worst."""
+    metric = f"[val.metrics.m]\ntype = '{kind}'\nbetter = '{better}'\n[logger]"
+    cfg = _cfg(tmp_path, BASE.replace("[logger]", metric, 1))
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        validate_train(cfg)
+    known = "lower" if better == "higher" else "higher"
+    msg = (
+        f"val.metrics.m.better = '{better}', but {kind} is {known}-is-better: "
+        f"the best record and save_best follow '{better}'"
+    )
+    assert [str(w.message) for w in seen if "is-better" in str(w.message)] == (
+        [msg] if warns else []
+    )
+
+
+@pytest.mark.parametrize(
     ("kind", "better"), [("calculate_dists", "lower"), ("calculate_psnr", "higher")]
 )
 def test_metric_direction_default(tmp_path, kind, better):
