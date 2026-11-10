@@ -73,4 +73,4 @@ StableAdamW, KneeLR/restart, beaten archs, iLN/MetaGAN3/HyFreqMoE as written, re
 
 ## Side finding
 Both `neosr-dev` and `traiNNer-redux-dev` have a GitHub token in the remote URL (`git remote -v`). Revoke it and use a
-credential helper.
+credential helper. (Owner decision 2026-11-10: the token stays, see `DECISIONS.md`; not an open point.)

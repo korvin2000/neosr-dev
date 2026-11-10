@@ -1,14 +1,21 @@
 # neosr refactor: index and resume protocol
 
 Goal: bring neosr-dev to a stable, fast, compact, reference-quality state (see `PLAN.md`).
-Started 2026-10-20. Branch `refactor/stabilize`, checked out as the worktree `.worktrees/refactor`
-(the main checkout stays on `master` and holds the owner's uncommitted files; `.worktrees/` is excluded locally via `.git/info/exclude`).
+Started 2026-10-20. Everything up to stage 3 Phase A and the R3GAN code is merged into `master` (05954e0, together
+with the NeoSR Studio prototype); `refactor/stabilize` is the working branch of the Linux machine.
+
+**Current state, open work and what runs on which machine: `STATUS.md`. Read it first.**
 
 ## Resume in a fresh session
-1. `cd /home/korvin/apps/neosr-dev/.worktrees/refactor` (create it if missing: `git worktree add .worktrees/refactor refactor/stabilize`).
-2. Read, in this order: `PROGRESS.md` (last state + next step), `PLAN.md` (step table with status), `DECISIONS.md`.
-3. `git log --oneline master..refactor/stabilize` and `git status` show what landed and what is uncommitted.
-4. Continue the first step in `PLAN.md` whose status is not `done`; log the outcome in `PROGRESS.md` and commit per step.
+1. Read `STATUS.md` (tracks, open work, machines), then the log of the track you continue: `stage3/PROGRESS.md`
+   (newest: the R3GAN pause and its resume commands), `stage2/PROGRESS.md`, `PROGRESS.md` (stage 1); `DECISIONS.md`.
+2. On the Linux machine (tests, GPU): `cd /home/korvin/apps/neosr-dev/.worktrees/refactor` (create it if missing:
+   `git worktree add .worktrees/refactor refactor/stabilize`), `git pull` and merge `master` first: the Windows
+   machine commits docs, Studio and small changes there.
+3. On the Windows machine (`C:\work2000\neosr-dev`, `master`): no torch; analysis, docs, Studio, small core changes
+   only (`STATUS.md`, "Machines").
+4. `git log --oneline` and `git status` show what landed; log the outcome in the track's `PROGRESS.md`, update
+   `STATUS.md` when a track changes state, commit per step.
 
 ## Stage 2 (2026-10-27/28)
 Speed / reliability / memory / training-efficiency pass: `stage2/PLAN.md` (lanes, interfaces), `stage2/PROGRESS.md`
@@ -18,10 +25,19 @@ Speed / reliability / memory / training-efficiency pass: `stage2/PLAN.md` (lanes
 What to take from traiNNer-redux: `stage3/CONSENSUS.md` (3-model verdict), `stage3/REVIEW.md` (Fable re-check, final
 phased list), `stage3/TASK_OPUS.md` (Phase A implementation brief), `stage3/PROGRESS.md`, `stage3/competitor/` (lane reports).
 Phase A (A1-A9) is done (commits and follow-ups at the end of `stage3/PROGRESS.md`); user docs: `docs/training_guide.md`.
+R3GAN track (`stage3/r3gan/`: `DESIGN.md`, `TASK_R3GAN.md`, `RESULTS.md`): discriminator, loss path and template are
+in; the GPU qualification failed the cost gate and the A/B is paused (`STATUS.md`). Phase 0 (A/Bs) and Phase B are
+not started.
+
+## NeoSR Studio (2026-10-28, synced 2026-11-10)
+`studio/` is a web UI prototype (Angular + Node) that edits a recipe and compiles it to a NeoSR TOML; training is
+simulated. Concept: `design/NeoSR_Studio_UI_Concept_v2.md`. Its catalog is tested against the trainer's tables
+through `scripts/studio_surface.py` (`STATUS.md`, "Studio contract").
 
 ## Files
 | file | content |
 |---|---|
+| `STATUS.md` | the single status page: machines, tracks, open work by priority, closed follow-ups |
 | `PLAN.md` | ordered implementation steps, file ownership, acceptance checks, status |
 | `PROGRESS.md` | chronological log: done, verified, dead ends (and why), next |
 | `DECISIONS.md` | owner decisions + consensus decisions (Opus/Fable/Codex) with rationale |

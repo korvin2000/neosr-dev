@@ -76,7 +76,7 @@
   on a calculate_topiq line that the branch rewrote -> keep the branch version) into refactor/stabilize, fast-forward master to it in the
   main checkout (owner's uncommitted files there are not touched by the branch), push master + refactor/stabilize. Later phases
   (C5 aether/QAT, C6 perf, C7 stability acceptance, C8 docs/cleanup) merge into master again after each is verified.
-  `git push` was blocked by the session's permission classifier (needs the owner's permission); remote URL embeds a token (rotate it).
+  `git push` was blocked by the session's permission classifier (needs the owner's permission); remote URL embeds a token (rotate it). (Owner decision 2026-11-10: the token stays, see `DECISIONS.md`; not an open point.)
 - W3+W4 committed: trainer rewrite 4d55315, entry points 0ab383b. Chain: C1 (t4) -> D1 (t3) -> Codex (6 findings, all fixed:
   SN buffer sync under DDP broadcast_buffers=False, collective check_finite, resume into missing folder, PlainUSR convert,
   grad_norm on skipped updates, QAT stub raises) -> 8 GPU smoke runs all green (esrgan+metagan bf16: D logits ~0, GAN grad reaches

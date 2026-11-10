@@ -76,6 +76,11 @@ Each lane: Opus implements -> Codex gpt-6-astra reviews -> Opus fix pass -> main
 | W7 | final whole-branch review (5 Codex areas + Fable strategic audit) -> Opus triage -> fix lanes -> Codex recheck; final merge | done (b1a5065, 1193e07, 69bfa8f, 136fe67); merged to master |
 
 ## Follow-ups (deferred by the W7 triage; not required for the refactor goals)
+Status as of 2026-11-10 (the live list is `STATUS.md`): **closed** R4.1 (stage 2: sound SF-Adan), R1.4 (stage 3
+A1: re-save after the final validation), S.2 (stage 2 ST-10: `warmup_steps` for every optimizer), S.13
+(`runtime.py` refuses `use_amp` without CUDA in training); **partly closed** S.1 (start/ramp and R1/R2 exist; the
+long acceptance run is open), S.12 (D compiles; frozen loss backbones do not); **open** S.4, S.5, S.11, R1.1.
+The original entries follow unchanged.
 - R4.1 adan_sf G4.M2 recurrence: verified (SF branch multiplies by bc1 and updates z with the raw grad), but consensus marked it 'redesign': gate it behind an SR-metric A/B and keep a legacy mode for existing checkpoints. It changes the dynamics of the default optimizer of ~168 sections, so it needs its own step with the A/B, not a fix lane.
 - R1.4 final save before final validation: the order follows consensus T2 D20 ('at the end: check_finite -> save(final) -> validate'). Only the best-dict of a run later extended past total_iter is stale. Changing the order, or re-saving the best after the final validation, needs owner sign-off.
 - S.1 gan_opt.start_iter, an R1/R2 D regulariser and a >=20k-update acceptance run before changing template GAN/D defaults: this is feature plus long experiment work, and the T6 note was never written. Plan it as the next stability phase.

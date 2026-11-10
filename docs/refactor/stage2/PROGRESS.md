@@ -93,3 +93,4 @@
   @2000: 25.32/0.516/0.2415); compact_otf 600 updates; dat with compile=true 400 updates; test.py (bf16 autocast,
   paired val67) PSNR 29.03, 67 outputs + LQ copies; convert.py fp32 + fp16 ONNX verified at 3 shapes each.
 - STAGE 2 DONE on refactor/stabilize (not merged into master, not pushed: awaiting the owner).
+- Later the same day: merged into `master` with stage 3 and the Studio prototype (05954e0) and pushed.

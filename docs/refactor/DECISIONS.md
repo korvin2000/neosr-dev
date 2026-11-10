@@ -71,3 +71,18 @@ effective `gamma_r1`/`gamma_r2` logs, `(B,)` outputs accepted, a batch-statistic
 the first D call, `validate_train` refuses dunet with a gamma (grid_sample has no double backward). Multi-rank runs draw
 rank-specific signs from each rank's RNG, but only rank 0's RNG is saved: resume is bitwise on one GPU only (as the data
 order already is not on several).
+
+## Owner decisions, 2026-11-10 (working setup)
+- **The GitHub token in the `origin` remote URL stays.** Both machines are private and single-user; this is a
+  deliberate choice, not an oversight. Agents do not report it as a finding again and never print the remote URL
+  (mask it in command output).
+- **Two machines, two roles.** The Linux workstation with the RTX 4090 (`/home/korvin/apps/neosr-dev`) runs every
+  real test, training run, A/B, benchmark and profile. The Windows workstation (`C:\work2000\neosr-dev`, no torch)
+  is for code analysis, documentation, small core changes that need no GPU run, and the Studio prototype. A core
+  change made on Windows is unverified until the suite runs on Linux and is listed in `STATUS.md`.
+- **Owner decision 3 of 2026-10-20 is narrowed:** the owner's local files (`.codex/*`, `AGENTS.md`, `CLAUDE.md`) are
+  committed when the owner asks for it (done on 2026-11-10); otherwise they are still left alone.
+- **`STATUS.md` is the single status page**; the per-stage `PROGRESS.md` files stay chronological logs.
+- **Studio follows the trainer through a generated contract** (`scripts/studio_surface.py` ->
+  `studio/shared/catalog/neosr-surface.json`, tested on both sides) instead of a hand-maintained snapshot.
+

@@ -197,7 +197,8 @@ worktree `.venv` has no torch), each file in its own capped scope (`systemd-run 
   fixtures).
 - Commits: A1 9cfc1da (+ fixup 3751cc0), A2 024ddff, A3 7b56f89, A4 24d07a8, A5 44dfb8a, A6 e747bed, A7 94230b9,
   A8 0eb402c, A9 527d16f. Nothing skipped.
-- Follow-ups (pre-existing, proposed as separate sessions): PLKConv2d eval-mode in-place write breaks backward with
+- Follow-ups (pre-existing, proposed as separate sessions; **both fixed later**: PLK in bbd935c, hma in f0738ee):
+  PLKConv2d eval-mode in-place write breaks backward with
   grad enabled; hma/hma_medium dynamic ONNX export wrong at batch 2. Formatting-only noise committed with A1-A3:
   `ruff format` also reformatted 4 lines of topiq.py, 36 of test_s2_trainer.py, 6 of test_qat.py (not ruff-clean
   before stage 3).
@@ -317,7 +318,22 @@ deviation from the paper); (c) shorter A/B budgets. The design's +30 % cost gate
 - seed 2: `/home/korvin/apps/neosr-dev/.venv/bin/python mkcfg.py seed2 A0_template A1_nogan <top1> <top2>` then
   `./launch.sh A0_template_s2 A1_nogan_s2 <top1>_s2 <top2>_s2`; final check once on the confirmation set (add a
   `conf` val dataset to those configs or evaluate the 20k exports) and fill RESULTS with the gate and the recommendation.
-**Open points:** the `origin` remote URL in `.git/config` embeds a GitHub token in plain text (rotate it, use a
-credential helper); the owner's visual sign-off (visual set under `runs/<arm>/experiments/<arm>/visual/`) and the 80k+
+**Open points:** (the token in the `origin` remote URL was listed here; owner decision 2026-11-10: it stays, see
+`DECISIONS.md`); the owner's visual sign-off (visual set under `runs/<arm>/experiments/<arm>/visual/`) and the 80k+
 long run are the owner's; the penalty-pass speed (above); source independence of the split is only overlap-verified
 (RESULTS section 0); `harness/` is outside git (copy it into the repo as `scripts/ab.py` only if the owner wants it kept).
+
+## 2026-11-10 session 6 (Windows machine, Fable 5.2: no torch, no GPU; analysis, docs, Studio)
+- State audit of the whole project -> `../STATUS.md` (single status page: machines, tracks, open work by priority,
+  closed follow-ups); `../README.md`, `../PLAN.md` follow-ups and `../DECISIONS.md` brought up to date.
+- Owner decisions recorded: the token in the remote URL stays; the Linux 4090 machine runs every real test and
+  measurement, the Windows machine is for analysis, docs, small core changes and Studio.
+- Studio contract: `scripts/studio_surface.py` (static, torch-free read of the trainer's tables ->
+  `studio/shared/catalog/neosr-surface.json`; `--check`, `--validate <toml>`), `tests/test_studio_surface.py`;
+  the Studio catalog, templates, validator and importer synced to stages 2-3 (nafnet, r3gan Ds, psnr_loss, LPIPS,
+  TOPIQ-PIPAL, gan types and R1/R2 keys, loss schedules, clamp/grad_clip modes, save_best, scheduler nets, the
+  AdamW template recipe) and guarded by `studio/src/app/core/catalog-contract.spec.ts` + `npm run contract`.
+- Not run here (no torch): pytest. First step of the next Linux session: `git pull`, merge `master` into
+  `refactor/stabilize`, full suite (see `../STATUS.md`, "Waiting for the Linux machine").
+- The R3GAN track is still paused at the point described above; nothing in it changed.
+

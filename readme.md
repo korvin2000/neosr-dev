@@ -9,7 +9,7 @@ Join our <a href="https://discord.gg/NN2HGtJ3d6">Discord</a>
 super-resolution (SISR) models. It aims at realistic restoration of photos, anime/cartoons and illustrations, and at
 reproducible research.
 
-- **Broad**: 45 generator families, 6 discriminators, 15 losses, schedule-free optimizers, on-the-fly
+- **Broad**: 46 generator families, 9 discriminator types, 16 losses, schedule-free optimizers, on-the-fly
   (Real-ESRGAN) degradations and batch augmentations, all selected from a TOML file.
 - **Stable**: correct adversarial training, exact gradient accumulation, AMP (fp16/bf16) with non-finite update
   skipping, EMA, and atomic, self-contained checkpoints.
@@ -498,6 +498,15 @@ Ultra light).
   hinge GAN, `psnr_loss`, LPIPS and TOPIQ-PIPAL, `nafnet`, realplksr `layer_norm`/`icnr`; ONNX exports fold
   constants and `-optimize` is BASIC; `fast_matmul` sets "high"; `scripts/bench.py`;
   [docs/training_guide.md](docs/training_guide.md).
+- **R3GAN (stage 3, experimental)**: the `r3gan` discriminators, `gan_type = "rpgan"` and per-position R1/R2
+  (`r1_gamma`/`r2_gamma`) with the opt-in template `options/train_realplksr_r3gan.toml`. The code is tested; the
+  quality A/B has not run and a regularised update currently costs about 7x a template update
+  (`docs/refactor/stage3/r3gan/RESULTS.md`), so no default uses it.
+- **NeoSR Studio (prototype)**: [`studio/`](studio/README.md) is a web UI that edits a recipe and compiles it to a
+  config for this trainer; it simulates training and does not launch `train.py` yet. Its catalog is generated-and-
+  tested against the code (`python scripts/studio_surface.py`, also `--validate <toml>` to check a training config
+  without torch).
+- **Project status**: [docs/refactor/STATUS.md](docs/refactor/STATUS.md).
 - **Configuration**: unknown keys warn instead of being silently ignored, removed keys are errors, and
   `match_lq_colors` became the per-loss `target = "lq"`.
 - **`blur_kernel_size`, `blur_kernel_size2`** (OTF) were removed: they were never read. Kernel sizes are sampled
