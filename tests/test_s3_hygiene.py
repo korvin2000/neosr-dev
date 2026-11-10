@@ -97,14 +97,14 @@ def test_detect_anomaly_is_an_opt_in_debug_key(caplog):
 
 
 def test_pytorch_optimizer_is_no_dependency():
-    deps = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"][
+    deps = tomllib.loads((ROOT / "pyproject.toml").read_text("utf-8"))["project"][
         "dependencies"
     ]
     assert not [d for d in deps if d.startswith("pytorch-optimizer")]
-    assert "pytorch-optimizer" not in (ROOT / "uv.lock").read_text()
+    assert "pytorch-optimizer" not in (ROOT / "uv.lock").read_text("utf-8")
     sources = [
         *ROOT.glob("neosr/**/*.py"),
         *ROOT.glob("*.py"),
         *ROOT.glob("scripts/*.py"),
     ]
-    assert not [p for p in sources if "pytorch_optimizer" in p.read_text()]
+    assert not [p for p in sources if "pytorch_optimizer" in p.read_text("utf-8")]

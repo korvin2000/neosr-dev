@@ -85,4 +85,6 @@ order already is not on several).
 - **`STATUS.md` is the single status page**; the per-stage `PROGRESS.md` files stay chronological logs.
 - **Studio follows the trainer through a generated contract** (`scripts/studio_surface.py` ->
   `studio/shared/catalog/neosr-surface.json`, tested on both sides) instead of a hand-maintained snapshot.
-
+- **Windows machine, addendum (same day):** it has a weak CPU as well as no GPU. A CPU-only venv exists for targeted
+  tests, but work there is prioritised by compute: no-compute tasks first, then tasks one test file can check; no
+  suite runs, sweeps or training (`STATUS.md`, "Machines").

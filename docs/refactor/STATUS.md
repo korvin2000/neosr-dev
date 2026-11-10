@@ -7,15 +7,29 @@ Updated 2026-11-10. Read this first; the per-stage logs (`PROGRESS.md`, `stage2/
 | machine | checkout | role |
 |---|---|---|
 | Linux workstation, RTX 4090 | `/home/korvin/apps/neosr-dev` (+ worktree `.worktrees/refactor`), venv with torch | **every real test and measurement**: the pytest suite (CPU and CUDA), training runs, A/Bs, profiling, benchmarks, ONNX verification. The A/B harness, the pretrain and the data live here only (`experiments/`, gitignored) |
-| Windows workstation | `C:\work2000\neosr-dev`, no torch, no project venv | code analysis and review, documentation, small core changes that need no GPU run, NeoSR Studio (the UI prototype) |
+| Windows workstation (Ryzen 5 5500U, 6 cores, 31 GB RAM, no GPU) | `C:\work2000\neosr-dev`, CPU-only `.venv` (torch 2.9.1+cpu) since 2026-11-10 | code analysis and review, documentation, small core changes checked by **targeted** CPU tests, NeoSR Studio (the UI prototype). Slow CPU: no suite runs, no sweeps, no training |
 
 Consequences:
-- A session on the Windows machine cannot run pytest or the trainer. It can run `python scripts/studio_surface.py`
-  (`--check`, `--validate <toml>`; torch-free) and everything under `studio/` (`npm run typecheck`, `ng test`,
-  `npm run contract`, `ng build`).
-- A core change made on the Windows machine is **unverified until the suite runs on the Linux machine**: list it
-  under "Waiting for the Linux machine" below, and keep such changes small.
+- On the Windows machine prefer work that needs no compute at all; run single test files or `-k` selections only
+  (measured: 360 config/registry/import tests take 2 min, one `import neosr.*` subprocess ~10 s). Never start the
+  full suite, the per-arch sweeps (`test_archs*`, the `test_s2_*` arch files, `test_losses_pipeline`), ONNX export
+  sweeps or a training run there.
+- A core change made on the Windows machine counts as **verified only for the tests named next to it**; list it
+  under "Waiting for the Linux machine" below until the full suite ran there, and keep such changes small.
+- Torch-free checks: `python scripts/studio_surface.py` (`--check`, `--validate <toml>`) and everything under
+  `studio/` (`npm run typecheck`, `npx ng test --watch=false`, `npm run contract`, `ng build`).
 - Paths like `/home/korvin/...` in the logs and in three test fixtures are the Linux machine's and are correct there.
+
+### The Windows CPU environment (not `uv sync`: the lock pins CUDA wheels)
+```bash
+python -m pip install --user uv
+python -m uv venv --python 3.13 .venv
+python -m uv pip install --python .venv/Scripts/python.exe torch==2.9.1 torchvision==0.24.1 --index-url https://download.pytorch.org/whl/cpu
+python -m uv export --frozen --no-hashes --no-emit-project | grep -vE "^(torch|torchvision|nvidia-|triton|onnxruntime-gpu)" > req.txt
+python -m uv pip install --python .venv/Scripts/python.exe -r req.txt onnxruntime pytest ruff
+.venv/Scripts/python.exe -m pytest tests/test_config.py -q -p no:cacheprovider
+```
+Versions follow `uv.lock` except the CPU builds of torch/torchvision and `onnxruntime` instead of `onnxruntime-gpu`.
 
 ## Not an open point: the token in the remote URL
 The `origin` URL in `.git/config` embeds a GitHub token. The owner keeps it deliberately (private single-user
@@ -58,31 +72,43 @@ Last full suite: 2047 passed, 0 failed, 377 skipped (CPU, commit 504ad50). Later
 9. Unverified offline (A1, A3): `save_best` under DDP (reasoning only), a real PIPAL weights load, official VGG-LPIPS
    lin parity, 1080p LPIPS peak memory; DDP with NCCL (only gloo on one GPU is tested).
 
-### Possible on the Windows machine (no GPU run needed to write; the suite still verifies core changes)
-1. **Phase B, OTF realism** (the owner's main goal: real-world photographs). It does not depend on the
-   discriminator, only on the owner's ordering "after R3GAN": design and code of the antialiased/lanczos resize
+### Possible on the Windows machine (ordered by the compute it needs; least first)
+**No compute (reading, design, docs, TypeScript):**
+1. **Phase B, OTF realism: design** (the owner's main goal: real-world photographs). It does not depend on the
+   discriminator, only on the owner's ordering "after R3GAN". Write the design first: antialiased/lanczos resize
    modes, independent noise/JPEG/blur/clean probabilities with defaults that reproduce today's draws, the offline
-   `degrade.py` reusing `Degrader`. Opt-in, default-preserving, CPU-testable; the A/B is the Linux machine's.
-2. **Test infrastructure**: pytest markers (`cuda`, `slow`, `fixture`) and a fast CPU subset in `pyproject.toml`; the
-   three fixture paths (`tests/test_checkpoint.py:19`, `tests/test_entry.py:27`, `tests/test_metrics.py:17`) from an
-   environment variable with today's values as defaults; a GitHub Actions workflow for the CPU subset plus the Studio
-   checks (stage-1 follow-up S.4).
-3. **A/B harness into the repository** as `scripts/ab/` (it exists only in the gitignored `experiments/r3gan_ab/harness`
+   `degrade.py` reusing `Degrader`, the A/B plan for the Linux machine.
+2. **Closure matrix of the stage-2 audit**: 167 findings, `stage2/PLAN.md` assigns ~96 ids to lanes; the disposition
+   of the rest (done / opt-in / rejected / open) is not recorded.
+3. **Penalty-pass cost note** before the profiling session: read `r3gan_arch.py` and the `gan_loss` penalty path,
+   list the double-backward candidates (grouped 3x3, depthwise FIR) and the cheap alternatives to try first.
+4. **Studio, next steps** (Node only): arch constructor parameters in the surface contract (ast of the arch
+   signatures), the real adapter (`server/` spawning `train.py`, parsing the log and TensorBoard events into the
+   simulator's event shapes; testable against a recorded log), ONNX capability badges from `no_onnx`/`onnx_static_only`.
+5. **A/B harness into the repository** as `scripts/ab/` (it exists only in the gitignored `experiments/r3gan_ab/harness`
    on the Linux machine): needs one copy step there, then review and cleanup can happen here.
-4. **Studio, next steps**: arch constructor parameters in the surface contract (ast of the arch signatures), the
-   real adapter (`server/` spawning `train.py`, parsing the log and TensorBoard events into the simulator's event
-   shapes; testable against a recorded log), ONNX capability badges from `no_onnx`/`onnx_static_only`.
-5. **Small core items**: hma `check_image_size` picks reflect/replicate at trace time (dynamic ONNX pads wrong
+
+**Seconds to minutes of CPU (targeted tests):**
+6. **Test infrastructure**: pytest markers (`cuda`, `slow`, `fixture`) and a fast CPU subset in `pyproject.toml`
+   (this machine needs it most); the three fixture paths (`tests/test_checkpoint.py:19`, `tests/test_entry.py:27`,
+   `tests/test_metrics.py:17`) from an environment variable with today's values as defaults; a GitHub Actions
+   workflow for the fast subset plus the Studio checks (stage-1 follow-up S.4).
+7. **Windows portability of the tests** (found 2026-11-10 by the first runs here):
+   `tests/test_runtime.py::test_two_rank_gloo_shares_rank0_seed` fails with "unsupported gloo device" (the gloo
+   backend cannot resolve the Windows host name; the DDP tests need a skip or a loopback setting on win32, and the
+   readme should say DDP is Linux-only if that holds); text reads without an encoding break on a non-UTF-8 locale
+   (fixed in `test_s3_hygiene.py`; `test_entry.py:171,191`, `test_s3_exports.py:154`, `test_s3_bench.py:69` read
+   run-generated files the same way and were not run here).
+8. **Phase B, OTF realism: code** after the design: opt-in, default-preserving, unit-tested on tiny tensors.
+9. **Small core items**: hma `check_image_size` picks reflect/replicate at trace time (dynamic ONNX pads wrong
    for inputs under 8/16 px; `neosr/archs/hma_arch.py:1375`); the dead `rep_rt4ksr` block in `convert.py:32`;
    one defaults table for `total_iter = 1000000` (6 call sites; S.5); per-arch capability metadata (S.11).
-6. **Reviews without a run**: the stage-2 audit lists 167 findings and `stage2/PLAN.md` assigns ~96 ids to lanes;
-   the disposition of the rest is not recorded: a closure matrix (done / opt-in / rejected / open) is a reading
-   task. Same for a design note on the penalty-pass cost before profiling.
 
-### Waiting for the Linux machine (changes made without a test run)
+### Waiting for the Linux machine (changes not yet covered by a full suite run)
 | date | change | check there |
 |---|---|---|
-| 2026-11-10 | `scripts/studio_surface.py`, `tests/test_studio_surface.py` (static read of the tables; the script ran on Windows, the pytest file did not) | `pytest tests/test_studio_surface.py`, `ruff check scripts tests` |
+| 2026-11-10 | `scripts/studio_surface.py`, `tests/test_studio_surface.py` | passed on Windows CPU (3 tests) together with test_config, test_hygiene, test_imports, test_registry, test_runtime (minus the gloo test), test_s3_hygiene: about 370 passed; there: the full suite |
+| 2026-11-10 | `tests/test_s3_hygiene.py`: repo files read as UTF-8 | passed on Windows (6 tests); there: the same file |
 
 ## Studio contract
 `scripts/studio_surface.py` writes `studio/shared/catalog/neosr-surface.json` from `ARCHS`, `LOSSES`, `METRICS`,
