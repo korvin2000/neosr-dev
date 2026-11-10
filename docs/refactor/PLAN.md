@@ -79,7 +79,7 @@ Each lane: Opus implements -> Codex gpt-6-astra reviews -> Opus fix pass -> main
 Status as of 2026-11-10 (the live list is `STATUS.md`): **closed** R4.1 (stage 2: sound SF-Adan), R1.4 (stage 3
 A1: re-save after the final validation), S.2 (stage 2 ST-10: `warmup_steps` for every optimizer), S.13
 (`runtime.py` refuses `use_amp` without CUDA in training); **partly closed** S.1 (start/ramp and R1/R2 exist; the
-long acceptance run is open), S.12 (D compiles; frozen loss backbones do not); **open** S.4, S.5, S.11, R1.1.
+long acceptance run is open), S.12 (D compiles; frozen loss backbones do not); **open** S.4, R1.1; S.5 closed and S.11 half closed on 2026-11-10 (session 7: `config.total_iter`; the registry decorator carries `scale`, ONNX gaps stay in `convert.py`, the Studio half is open).
 The original entries follow unchanged.
 - R4.1 adan_sf G4.M2 recurrence: verified (SF branch multiplies by bc1 and updates z with the raw grad), but consensus marked it 'redesign': gate it behind an SR-metric A/B and keep a legacy mode for existing checkpoints. It changes the dynamics of the default optimizer of ~168 sections, so it needs its own step with the A/B, not a fix lane.
 - R1.4 final save before final validation: the order follows consensus T2 D20 ('at the end: check_finite -> save(final) -> validate'). Only the best-dict of a run later extended past total_iter is stale. Changing the order, or re-saving the best after the final validation, needs owner sign-off.

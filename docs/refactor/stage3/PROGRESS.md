@@ -370,3 +370,25 @@ long run are the owner's; the penalty-pass speed (above); source independence of
 - Handoff: `next_tasks.md` (repository root) describes the next tasks in the owner's order: (1) design of
   decorator-style registration, (2) closure matrix of the 167 stage-2 findings and the fixes, (3) small core
   items, (4) Studio. Nothing of it was started in this session.
+
+## Session 7 (2026-11-10, Windows machine): registries, audit closure, small core items
+Not a stage-3 step; logged here because this is the current log. Local commits after 44ff761.
+- **Registries (design `../design/T7_registration.md`).** Draft, Codex consult (xhigh; 8 findings, all
+  dispositioned in the note's section 8), a dry run on a copy of the tree (131 decorators written by script,
+  the scan equal to all five tables), then the owner's choice: mechanism A1, `scale=` required on archs,
+  `choices=` on metrics, ONNX gaps stay in `convert.py`. Implemented in ad84712; the Codex review of that
+  commit found an import alias that passed the scan's self-check and a test oracle blind to rebinding by
+  import (fixed in f442724). The Studio surface JSON regenerates unchanged. Scan cost: 16 ms cold for the 56
+  arch files (regex), against 233 ms for `ast.parse` of the same files.
+- **Small core items.** `convert.py` dead block (8bbdd04); `config.total_iter` (fd30790); the hma pad item
+  turned out to be the same four lines in 14 archs, and five of them also froze *whether* to pad: one
+  `arch_util.pad_reflect` (3e5887a), eager unchanged (`F.pad`, same expression), index gathers while tracing.
+  A toy module traced at a reflect, an aligned and a replicate size pads nine sizes exactly like eager in
+  ONNX Runtime; hma's dynamic export matches eager at 5x7 (it could not before).
+- **Closure matrix of the stage-2 audit** (`../stage2/CLOSURE.md`): ten read-only agents, one per report;
+  167 findings = 130 done, 16 opt-in, 6 rejected, 15 open. Five findings open at first were fixed (aebbf83:
+  MX-17 safmn below 8 px, L-13 luma-only runs with RGB-only losses, L-11 / L-12 / L-14 notes).
+- **Verified here:** test_registry (167), test_imports, test_hygiene, test_config (186), test_studio_surface,
+  test_s3_losses, test_s2_exportfix (29), test_s2_cnn -k safmn (3); 953 cases of the per-arch and loss files
+  collected only. **Not verified:** the full suite, anything on CUDA, the ONNX sweep of the ten exportable
+  archs whose pad changed (`../STATUS.md`, "Waiting for the Linux machine").

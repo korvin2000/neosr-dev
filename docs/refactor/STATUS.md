@@ -42,21 +42,25 @@ often bloated code: a source of ideas and examples at most, never something to i
 Disputed or open questions go to the owner; agents do not settle them alone.
 
 ## Owner priorities (2026-11-10): read before picking work
-**The next session starts from `next_tasks.md` in the repository root**: the tasks below in the order the
-owner fixed (registration design first, then the audit closure matrix), with the files, invariants, tests
-and steps each one needs.
+**The next session starts from `next_tasks.md` in the repository root.** Session 7 (2026-11-10) finished the
+three tasks the owner had fixed: the registries (3 below), the audit closure matrix (1a) and the small core
+items (1b). What is left: the Linux confirmation of that work, the 15 audit findings still open
+(`stage2/CLOSURE.md`), then Studio.
 
 The owner sets the order; an agent does not promote a track on its own reading of the documents. Current order:
 1. **A stable, reliable core** ("works like a Swiss watch": fast, reliable, good quality) before any new feature
-   work. Concretely: (a) the closure matrix of the stage-2 audit (167 findings: done / opt-in / rejected / open) and
-   fixing what is still open; (b) the small core items (hma `check_image_size`, the dead `rep_rt4ksr` block, one
-   defaults table, per-arch capability metadata); (c) what the Linux machine must confirm (full suite, items of
+   work. Concretely: (a) the closure matrix of the stage-2 audit: **done** (`stage2/CLOSURE.md`: 167 findings =
+   130 done, 16 opt-in, 6 rejected, 15 open; five of the open ones were fixed on the spot), the 15 open ones
+   remain; (b) the small core items: **done** (the pad-to-window helper for 14 archs instead of hma alone, the
+   dead `rep_rt4ksr` block, `config.total_iter`; per-arch capability metadata: the registry half is decided,
+   the Studio half is open); (c) what the Linux machine must confirm (full suite, the ONNX sweep, items of
    "Needs the Linux machine").
 2. **NeoSR Studio / UI**: finish it (next steps in "Possible on the Windows machine", item 4).
-3. **Registration** (the owner put this **first in time**: its design comes before 1a). **Decided:** the five
-   registries return (`ARCH_REGISTRY`, `LOSS_REGISTRY`, `METRIC_REGISTRY`, `DATASET_REGISTRY`, `MODEL_REGISTRY`
-   with `@...register()`), reworked to be efficient: no import of every module, no work at import time. Open:
-   the mechanism; design note first, then the owner chooses (`next_tasks.md`, Task 1).
+3. **Registration: done** (session 7). The five registries are back (`ARCH_REGISTRY`, `LOSS_REGISTRY`,
+   `METRIC_REGISTRY`, `DATASET_REGISTRY`, `MODEL_REGISTRY` with `@...register()`), lazy: the decorator is a
+   declaration, a registry reads the decorators from the source text on first use (16 ms for the arch folder)
+   and imports only the requested module. The owner chose mechanism A1 of `design/T7_registration.md`; the
+   hand-written tables are gone. Waits for the full suite on the Linux machine.
 
 **Parked: OTF realism (Phase B).** Steps O1-O3 are merged, opt-in and change no default; O4 (`degrade.py`), O5
 (readme, templates, Studio fields) and the A/B wait until the owner reopens the track. It was started on an
@@ -74,6 +78,8 @@ model to follow.
 | Stage 3 Phase 0 (E0-E5: evaluation protocol, config-only A/Bs) | **not started** (E0 partly covered by the R5 split) | `stage3/CONSENSUS.md` Phase 0 |
 | R3GAN track | code done (R1-R3), data done (R5), qualification R4: bf16 PASS (provisional, no replicate), **cost gate FAIL**; **A/B (R6) not run: paused** | `stage3/PROGRESS.md` "PAUSED", `stage3/r3gan/RESULTS.md` |
 | Stage 3 Phase B (OTF realism, i-LN, KD/ECO, dynamo exporter, ...) | **parked by the owner (2026-11-10)**. OTF realism: **design draft 2** (Codex-reviewed); steps **O1-O3 done** (antialiased resampler and `resize_mode*` keys; per-sample `noise_prob*` / `jpeg_prob*` gates, `blur_prob`, the clean path; the unsharp mask `sharpen_*` at LQ scale; all opt-in, defaults bitwise unchanged), O4 (`degrade.py`) and O5 (readme, templates, Studio fields) open; the owner's answers Q1-Q4 open. The rest not started; the owner ordered Phase B after R3GAN | `stage3/otf/DESIGN.md`, `stage3/REVIEW.md` "Final list" |
+| Registries (design T7) | **done on Windows, waits for the Linux suite** | `design/T7_registration.md`, `neosr/utils/registry.py`, `tests/test_registry.py` |
+| Stage-2 audit closure | matrix done; 15 of 167 findings open (6 fixable on Windows, 7 need an A/B or a measurement, 4 owner decisions) | `stage2/CLOSURE.md` |
 | NeoSR Studio (`studio/`) | prototype: real recipe model, TOML compiler and validator; **training is simulated** (no adapter to `train.py`). Catalog synced to the trainer on 2026-11-10 and guarded by a contract | `studio/README.md`, "Studio contract" below |
 
 Last full suite: 2047 passed, 0 failed, 377 skipped (CPU, commit 504ad50). Later commits ran scoped tests only.
@@ -109,8 +115,11 @@ The order of work is "Owner priorities" above; this list only says what fits thi
 1. **Phase B, OTF realism: design** (the owner's main goal: real-world photographs): **done as draft 2**,
    `stage3/otf/DESIGN.md`. Open: the owner's answers Q1-Q4 (above all 50+ real LQ samples for the holdout set R
    and the residual analysis O4b).
-2. **Closure matrix of the stage-2 audit**: 167 findings, `stage2/PLAN.md` assigns ~96 ids to lanes; the disposition
-   of the rest (done / opt-in / rejected / open) is not recorded.
+2. **Stage-2 audit, the open findings fixable here** (`stage2/CLOSURE.md`, "Open, fixable on the Windows
+   machine"): A-11 (`convert.py --prune` never calls plainusr's `switch_to_deploy`), A-17 (rcan / cfsr nits),
+   W-16 (persistent `attn_mask` buffers; touches the checkpoint format, ask first), A-12 (esc `.contiguous()`),
+   three optional sub-items (MT-15, MT-14, MT-08), two doc/code mismatches in `stage2/DECISIONS.md` (A-07 and
+   W-09 are listed as opt-in but have no key). Owner decisions wanted: MX-15, T-11, ST-14, D-16.
 3. **Penalty-pass cost note** before the profiling session: read `r3gan_arch.py` and the `gan_loss` penalty path,
    list the double-backward candidates (grouped 3x3, depthwise FIR) and the cheap alternatives to try first.
 4. **Studio, next steps** (Node only): arch constructor parameters in the surface contract (ast of the arch
@@ -135,9 +144,8 @@ The order of work is "Owner priorities" above; this list only says what fits thi
 8. **Phase B, OTF realism: code** steps O1-O5 of the design (resampler, probabilities and clean path, sharpening,
    `degrade.py`, schema/readme/Studio): opt-in, default-preserving, unit-tested on tiny tensors. Needs the owner's
    go-ahead (Q3: before or after the R3GAN A/B).
-9. **Small core items**: hma `check_image_size` picks reflect/replicate at trace time (dynamic ONNX pads wrong
-   for inputs under 8/16 px; `neosr/archs/hma_arch.py:1375`); the dead `rep_rt4ksr` block in `convert.py:32`;
-   one defaults table for `total_iter = 1000000` (6 call sites; S.5); per-arch capability metadata (S.11).
+9. **Small core items: done in session 7** (see "Closed follow-ups"). Left: the Studio half of S.11 (window
+   sizes and scales are hand-kept in `studio/shared/catalog/archs.ts`), with Studio step 4.
 
 ### Waiting for the Linux machine (changes not yet covered by a full suite run)
 | date | change | check there |
@@ -147,16 +155,20 @@ The order of work is "Owner priorities" above; this list only says what fits thi
 | 2026-11-10 | OTF O1: `neosr/data/resample.py`, `resize_mode*` keys in `otf_degradation.py` and `config.py`, `tests/test_s3_otf.py` | passed on Windows CPU: test_s3_otf, test_otf_degradation (frozen reference), test_config, test_studio_surface, test_s2_data (380 passed; 2 Windows-only failures, item 7). There: the CUDA rows of test_otf_degradation, `test_degrader_no_host_sync` with AA modes on, the full suite, and the cost (O6) |
 | 2026-11-10 | OTF O2: gates and clean path in `otf_degradation.py`, `blur_prob` in `otf_dataset.py`, schema keys, `tests/test_s3_otf.py` (O2 part) | passed on Windows CPU with the same files as O1 (454 passed). There: `test_no_host_sync_with_every_option_on` (CUDA only, skipped here), the CUDA generator path of `_mask`, a multi-worker loader run with `blur_prob`, the full suite |
 | 2026-11-10 | OTF O3: `sharpen_prob` / `sharpen_sigma` / `sharpen_amount` in `otf_degradation.py`, autocast disabled inside the Degrader call, schema keys, tests | passed on Windows CPU (499 passed with the files of O1). There: the CUDA rows, the no-host-sync test (it now includes sharpening), the full suite |
+| 2026-11-10 | session 7: the five registries (`neosr/utils/registry.py`, `factory.py`, 131 decorators in the arch, loss, metric, dataset and model files, tables deleted), ad84712 + f442724 | passed on Windows CPU: test_registry (167), test_imports, test_hygiene, test_config, test_studio_surface, test_s3_losses; the surface JSON regenerates unchanged; test_archs, test_archs_a2/a3, test_s2_cnn, test_losses_pipeline, test_losses, test_metrics were **collected only** (953 cases). There: the full suite |
+| 2026-11-10 | session 7: `arch_util.pad_reflect` in catanet, dctlsa, ditn, drct, esc, flexnet, grformer, hat, hma, lmlt, mfghmoe, microsr, srformer, swinir (3e5887a) | passed on Windows CPU: test_s2_exportfix (29, incl. the eager-bitwise rows of 8 of these archs and hma's dynamic ONNX at 5x7); eager forwards of 13 archs at 19x23 and 5x7. There: the ONNX sweep of the exportable ones (their graphs changed: index gathers instead of `Pad`), test_archs*, test_s2_window / test_s2_mixed, the full suite |
+| 2026-11-10 | session 7: `config.total_iter` (fd30790); safmn below 8 px, `color = "y"` with RGB-only losses (aebbf83) | passed on Windows CPU: test_config (186), test_s2_cnn -k safmn_runs_below (3), 85 templates through the validator. There: the full suite |
 
 ## Studio contract
-`scripts/studio_surface.py` writes `studio/shared/catalog/neosr-surface.json` from `ARCHS`, `LOSSES`, `METRICS`,
-`OPTIMIZERS`, `SCHEDULERS`, `config.SCHEMA`, the gan types and `convert.py`'s export tables. Two tests hold the
-chain together:
-- `tests/test_studio_surface.py` (pytest): the JSON is current; the static read equals the imported tables.
+`scripts/studio_surface.py` writes `studio/shared/catalog/neosr-surface.json` from the five registries (it loads
+`neosr/utils/registry.py` by path, torch-free), `OPTIMIZERS`, `SCHEDULERS`, `config.SCHEMA`, the gan types and
+`convert.py`'s export tables. Two tests hold the chain together:
+- `tests/test_studio_surface.py` (pytest): the JSON is current; the script runs without torch; its read equals
+  the imported registries and tables.
 - `studio/src/app/core/catalog-contract.spec.ts` (`ng test`): the Studio catalog equals the JSON; `npm run contract`
   also validates every Studio template's TOML with the trainer's `load_config` + `validate_train`.
 
-After changing a trainer table or `SCHEMA`: `python scripts/studio_surface.py`, commit the JSON, then fix what
+After adding or changing a registered type, a trainer table or `SCHEMA`: `python scripts/studio_surface.py`, commit the JSON, then fix what
 the Studio contract reports. `design/neosr_config_surface.md` is a prose snapshot from before stage 2; the JSON
 is the truth.
 
@@ -172,3 +184,9 @@ is the truth.
 | PLKConv2d eval-mode in-place write | bbd935c |
 | hma / hma_medium dynamic ONNX at batch 2 | f0738ee |
 | stage 2 "not merged, not pushed" | merged into `master` with the Studio prototype (05954e0), pushed |
+| registration usability (T3 D3 tables) | session 7: the five registries, design T7 (ad84712) |
+| one defaults table (S.5) | session 7: `config.total_iter` (fd30790); `max_skip_streak` and `keep_states` each have one reader default |
+| per-arch capability metadata (S.11), registry half | session 7, owner decision: the decorator carries `scale` (and `choices` for metrics); ONNX gaps stay in `convert.py` |
+| hma dynamic ONNX pads tiny inputs wrong | session 7: `arch_util.pad_reflect` for all 14 archs with that code (3e5887a) |
+| dead `rep_rt4ksr` block in `convert.py` | session 7 (8bbdd04) |
+| disposition of the 167 stage-2 findings | session 7: `stage2/CLOSURE.md` |
