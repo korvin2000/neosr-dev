@@ -5,7 +5,7 @@ file has been started**. Read sections 0-1 first, then work on Task 1.
 
 | # | task | kind | deliverable |
 |---|---|---|---|
-| 1 | Decorator-style registration (`@ARCH_REGISTRY.register()` ...) without the old cost | **design first**, the owner decides, then code | `docs/refactor/design/T7_registration.md`, then the implementation |
+| 1 | Bring back the five registries (`ARCH_`, `LOSS_`, `METRIC_`, `DATASET_`, `MODEL_REGISTRY`) with `@...register()`, without importing every module | **decided by the owner**; the *how* needs a design first, the owner chooses the mechanism, then code | `docs/refactor/design/T7_registration.md`, then the implementation |
 | 2 | Closure matrix of the stage-2 audit (167 findings), then fix what is open | reading + verification, then small fixes | `docs/refactor/stage2/CLOSURE.md`, then commits |
 | 3 | Small core items (4 known) | small fixes | commits |
 | 4 | NeoSR Studio: finish the UI | later, after 1-3 | see section 5 |
@@ -74,14 +74,26 @@ test_config + test_registry + test_imports + test_hygiene + test_runtime ~2 min;
 
 ---
 
-## 2. Task 1: decorator-style registration, designed for the user and still lazy
+## 2. Task 1: the five registries return, efficient and lazy
+
+**Decided by the owner (2026-11-10), not open for the design:**
+- All five registries come back: `ARCH_REGISTRY`, `LOSS_REGISTRY`, `METRIC_REGISTRY`, `DATASET_REGISTRY`,
+  `MODEL_REGISTRY`, used as `@X_REGISTRY.register()` on the class or function, as before.
+- They must be **efficient**: the old behaviour of importing every arch (loss, ...) module to find one type is
+  not acceptable, and neither is any work at import time. The rework brings the needed improvements and
+  optimisations, it is not a revert of 8da8ae0.
+
+**Still open, for the design note and the owner's choice:** the mechanism that keeps the lookup lazy (2.5), the
+decorator's arguments, and the questions of 2.6. The explicit tables in the package `__init__.py` files are
+expected to go once the registries carry the same information; whether anything of them stays is part of the
+design.
 
 ### 2.1 What the owner asked for and why
 Stage 1 (design T3, decision D3) removed `@ARCH_REGISTRY.register()`, `@LOSS_REGISTRY.register()` etc. and put every
 type into a table in the package `__init__.py`. That was right for start-up cost and import hygiene, but it lost
 the convenience for the person who adds an arch or a loss: write the class, put a decorator on it, done. Today one
-must also edit a table in another file (and for a scale-free net a list in a test). The owner wants the decorator
-style back, **more efficient than the old one**.
+must also edit a table in another file (and for a scale-free net a list in a test). The owner wants the registries
+and their decorators back, **more efficient than the old ones**.
 
 ### 2.2 How it was
 Where to read the old implementation (two sources, both checked on 2026-11-10):
@@ -137,7 +149,7 @@ name)`). Factories (`def hat_s(**kwargs)`) are rows too.
 |---|---|---|---|---|
 | A | **Decorator + static scan.** `@ARCH_REGISTRY.register(scale="upscale")` in the arch file; the registry builds `name -> module` by scanning the package's source text for decorated definitions on first use, then imports only the requested module (where the decorator runs for real and can be cross-checked against the scan). No table | one file | measured here on all 54 arch files (929 KiB): regex 7 ms + read 6 ms, `ast.parse` 233 ms; `import torch` is 3.7 s | the scan must understand the decorator syntax it allows (decide: regex on a strict form, or `ast`); source must be readable (zip / pyc-only installs); two files registering one name must fail at scan time |
 | B | **Decorator + generated index.** As A, but a script writes the index (the present tables) and a test fails when it is stale (the pattern of `scripts/studio_surface.py`) | one file + run a script (or a pre-commit hook) | none at run time | the extra step is exactly the inconvenience the owner wants gone, unless the scan of A is the fallback when the index is stale |
-| C | **Decorator as declaration, table kept.** The decorator only marks and validates; the table stays the lookup | two places, as today | none | does not solve the request |
+| C | **Decorator as declaration, table kept.** The decorator only marks and validates; the table stays the lookup | two places, as today | none | **ruled out**: it does not give back what the owner asked for |
 | D | **Entry points / plugin folders** for third-party modules | n/a for in-tree | n/a | scope creep; mention as a later extension of A (a user folder added to the scan) |
 
 Preliminary opinion of session 6 (not reviewed, **not a decision**: the owner chooses after the design note): **A**, with the scan result cached in memory per process, the
@@ -150,8 +162,10 @@ scan function so the Studio contract keeps working without importing torch.
    rule)? Should 1x-only (`nafnet`) and ONNX capability (`NO_ONNX`, `STATIC_ONLY` in `convert.py`) move into the
    decorator too (this is follow-up S.11, per-arch capability metadata: one place instead of three)?
 2. Factories: `def hat_s(**kwargs)` rows are functions; the decorator must work on functions and classes.
-3. Which packages get decorators: archs and losses certainly; metrics (function + `_pt` twin + `CHOICES`), datasets
-   (3 rows), models (2 rows)? `OPTIMIZERS` / `SCHEDULERS` hold torch classes and stay tables.
+3. All five packages get their registry (decided). Per package: what the decorator must carry and how the special
+   shapes map onto it: metrics are a function plus its `_pt` twin plus `CHOICES`; datasets are built from one
+   positional dict; models take `(opt, runtime)`. `OPTIMIZERS` / `SCHEDULERS` (`neosr/models/base.py`) were
+   never registries and hold torch's own classes: assumed to stay tables, confirm with the owner.
 4. Scan mechanics: exact accepted decorator forms; multi-line decorators; a decorated name inside `if TYPE_CHECKING`
    or a nested scope; what the error says when the scan and the imported module disagree.
 5. Duplicate names, name vs Python identifier (aliases: yes or no), did-you-mean over the scanned names.
@@ -183,7 +197,9 @@ neosr-surface.json` (must come out **identical** after the migration: that is th
 3. Write `docs/refactor/design/T7_registration.md`: the comparison of 2.5 with numbers, answers to 2.6, the
    migration plan, the tests. Keep it short (2-3 pages).
 4. Codex consult on the draft (this is an architecture decision: effort `xhigh`), apply what holds.
-5. **Stop and ask the owner to choose** (present A/B/... in a few lines). Implement only after the answer.
+5. **Stop and ask the owner to choose the mechanism** (A, B or another; a few lines each, with the numbers)
+   and to confirm the answers to 2.6 that change what a user writes (decorator arguments, aliases, plugin
+   folders). That the registries return is already decided. Implement only after the answer.
 6. Implementation in steps with a Codex diff review each: registry + scan + tests -> archs migration (scripted) ->
    losses -> others -> docs, readme, Studio surface check. Verify on Windows with `tests/test_registry.py`,
    `tests/test_imports.py`, `tests/test_hygiene.py`, `tests/test_config.py`, `tests/test_studio_surface.py`,

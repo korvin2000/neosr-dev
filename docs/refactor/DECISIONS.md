@@ -109,3 +109,15 @@ order already is not on several).
 - An earlier note of the same day called it "upstream" and told agents to reuse its work before writing their own:
   that was an agent's misreading of the owner and is withdrawn.
 - Agents make no hasty decisions or conclusions: disputed or open questions go to the owner.
+
+## Owner decision, 2026-11-10 (registries)
+The five registries come back: `ARCH_REGISTRY`, `LOSS_REGISTRY`, `METRIC_REGISTRY`, `DATASET_REGISTRY`,
+`MODEL_REGISTRY`, with `@X_REGISTRY.register()` on the class or function. This supersedes design T3, decision D3
+("explicit lazy tables are the single source; `Registry` is deleted") in its form, **not in its goals**: the
+new registries must not import every module to resolve one type and must do no work at import time (no argv,
+TOML, CUDA or RNG), which is why the old ones were removed. It is a rework with the needed improvements and
+optimisations, not a revert. Old code for reference: this repository's history (`git show
+8da8ae0^:neosr/utils/registry.py`, `10876ed^:neosr/archs/`) and the owner's older fork
+https://github.com/delafer/neosr. The mechanism (how the lookup stays lazy) is not decided: design note
+`design/T7_registration.md` first, then the owner chooses. `tests/test_hygiene.py` bans `_REGISTRY` today; that
+rule changes with the implementation.

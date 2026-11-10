@@ -53,9 +53,10 @@ The owner sets the order; an agent does not promote a track on its own reading o
    defaults table, per-arch capability metadata); (c) what the Linux machine must confirm (full suite, items of
    "Needs the Linux machine").
 2. **NeoSR Studio / UI**: finish it (next steps in "Possible on the Windows machine", item 4).
-3. **Usability of registration** (the owner later put its **design first**, before 1a): bring back decorator-style registration (`@ARCH_REGISTRY.register()`,
-   `@LOSS_REGISTRY.register()`, ...) for the person adding an arch or a loss, without the old cost (no import of
-   every module, no work at import time). Design first, owner decides.
+3. **Registration** (the owner put this **first in time**: its design comes before 1a). **Decided:** the five
+   registries return (`ARCH_REGISTRY`, `LOSS_REGISTRY`, `METRIC_REGISTRY`, `DATASET_REGISTRY`, `MODEL_REGISTRY`
+   with `@...register()`), reworked to be efficient: no import of every module, no work at import time. Open:
+   the mechanism; design note first, then the owner chooses (`next_tasks.md`, Task 1).
 
 **Parked: OTF realism (Phase B).** Steps O1-O3 are merged, opt-in and change no default; O4 (`degrade.py`), O5
 (readme, templates, Studio fields) and the A/B wait until the owner reopens the track. It was started on an
