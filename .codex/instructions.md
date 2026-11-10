@@ -1,10 +1,5 @@
 # Codex Authoring Guidelines
 
-## Model
-- model: gpt-5.2-codex
-- model_reasoning_effort: high
-- approval_policy: never
-
 ## Output Expectations
 - Produce compact, well-structured code and text with comments and docs while preserving clarity through naming and decomposition.
 - Prefer reliable, modern language and framework features  with an emphasis on speed and running performance

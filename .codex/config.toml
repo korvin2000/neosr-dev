@@ -1,8 +1,3 @@
-model = "gpt-5.2-codex-xmas"
-model_reasoning_effort = "high"
-approval_policy = "never"
-promt_techniques=chain of thought; program of thought; tree of thoughs (ToT);contrastive reasoning; Chain of Draft (CoD); Chain-Of-Reasoning (CoR); Self-Refine; Chain Of Verification
-
 [code]
 optimize = "speed"
 reliability = "high"
