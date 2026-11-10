@@ -43,7 +43,7 @@ machines; `DECISIONS.md`, 2026-11-10). Do not report it again and do not print t
 | Stage 3 Phase A (A1-A9, port from traiNNer-redux) | done, merged | `stage3/PROGRESS.md` "Phase A closed" |
 | Stage 3 Phase 0 (E0-E5: evaluation protocol, config-only A/Bs) | **not started** (E0 partly covered by the R5 split) | `stage3/CONSENSUS.md` Phase 0 |
 | R3GAN track | code done (R1-R3), data done (R5), qualification R4: bf16 PASS (provisional, no replicate), **cost gate FAIL**; **A/B (R6) not run: paused** | `stage3/PROGRESS.md` "PAUSED", `stage3/r3gan/RESULTS.md` |
-| Stage 3 Phase B (OTF realism, i-LN, KD/ECO, dynamo exporter, ...) | OTF realism: **design draft 2** (Codex-reviewed), waiting for the owner's answers Q1-Q4; no code. The rest not started; the owner ordered Phase B after R3GAN | `stage3/otf/DESIGN.md`, `stage3/REVIEW.md` "Final list" |
+| Stage 3 Phase B (OTF realism, i-LN, KD/ECO, dynamo exporter, ...) | OTF realism: **design draft 2** (Codex-reviewed); step **O1 done** (antialiased resampler, `resize_mode*` keys; opt-in, defaults bitwise unchanged), O2-O5 open; the owner's answers Q1-Q4 open. The rest not started; the owner ordered Phase B after R3GAN | `stage3/otf/DESIGN.md`, `stage3/REVIEW.md` "Final list" |
 | NeoSR Studio (`studio/`) | prototype: real recipe model, TOML compiler and validator; **training is simulated** (no adapter to `train.py`). Catalog synced to the trainer on 2026-11-10 and guarded by a contract | `studio/README.md`, "Studio contract" below |
 
 Last full suite: 2047 passed, 0 failed, 377 skipped (CPU, commit 504ad50). Later commits ran scoped tests only.
@@ -97,7 +97,9 @@ Last full suite: 2047 passed, 0 failed, 377 skipped (CPU, commit 504ad50). Later
    backend cannot resolve the Windows host name; the DDP tests need a skip or a loopback setting on win32, and the
    readme should say DDP is Linux-only if that holds); text reads without an encoding break on a non-UTF-8 locale
    (fixed in `test_s3_hygiene.py`; `test_entry.py:171,191`, `test_s3_exports.py:154`, `test_s3_bench.py:69` read
-   run-generated files the same way and were not run here).
+   run-generated files the same way and were not run here); `tests/test_s2_data.py`:
+   `test_scandir_skips_hidden_and_non_images` needs the symlink privilege (WinError 1314) and `test_path_list`
+   decodes a subprocess's output as UTF-8.
 8. **Phase B, OTF realism: code** steps O1-O5 of the design (resampler, probabilities and clean path, sharpening,
    `degrade.py`, schema/readme/Studio): opt-in, default-preserving, unit-tested on tiny tensors. Needs the owner's
    go-ahead (Q3: before or after the R3GAN A/B).
@@ -110,6 +112,7 @@ Last full suite: 2047 passed, 0 failed, 377 skipped (CPU, commit 504ad50). Later
 |---|---|---|
 | 2026-11-10 | `scripts/studio_surface.py`, `tests/test_studio_surface.py` | passed on Windows CPU (3 tests) together with test_config, test_hygiene, test_imports, test_registry, test_runtime (minus the gloo test), test_s3_hygiene: about 370 passed; there: the full suite |
 | 2026-11-10 | `tests/test_s3_hygiene.py`: repo files read as UTF-8 | passed on Windows (6 tests); there: the same file |
+| 2026-11-10 | OTF O1: `neosr/data/resample.py`, `resize_mode*` keys in `otf_degradation.py` and `config.py`, `tests/test_s3_otf.py` | passed on Windows CPU: test_s3_otf, test_otf_degradation (frozen reference), test_config, test_studio_surface, test_s2_data (380 passed; 2 Windows-only failures, item 7). There: the CUDA rows of test_otf_degradation, `test_degrader_no_host_sync` with AA modes on, the full suite, and the cost (O6) |
 
 ## Studio contract
 `scripts/studio_surface.py` writes `studio/shared/catalog/neosr-surface.json` from `ARCHS`, `LOSSES`, `METRICS`,

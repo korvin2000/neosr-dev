@@ -1,10 +1,11 @@
 """On-the-fly (Real-ESRGAN) degradation of GT batches into LQ batches, plus the training pair pool.
 
-Python `random` draws the resize kind and the interpolation modes, `neosr.utils.rng.rng` the scalar
+Python `random` draws the resize kind and the resize modes, `neosr.utils.rng.rng` the scalar
 probabilities and scales, torch's RNG the per-sample noise and JPEG qualities.
 """
 
 import logging
+import math
 import random
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -21,6 +22,7 @@ from neosr.data.degradations import (  # type: ignore[attr-defined]
     random_add_gaussian_noise_pt,
     random_add_poisson_noise_pt,
 )
+from neosr.data.resample import KERNELS, resample, scaled_size
 from neosr.utils.diffjpeg import DiffJPEG, filter2D  # type: ignore[attr-defined]
 from neosr.utils.rng import rng
 
@@ -33,7 +35,15 @@ _STAGE_KEYS = {
     "poisson_scale_range": 2,
     "gray_noise_prob": 0,
 }
+# F.interpolate without antialiasing: the default of every mode list
 _MODES = ("area", "bilinear", "bicubic")
+# resize of stage 1, of stage 2 and the final one to the LQ size: a list of _MODES / KERNELS names
+# -> its optional weight list (absent: uniform); the stage suffix stays last, as in resize_prob2
+_MODE_KEYS = {
+    "resize_mode": "resize_mode_prob",
+    "resize_mode2": "resize_mode_prob2",
+    "final_resize_mode": "final_resize_mode_prob",
+}
 # BT.601 luma, the weights of cv2's BGR2GRAY that the paired datasets use for color='y'
 _LUMA = (0.299, 0.587, 0.114)
 
@@ -80,6 +90,7 @@ class Degrader:
                 )
                 raise ConfigError(msg, key=k)
         self.cfg = {k: cfg[k] for k in keys}
+        self.modes = {k: _modes(cfg, k, p) for k, p in _MODE_KEYS.items()}
         self.scale = scale
         self.gray = cfg.get("color") == "y"
         self.jpeger = DiffJPEG(differentiable=False).to(device) if self.jpeg else None
@@ -101,30 +112,23 @@ class Degrader:
         h, w = gt.shape[2:]
         # first stage
         out = filter2D(gt, k1)
-        out = F.interpolate(
-            out, scale_factor=self._resize(""), mode=random.choice(_MODES)
-        )
+        factor = self._resize("")
+        out = self._interp(out, "resize_mode", factor=factor)
         out = self._jpeg(self._noise(out, ""), "")
         # second stage
         if rng.uniform() < self.cfg["second_blur_prob"]:
             out = filter2D(out, k2)
         s = self._resize("2")
         size = (int(h / self.scale * s), int(w / self.scale * s))
-        out = self._noise(
-            F.interpolate(out, size=size, mode=random.choice(_MODES)), "2"
-        )
+        out = self._noise(self._interp(out, "resize_mode2", size=size), "2")
         # [resize back + sinc] and JPEG in either order; other orders give twisted lines
         size = (h // self.scale, w // self.scale)
         if rng.uniform() < 0.5:
-            out = filter2D(
-                F.interpolate(out, size=size, mode=random.choice(_MODES)), sinc
-            )
+            out = filter2D(self._interp(out, "final_resize_mode", size=size), sinc)
             out = self._jpeg(out, "2")
         else:
             out = self._jpeg(out, "2")
-            out = filter2D(
-                F.interpolate(out, size=size, mode=random.choice(_MODES)), sinc
-            )
+            out = filter2D(self._interp(out, "final_resize_mode", size=size), sinc)
         return _quantize(out)
 
     def degrade(
@@ -137,6 +141,29 @@ class Degrader:
             return gt, lq
         w = gt.new_tensor(_LUMA).view(1, 3, 1, 1)
         return (gt * w).sum(1, keepdim=True), _quantize((lq * w).sum(1, keepdim=True))
+
+    def _interp(
+        self,
+        x: Tensor,
+        key: str,
+        *,
+        factor: float | None = None,
+        size: tuple[int, int] | None = None,
+    ) -> Tensor:
+        """Resize by `factor` or to `size` with a mode drawn from the `key` list. A legacy mode is
+        today's `F.interpolate` call (a factor also maps the coordinates); an antialiased kernel
+        resamples to the same output size with coordinates from the sizes."""
+        names, weights = self.modes[key]
+        mode = (
+            random.choice(names)
+            if weights is None
+            else random.choices(names, weights)[0]
+        )
+        if mode not in KERNELS:
+            return F.interpolate(x, size=size, scale_factor=factor, mode=mode)
+        if size is None:
+            size = scaled_size(*x.shape[2:], factor)  # type: ignore[arg-type]
+        return resample(x, size, mode)
 
     def _resize(self, s: str) -> float:
         kind = random.choices(("up", "down", "keep"), self.cfg[f"resize_prob{s}"])[0]
@@ -174,6 +201,48 @@ class Degrader:
         # clamp to [0, 1], otherwise DiffJPEG gives unpleasant artifacts; its output is a strided
         # crop, which filter2D cannot view once a CPU reflect pad keeps that layout
         return self.jpeger(torch.clamp(out, 0, 1), quality=quality).contiguous()
+
+
+def _modes(
+    cfg: dict[str, Any], key: str, prob_key: str
+) -> tuple[tuple[str, ...], list[float] | None]:
+    """(names, weights | None) of the `key` mode list; absent: the legacy modes, drawn as before."""
+    names, weights = cfg.get(key), cfg.get(prob_key)
+    known = (*_MODES, *KERNELS)
+    if names is None:
+        if weights is not None:
+            msg = f"[degradations] {prob_key} needs {key} (the list its weights belong to)"
+            raise ConfigError(msg, key=key)
+        return _MODES, None
+    if not isinstance(names, list | tuple) or not names:
+        msg = f"[degradations] {key} must be a non-empty list of {', '.join(known)}, got {names!r}"
+        raise ConfigError(msg, key=key)
+    for name in names:
+        if name not in known:
+            msg = f"[degradations] {key}: unknown mode {name!r}; use {', '.join(known)}"
+            raise ConfigError(
+                msg, key=name if isinstance(name, str) else None, known=known
+            )
+    if weights is None:
+        return tuple(names), None
+    if (
+        not isinstance(weights, list | tuple)
+        or len(weights) != len(names)
+        or not all(
+            isinstance(w, int | float)
+            and not isinstance(w, bool)
+            and math.isfinite(w)
+            and w >= 0
+            for w in weights
+        )
+        or not 0 < sum(weights) < math.inf
+    ):
+        msg = (
+            f"[degradations] {prob_key} must be {len(names)} weights >= 0 with a positive, finite sum "
+            f"(one per {key} entry), got {weights!r}"
+        )
+        raise ConfigError(msg, key=prob_key)
+    return tuple(names), list(weights)
 
 
 class PairPool:

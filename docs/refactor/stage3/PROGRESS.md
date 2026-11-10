@@ -342,3 +342,12 @@ long run are the owner's; the penalty-pass speed (above); source independence of
   `blur_prob`, a clean path, USM at LQ scale, `scripts/degrade.py` for fixed validation sets; defaults bitwise
   today's including RNG consumption. Validation sets V0-V5 are diagnostics only; real-photo evidence needs the
   owner's real holdout (question Q1). No code yet.
+- OTF O1 (same session, Windows CPU): `neosr/data/resample.py` (separable antialiased resampler, kernel table
+  `aa_box|aa_bilinear|aa_bicubic|aa_mitchell|aa_lanczos2|aa_lanczos3`; equals torch `antialias=True` to 1e-12 in
+  fp64, within 2e-6 of the fp64 result in fp32), Degrader keys `resize_mode`, `resize_mode2`, `final_resize_mode`
+  with weights `resize_mode_prob`, `resize_mode_prob2`, `final_resize_mode_prob` (absent: the legacy tuple and the
+  same `random.choice`, bitwise as before; the frozen-reference test is unchanged and green), schema keys, Studio
+  surface regenerated. Tests `tests/test_s3_otf.py`. Not run here: CUDA paths, the no-host-sync test, the cost.
+  Codex diff review: no default-path regression (90 batches against HEAD, all RNG states); 6 findings fixed
+  (box boundary ties in integers, empty size raises, autocast off inside the resampler, finite weight sum, D6
+  wording, RNG-state test against the frozen reference); table at the end of `otf/DESIGN.md`.

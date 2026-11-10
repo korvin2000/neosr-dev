@@ -45,7 +45,7 @@ downscaling), centre `c_i = (i + 0.5) s - 0.5`:
 
 | name | kernel `k`, support radius | models |
 |---|---|---|
-| `aa_box` | box on the half-open support [-0.5, 0.5) | area averaging (equals torch `area` only for integer factors) |
+| `aa_box` | box on the half-open support [-0.5, 0.5), membership decided in integers | area averaging (equals torch `area` only for integer factors) |
 | `aa_bilinear` | triangle, 1 | torch `bilinear, antialias=True` (parity oracle) |
 | `aa_bicubic` | Keys cubic a = -0.5, 2 | PIL / torch `bicubic, antialias=True` (parity oracle; torch uses a = -0.75 only without antialiasing); the owner's LQ |
 | `aa_mitchell` | Mitchell-Netravali B = C = 1/3, 2 (not interpolating: it smooths slightly at any size) | ImageMagick's enlargement default |
@@ -73,7 +73,8 @@ Contracts:
   decides whether the resampler pins fp32 matmul precision.
 
 Keys (per stage, list of names): `resize_mode`, `resize_mode2`, `final_resize_mode`, each with an optional
-`*_prob` weight list of the same length. Absent: today's tuple and today's `random.choice` (D6).
+weight list of the same length: `resize_mode_prob`, `resize_mode_prob2` (the stage suffix stays last, as in
+`resize_prob2`), `final_resize_mode_prob`. Absent: today's tuple and today's `random.choice` (D6).
 
 ### D2. Per-operation probabilities (G2)
 | key | default | where the coin is drawn | granularity |
@@ -120,7 +121,8 @@ With none of the new keys set the Degrader is **bitwise** today's, including RNG
   and the worker's sinc choices keep drawing at probability 0 or 1, as today;
 - a **new** gate with `p >= 1` or `p <= 0` draws nothing (`_coin`), so python `random`, `neosr.rng` (numpy) and
   torch's CPU and device generators advance exactly as now;
-- an absent `resize_mode*` uses the same tuple and the same `random.choice`; a present list uses
+- an absent `resize_mode*` uses the same tuple and the same `random.choice`; a present list without weights
+  also uses `random.choice` (so the legacy list spelled out is the default, bitwise), a list with weights
   `random.choices(names, weights)`;
 - `tests/test_otf_degradation.py::test_equals_reference_on_three_batches` (the frozen pre-refactor reference)
   stays unchanged and must stay green. It compares outputs only, so a new test also compares the **RNG states**
@@ -215,7 +217,7 @@ V1-V5 come from the simulator under test (only the JPEG tail is independent): th
 ## 6. Steps
 | step | content | size | machine |
 |---|---|---|---|
-| O1 | `data/resample.py`, `resize_mode*` keys, tests | S | Windows (code + tests) |
+| O1 | `data/resample.py`, `resize_mode*` keys, tests | S | Windows (code + tests). **Done 2026-11-10**, `tests/test_s3_otf.py` |
 | O2 | `blur_prob`, `noise_prob*`, `jpeg_prob*`, `clean_prob`/`clean_mode`, tests | S | Windows |
 | O3 | `sharpen_*`, tests | S | Windows |
 | O4 | `scripts/degrade.py` (+ the Pillow-only generator of set X), `options/degrade/*.toml`, tests | M | Windows; the sets are generated on Linux |
@@ -287,3 +289,15 @@ own control.
 | 7 | skipped noise rows escape the clamp; clean mix must precede quantisation and luma | accepted; **decision differs from the reviewer's default**: skipped rows are clamped (an intermediate image is in range) instead of left with excursions | D2 boundary rules, D3, tests |
 | 8 | camera noise, denoising traces and centred motion PSFs dismissed too broadly; random order rejected inconsistently | partly accepted: moved to evidence-gated (Q1, 4.1) instead of added now, because no target sample has been inspected yet | D8 |
 Not verified by anyone: CUDA behaviour, cost, and any effect on training.
+
+### O1 diff review (Codex gpt-6.1-sol, read-only, 2026-11-10)
+Default path: no regression found (90 CPU batches against HEAD: outputs, dtypes, strides and all RNG states equal,
+also JPEG off, channels_last, transposed inputs). Six findings, all fixed before the commit:
+| finding | fix |
+|---|---|
+| a float offset put a sample on a box-window boundary into the wrong window (7 -> 6: half-pixel shift) | box membership in integers (`_box_window`); regression tests; exact Fraction reference |
+| `scaled_size` clamped an empty size to 1 px where `F.interpolate` raises | plain floor; `resample` raises on a non-positive size |
+| an ambient autocast ran the matmuls in bf16 | autocast disabled inside `resample`; dtype test |
+| weights with an infinite sum passed validation and failed later in `random.choices` | finite positive sum required |
+| an explicit list without weights used `random.choice`, D6 said `random.choices` | D6 reworded: intended (the spelled-out legacy list equals the default) |
+| the RNG test replayed python `random` only | outputs and python / numpy / torch states against the frozen reference, with and without JPEG. Worker coverage belongs to O2 (`blur_prob`), O1 does not touch the worker |

@@ -50,6 +50,8 @@ _DEGRADATIONS: dict[str, Any] = {
             "sinc_prob": float,
             "resize_prob": list,
             "resize_range": list,
+            "resize_mode": list,  # stage 2: resize_mode2, resize_mode_prob2
+            "resize_mode_prob": list,
             "gaussian_noise_prob": float,
             "noise_range": list,
             "poisson_scale_range": list,
@@ -59,6 +61,8 @@ _DEGRADATIONS: dict[str, Any] = {
     },
     "rotation": list,
     "final_sinc_prob": float,
+    "final_resize_mode": list,
+    "final_resize_mode_prob": list,
     "second_blur_prob": float,
     "jpeg_compress": bool,
 }
