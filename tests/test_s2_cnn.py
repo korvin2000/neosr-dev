@@ -691,3 +691,12 @@ def test_span_fast_fan_in_init_keeps_every_block_alive() -> None:
         if p.requires_grad and p.grad.abs().max() < 1e-6
     ]
     assert not weak, weak
+
+
+@pytest.mark.parametrize("name", ["safmn", "safmn_l", "light_safmnpp"])
+def test_safmn_runs_below_its_pooling_stride(name: str) -> None:
+    """MX-17: a side under 8 px asked adaptive_max_pool2d for an empty output."""
+    net = _net(name, scale=2).eval()
+    with torch.inference_mode():
+        for h, w in ((5, 7), (1, 1), (8, 3)):
+            assert net(torch.rand(1, 3, h, w)).shape == (1, 3, 2 * h, 2 * w)

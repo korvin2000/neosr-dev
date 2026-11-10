@@ -323,6 +323,15 @@ def test_debug_mode(tmp_path: Path) -> None:
             ),
             "max_skip_streak",
         ),
+        *(
+            (
+                HEAD,
+                BASE.replace("batch_size = 2", 'batch_size = 2\ncolor = "y"')
+                + f'\n[train.some_opt]\ntype = "{kind}"\n',
+                f"some_opt.*{kind} needs RGB",
+            )
+            for kind in ("consistency_loss", "kl_loss", "fdl_loss")  # stage-2 L-13
+        ),
         (HEAD, BASE + "\n[val]\ntile = 32\n", "need tile > 2"),  # default overlap 16
         (HEAD, BASE + "\n[val]\ntile = 16\ntile_overlap = 8\n", "need tile > 2"),
         (HEAD, BASE + "\n[val]\ntile = 16\ntile_overlap = -1\n", "need tile > 2"),

@@ -8,7 +8,13 @@ from neosr.utils.registry import LOSS_REGISTRY
 
 @LOSS_REGISTRY.register()
 class kl_loss(Loss):
-    """KL-Divergence loss."""
+    """KL divergence between the channel softmaxes of the output and the target, per pixel.
+
+    What it does not do (stage-2 L-12, measured): it is invariant to a per-pixel offset shared by
+    the channels (an offset of 0.3 costs 6e-6), so it does not constrain brightness; `batchmean`
+    sums over C, H and W, so the value grows with the patch area (x3.8 from 128 to 256 px) and a
+    weight does not transfer across `patch_size`; on one-channel input it is identically 0.
+    """
 
     def forward(self, net_output: Tensor, gt: Tensor):
         # Convert net_output and gt to probability distributions

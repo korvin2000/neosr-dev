@@ -132,7 +132,7 @@ class SAFM(nn.Module):
         out = []
         for i in range(self.n_levels):
             if i > 0:
-                p_size = (h // 2**i, w // 2**i)
+                p_size = (max(h // 2**i, 1), max(w // 2**i, 1))  # a side under 2**i px
                 s = F.adaptive_max_pool2d(xc[i], p_size)
                 s = self.mfr[i](s)
                 s = F.interpolate(s, size=(h, w), mode="nearest")
@@ -233,7 +233,7 @@ class SimpleSAFM(nn.Module):
 
         x0, x1 = self.proj(x).chunk(2, dim=1)
 
-        x2 = F.adaptive_max_pool2d(x0, (h // 8, w // 8))
+        x2 = F.adaptive_max_pool2d(x0, (max(h // 8, 1), max(w // 8, 1)))
         x2 = self.dwconv(x2)
         x2 = F.interpolate(x2, size=(h, w), mode="bilinear")
         x2 = self.act(x2) * x0

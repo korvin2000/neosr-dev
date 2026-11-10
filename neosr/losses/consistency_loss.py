@@ -199,8 +199,9 @@ class consistency_loss(Loss):
         if self.cosim:
             cosim_chroma = 1 - self.similarity(input_chroma, target_chroma).mean()
             cosim_luma = 1 - self.similarity(input_luma, target_luma).mean()
-            # fixed 0.5 weights (higher values destabilise); only added once small, so
-            # early iterations are unaffected - torch.where avoids a host sync
+            # fixed 0.5 weights (higher values destabilise); added only below 1e-3, which any
+            # non-random output already is, so the term is on from the start and tiny (~1e-5,
+            # stage-2 L-14) - torch.where avoids a host sync
             cosim = 0.5 * cosim_chroma + 0.5 * cosim_luma
             loss = loss + torch.where(cosim < 1e-3, cosim, 0.0)
 

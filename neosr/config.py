@@ -491,6 +491,14 @@ def validate_train(cfg: dict[str, Any]) -> None:
     if ds.get("persistent_workers") and ds.get("num_worker_per_gpu") == 0:
         msg = "datasets.train.persistent_workers needs num_worker_per_gpu > 0"
         raise ConfigError(msg)
+    if ds.get("color") == "y":  # one channel: these terms crash on it, kl_loss is identically 0
+        for key, opt in train.items():
+            kind = opt.get("type") if key.endswith("_opt") and isinstance(opt, dict) else None
+            if kind in {"consistency_loss", "kl_loss"} or (
+                kind == "fdl_loss" and opt.get("model", "dinov2") == "dinov2"
+            ):
+                msg = f'[train.{key}] {kind} needs RGB images; datasets.train.color = "y" trains on luma'
+                raise ConfigError(msg)
     if not 0 <= (multi := ds.get("aug_multi_prob", 0.3)) <= 1:
         msg = f"datasets.train.aug_multi_prob must be in [0, 1], got {multi}"
         raise ConfigError(msg)

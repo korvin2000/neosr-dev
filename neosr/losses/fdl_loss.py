@@ -296,6 +296,10 @@ class fdl_loss(Loss):
     The random projections come from a CPU generator seeded with `seed`, so every
     build (and every resumed run) optimises the same objective.
 
+    The value depends on the patch size (stage-2 L-11: 16.3 / 19.5 / 29.2 at 128 / 256 / 512 px on
+    the same content, the unnormalised FFT grows with the token count), so a `loss_weight` tuned
+    at one `patch_size` does not transfer to another: about x1.7-1.9 per doubling of the side.
+
     `checkpoint=True` (dinov2 only, opt-in) recomputes the backbone's sr-branch activations in
     backward: bitwise the same loss and gradient, ~70 % less saved memory, ~+20 % FDL time (L-17).
 
