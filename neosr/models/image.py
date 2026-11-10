@@ -34,6 +34,7 @@ from neosr.models.tiling import infer_tiled
 from neosr.runtime import Runtime
 from neosr.utils import get_root_logger, imwrite, tc, tensor2img
 from neosr.utils.img_util import quantize
+from neosr.utils.registry import MODEL_REGISTRY
 
 # optimizers without a native warmup_steps: the trainer prepends a LinearLR warmup (ST-10)
 LINEAR_WARMUP = frozenset({"adam", "adamw", "nadam", "adan"})
@@ -107,6 +108,7 @@ def image_id(lq_path: str, root: str | None) -> Path:
         return Path(p.stem)
 
 
+@MODEL_REGISTRY.register()
 class image(base):
     """Paired SR training and inference. `otf` overrides only how a training batch is made."""
 

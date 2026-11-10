@@ -3,6 +3,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from neosr.utils.registry import ARCH_REGISTRY
+
 
 class LayerNorm(nn.Module):
     r"""LayerNorm that supports two data formats: channels_last (default) or channels_first.
@@ -200,6 +202,7 @@ class ResGroup(nn.Module):
         return self.body_t(res) + x
 
 
+@ARCH_REGISTRY.register(scale="scale")
 class man(nn.Module):
     def __init__(
         self,
@@ -238,9 +241,11 @@ class man(nn.Module):
         return self.tail(res)
 
 
+@ARCH_REGISTRY.register(scale="scale")
 def man_tiny(**kwargs):
     return man(n_resblocks=5, n_feats=48, **kwargs)
 
 
+@ARCH_REGISTRY.register(scale="scale")
 def man_light(**kwargs):
     return man(n_resblocks=24, n_feats=60, **kwargs)

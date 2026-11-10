@@ -6,6 +6,8 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch import nn
 
+from neosr.utils.registry import ARCH_REGISTRY
+
 
 def default_conv(in_channels, out_channels, kernel_size, bias=True):
     return nn.Conv2d(
@@ -257,6 +259,7 @@ class UFONE(nn.Module):
         return local_features
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 class ditn(nn.Module):
     def __init__(
         self,

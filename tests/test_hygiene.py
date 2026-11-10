@@ -1,4 +1,5 @@
-"""Banned constructs under neosr/. ALLOW must stay empty; a new offender is fixed, not allowlisted."""
+"""Banned constructs under neosr/. A new offender is fixed, not allowlisted: ALLOW names only the one
+module that owns a construct by design (importing by name belongs to the registries, design T7)."""
 
 import re
 from pathlib import Path
@@ -14,18 +15,20 @@ PATTERNS = {
     "sys.exit": r"\bsys\.exit\b",
     "sys.argv": r"\bsys\.argv\b",
     "bare except": r"^\s*except\s*:",
-    "registry": r"_REGISTRY\b",
+    "import by name": r"\b(importlib|pkgutil|__import__)\b",
 }
 
 
-# pattern -> files (relative to neosr/) that may still contain it; empty since T3-Z
-ALLOW: dict[str, set[str]] = {p: set() for p in PATTERNS}
+# pattern -> files (relative to neosr/, posix) that may contain it
+ALLOW: dict[str, set[str]] = {p: set() for p in PATTERNS} | {
+    "import by name": {"utils/registry.py"}
+}
 
 
 def offenders(pattern: str) -> set[str]:
     regex = re.compile(PATTERNS[pattern], re.MULTILINE)
     return {
-        str(f.relative_to(PKG))
+        f.relative_to(PKG).as_posix()
         for f in PKG.rglob("*.py")
         if regex.search(f.read_text("utf-8"))
     }

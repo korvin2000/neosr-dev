@@ -5,6 +5,8 @@ from torch.nn import functional as F
 
 from .arch_util import default_init_weights, make_layer, pixel_unshuffle
 
+from neosr.utils.registry import ARCH_REGISTRY
+
 
 class ResidualDenseBlock(nn.Module):
     """Residual Dense Block.
@@ -68,6 +70,7 @@ class RRDB(nn.Module):
         return out * self.scale_res + x
 
 
+@ARCH_REGISTRY.register(scale="scale")
 class desrgan(nn.Module):
     """Networks consisting of Residual in Residual Dense Block, which is used
     in ESRGAN.

@@ -7,6 +7,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from neosr.archs.arch_util import DropPath
+from neosr.utils.registry import ARCH_REGISTRY
 
 
 def _sdpa(q, k, v, attn_mask=None, dropout_p=0.0, scale=None):
@@ -471,6 +472,7 @@ class UpsampleOneStep(nn.Sequential):
         super().__init__(*m)
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 class grformer(nn.Module):
 
     def _init_weights(self, m):
@@ -605,6 +607,7 @@ class grformer(nn.Module):
         return x[:, :, : H * self.upscale, : W * self.upscale]
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def grformer_medium(**kwargs):
     return grformer(
         img_size=64,
@@ -615,6 +618,7 @@ def grformer_medium(**kwargs):
     )
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def grformer_large(**kwargs):
     return grformer(
         img_size=64,

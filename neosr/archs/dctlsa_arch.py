@@ -5,6 +5,7 @@ from collections import OrderedDict
 from torch import nn
 
 from neosr.archs.arch_util import to_2tuple
+from neosr.utils.registry import ARCH_REGISTRY
 
 
 class LocalModule(nn.Sequential):
@@ -459,6 +460,7 @@ def conv_block(
     return sequential(p, c, n, a)
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 class dctlsa(nn.Module):
     def __init__(
         self,

@@ -4,6 +4,8 @@ import torch.nn.functional as F
 from einops.layers.torch import Rearrange, Reduce
 from torch import nn
 
+from neosr.utils.registry import ARCH_REGISTRY
+
 
 class ASR(nn.Module):
     def __init__(self, n_feat):
@@ -227,6 +229,7 @@ class Block(nn.Module):
         self.body = nn.Sequential(*layers)
 
 
+@ARCH_REGISTRY.register(scale="scale")
 class plainusr(nn.Module):
     """PlainUSR: Chasing Faster ConvNet for Efficient Super-Resolution:
     https://arxiv.org/abs/2409.13435
@@ -323,9 +326,11 @@ class plainusr(nn.Module):
         return self.tail(x)
 
 
+@ARCH_REGISTRY.register(scale="scale")
 def plainusr_ultra(**kwargs):
     return plainusr(n_feat=32, im_feat=(32, 16), attn_feat=4, **kwargs)
 
 
+@ARCH_REGISTRY.register(scale="scale")
 def plainusr_large(**kwargs):
     return plainusr(n_feat=80, im_feat=(80, 64, 48), attn_feat=16, **kwargs)

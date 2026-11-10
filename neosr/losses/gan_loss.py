@@ -10,6 +10,7 @@ from torch.nn.modules import batchnorm
 from neosr.config import ConfigError
 from neosr.losses.base import Context, Loss
 from neosr.losses.wavelet_guided import AdvView
+from neosr.utils.registry import LOSS_REGISTRY
 
 
 def batch_coupled(net: nn.Module) -> bool:
@@ -46,6 +47,7 @@ def _count(v: object, low: int) -> bool:
     return isinstance(v, int) and not isinstance(v, bool) and v >= low
 
 
+@LOSS_REGISTRY.register()
 class gan_loss(Loss):
     """[train.gan_opt]: the generator's adversarial term; expand() adds the discriminator's term.
 

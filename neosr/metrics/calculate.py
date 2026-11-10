@@ -9,6 +9,7 @@ from torch.nn import functional as F
 
 from neosr.metrics.metric_util import reorder_image, to_y_channel
 from neosr.utils.img_util import img2tensor
+from neosr.utils.registry import METRIC_REGISTRY
 
 
 def _crop(img: np.ndarray, crop_border: int) -> np.ndarray:
@@ -20,6 +21,7 @@ def _crop(img: np.ndarray, crop_border: int) -> np.ndarray:
     return img[crop_border:-crop_border, crop_border:-crop_border, ...]
 
 
+@METRIC_REGISTRY.register()
 def calculate_psnr(
     img: np.ndarray,
     img2: np.ndarray,
@@ -108,6 +110,7 @@ def _ssim(img: np.ndarray | MatLike, img2: np.ndarray | MatLike) -> float:
     return ssim_map.mean()
 
 
+@METRIC_REGISTRY.register()
 def calculate_ssim(
     img: np.ndarray,
     img2: np.ndarray,
@@ -423,6 +426,7 @@ def _calculate_net_metric(
     return _net_metric_pt(key, x, y, device).item()
 
 
+@METRIC_REGISTRY.register()
 def calculate_dists(
     img: np.ndarray, img2: np.ndarray, device: torch.device | str | None = None
 ) -> float:
@@ -442,6 +446,7 @@ def calculate_dists(
     return _calculate_net_metric(("dists",), img, img2, device)
 
 
+@METRIC_REGISTRY.register(choices={"dataset": ["kadid", "pipal"]})
 def calculate_topiq(
     img: np.ndarray,
     img2: np.ndarray,
@@ -465,6 +470,7 @@ def calculate_topiq(
     return _calculate_net_metric(("topiq", dataset), img, img2, device)
 
 
+@METRIC_REGISTRY.register(choices={"net": ["alex", "vgg"]})
 def calculate_lpips(
     img: np.ndarray,
     img2: np.ndarray,

@@ -6,11 +6,13 @@ from torch import Tensor, nn
 from neosr.archs.vgg_arch import VGGFeatureExtractor
 from neosr.losses.base import Loss
 from neosr.losses.basic_loss import chc_loss
+from neosr.utils.registry import LOSS_REGISTRY
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 
+@LOSS_REGISTRY.register()
 class vgg_perceptual_loss(Loss):
     """Perceptual loss with VGG19.
 

@@ -4,6 +4,8 @@ import torch.nn
 from torch import nn as nn
 from torch.nn import functional as F
 
+from neosr.utils.registry import ARCH_REGISTRY
+
 
 def make_layer(basic_block, num_basic_block, **kwarg):
     """Make layers by stacking the same blocks.
@@ -434,6 +436,7 @@ class DFEB(nn.Module):
         return x
 
 
+@ARCH_REGISTRY.register(scale="upscale_factor")
 class msdan(nn.Module):
     def __init__(self, channels=48, num_DFEB=8, upscale_factor=4):
         super(msdan, self).__init__()

@@ -8,6 +8,7 @@ from torch.nn.init import trunc_normal_
 from torch.utils import checkpoint
 
 from neosr.archs.arch_util import DropPath, to_2tuple
+from neosr.utils.registry import ARCH_REGISTRY
 
 
 class DFE(nn.Module):
@@ -853,6 +854,7 @@ class UpsampleOneStep(nn.Sequential):
         super(UpsampleOneStep, self).__init__(*m)
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 class hit_srf(nn.Module):
     """HiT-SRF network.
 
@@ -1112,6 +1114,7 @@ class hit_srf(nn.Module):
         return x[:, :, : H * self.upscale, : W * self.upscale]
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def hit_srf_medium(**kwargs):
     return hit_srf(
         img_size=48,
@@ -1124,6 +1127,7 @@ def hit_srf_medium(**kwargs):
     )
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def hit_srf_large(**kwargs):
     return hit_srf(
         img_size=48,

@@ -51,7 +51,7 @@ def make_pair(case: str, dev: str = DEV) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 def build(name: str, dev: str = DEV) -> torch.nn.Module:
-    if name == "kl_loss" and name not in losses_pkg.LOSSES:  # slated for deletion (G5.M6)
+    if name == "kl_loss" and name not in losses_pkg.LOSS_REGISTRY:  # slated for deletion (G5.M6)
         pytest.skip("kl_loss not in the loss table")
     return build_loss({"type": name, **LOSSES[name][0]}).to(dev)
 

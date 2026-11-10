@@ -2,6 +2,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from neosr.utils.registry import ARCH_REGISTRY
+
 
 class SECA(nn.Module):
     """
@@ -142,6 +144,7 @@ class Attn(nn.Module):
         return out
 
 
+@ARCH_REGISTRY.register(scale="sr_rate")
 class sebica(nn.Module):
     def __init__(self, sr_rate=4, N=16, mini=False, dropout=0.0):
         super().__init__()
@@ -176,5 +179,6 @@ class sebica(nn.Module):
         return h + base
 
 
+@ARCH_REGISTRY.register(scale="sr_rate")
 def sebica_mini(**kwargs):
     return sebica(N=8, mini=True, **kwargs)

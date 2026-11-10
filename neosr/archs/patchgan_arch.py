@@ -4,6 +4,8 @@ import functools
 from torch import nn
 from torch.nn.utils import spectral_norm
 
+from neosr.utils.registry import ARCH_REGISTRY
+
 
 def get_conv_layer(
     input_nc, ndf, kernel_size, stride, padding, bias=True, use_sn=False
@@ -29,6 +31,7 @@ def get_conv_layer(
     )
 
 
+@ARCH_REGISTRY.register(scale=None)
 class patchgan(nn.Module):
     """PatchGAN discriminator with spectral normalization, first proposed by:
        https://arxiv.org/abs/1711.11585

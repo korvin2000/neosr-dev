@@ -7,6 +7,8 @@ from einops import rearrange
 from einops.layers.torch import Rearrange, Reduce
 from torch import einsum, nn
 
+from neosr.utils.registry import ARCH_REGISTRY
+
 
 class CA_layer(nn.Module):
     def __init__(self, channel, reduction=16):
@@ -1061,6 +1063,7 @@ class omnisr_net(nn.Module):
         return out
 
 
+@ARCH_REGISTRY.register(scale="upsampling")
 def omnisr(upsampling: int = 4, window_size: int = 8, **kwargs):
     return omnisr_net(
         res_num=5,

@@ -5,6 +5,7 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 
 from neosr.losses.base import Loss
+from neosr.utils.registry import LOSS_REGISTRY
 
 
 class GaussianFilter2D(nn.Module):
@@ -54,6 +55,7 @@ class GaussianFilter2D(nn.Module):
         return F.conv2d(x, self.col[:c], padding=(p, 0), groups=c)
 
 
+@LOSS_REGISTRY.register()
 class mssim_loss(Loss):
     fp32 = True
 

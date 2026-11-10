@@ -8,7 +8,7 @@ import torch
 from torch.nn import functional as F
 
 from neosr.config import ConfigError
-from neosr.losses import LOSSES, build_losses
+from neosr.losses import LOSS_REGISTRY, build_losses
 from neosr.losses.gan_loss import gan_loss
 from neosr.models.phase import Phase
 from tests.test_gan import Critic, Forbidden, images
@@ -116,7 +116,7 @@ def test_hinge_takes_no_labels():
 
 # ------------------------------------------------------------------ psnr_loss
 def test_psnr_loss_is_minus_the_mean_psnr_in_db():
-    assert LOSSES["psnr_loss"] == ("basic_loss", None)
+    assert LOSS_REGISTRY["psnr_loss"].module == "basic_loss"
     (term,), _ = build_losses(
         {"psnr_opt": {"type": "psnr_loss", "loss_weight": 0.5}},
         scale=2,

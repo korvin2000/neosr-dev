@@ -15,6 +15,7 @@ from torchvision.models import (
 )
 
 from neosr.losses.base import Loss
+from neosr.utils.registry import LOSS_REGISTRY
 
 
 class VGG(nn.Module):
@@ -287,6 +288,7 @@ class dinov2(nn.Module):
         return self.get_features(x)
 
 
+@LOSS_REGISTRY.register()
 class fdl_loss(Loss):
     """
     Adapted from: https://github.com/eezkni/FDL

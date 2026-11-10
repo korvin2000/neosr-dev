@@ -8,23 +8,18 @@ import torch
 from torch.utils.data import DataLoader, Dataset, Sampler, get_worker_info
 
 from neosr.utils.factory import build
+from neosr.utils.registry import DATASET_REGISTRY
 from neosr.utils.rng import seed_rng
 
 if TYPE_CHECKING:
     from neosr.runtime import Runtime
 
-__all__ = ["DATASETS", "build_dataloader", "build_dataset"]
-
-DATASETS: dict[str, tuple[str, str | None]] = {
-    "otf": ("otf_dataset", None),
-    "paired": ("paired_dataset", None),
-    "single": ("single_dataset", None),
-}
+__all__ = ["DATASET_REGISTRY", "build_dataloader", "build_dataset"]
 
 
 def build_dataset(cfg: Mapping[str, Any]) -> Dataset:
     section = f"datasets.{cfg.get('phase')}"
-    return build(DATASETS, "neosr.data", section, cfg, whole=True)
+    return build(DATASET_REGISTRY, section, cfg, whole=True)
 
 
 def worker_init_fn(_: int) -> None:

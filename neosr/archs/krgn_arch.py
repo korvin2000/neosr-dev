@@ -3,6 +3,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from neosr.utils.registry import ARCH_REGISTRY
+
 
 class MeanShift(nn.Conv2d):
     def __init__(
@@ -212,6 +214,7 @@ class PMRB(nn.Module):
         return out + x
 
 
+@ARCH_REGISTRY.register(scale="scale")
 class krgn(nn.Module):
     """KRGN network structure.
 

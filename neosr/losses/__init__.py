@@ -1,4 +1,4 @@
-"""Loss table, single-loss builder and the training-objective builder (design T1 §4.2, T3 L-D)."""
+"""Single-loss builder and the training-objective builder (design T1 §4.2, T3 L-D, T7)."""
 
 import math
 from collections.abc import Mapping
@@ -10,9 +10,10 @@ from torch import nn
 from neosr.config import ConfigError
 from neosr.losses.base import Loss
 from neosr.utils.factory import build
+from neosr.utils.registry import LOSS_REGISTRY
 
 __all__ = [
-    "LOSSES",
+    "LOSS_REGISTRY",
     "RESERVED",
     "RESERVED_PREFIX",
     "SLOT_KEY",
@@ -20,26 +21,6 @@ __all__ = [
     "build_loss",
     "build_losses",
 ]
-
-# type -> (module under neosr.losses, scale kwarg | None)
-LOSSES: dict[str, tuple[str, str | None]] = {
-    "L1Loss": ("basic_loss", None),
-    "MSELoss": ("basic_loss", None),
-    "psnr_loss": ("basic_loss", None),
-    "HuberLoss": ("basic_loss", None),
-    "chc_loss": ("basic_loss", None),
-    "consistency_loss": ("consistency_loss", None),
-    "dists_loss": ("dists_loss", None),
-    "fdl_loss": ("fdl_loss", None),
-    "ff_loss": ("ff_loss", None),
-    "gan_loss": ("gan_loss", None),
-    "kl_loss": ("kl_loss", None),
-    "ldl_loss": ("ldl_loss", None),
-    "msswd_loss": ("msswd_loss", None),
-    "ncc_loss": ("ncc_loss", None),
-    "mssim_loss": ("ssim_loss", None),
-    "vgg_perceptual_loss": ("vgg_perceptual_loss", None),
-}
 
 # legacy log names; any other slot logs as l_g_<slot>
 SLOT_KEY = {"pixel": "pix", "perceptual": "percep"}
@@ -66,7 +47,7 @@ SCHEDULE_KEYS = (
 def build_loss(
     cfg: Mapping[str, Any], *, scale: int | None = None, section: str = "train.loss"
 ) -> nn.Module:
-    return build(LOSSES, "neosr.losses", section, cfg, scale=scale)
+    return build(LOSS_REGISTRY, section, cfg, scale=scale)
 
 
 def build_losses(

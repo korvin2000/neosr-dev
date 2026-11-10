@@ -8,6 +8,7 @@ from torch import nn
 from torch.nn.init import trunc_normal_
 
 from neosr.archs.arch_util import window_sdpa
+from neosr.utils.registry import ARCH_REGISTRY
 
 
 def img2windows(img, H_sp, W_sp):
@@ -756,6 +757,7 @@ class UpsampleOneStep(nn.Sequential):
         super(UpsampleOneStep, self).__init__(*m)
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 class craft(nn.Module):
     r"""Cross-Refinement Adaptive Fusion Transformer
         Some codes are based on SwinIR.

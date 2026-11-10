@@ -3,6 +3,8 @@ from einops import rearrange
 from torch import nn
 from torch.nn import functional as F
 
+from neosr.utils.registry import ARCH_REGISTRY
+
 
 def exists(val):
     return val is not None
@@ -381,6 +383,7 @@ class LRSA(nn.Module):
         return rearrange(x, "b (h w) c->b c h w", h=h)
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 class catanet(nn.Module):
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):

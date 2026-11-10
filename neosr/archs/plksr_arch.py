@@ -9,6 +9,7 @@ from torch.nn import functional as F
 from torch.nn.init import trunc_normal_
 
 from neosr.archs.arch_util import no_graph
+from neosr.utils.registry import ARCH_REGISTRY
 
 
 def repeat_interleave(x, n):
@@ -343,6 +344,7 @@ class PLKBlock(nn.Module):
         return x + x_skip
 
 
+@ARCH_REGISTRY.register(scale="upscaling_factor")
 class plksr(nn.Module):
     def __init__(
         self,
@@ -403,5 +405,6 @@ class plksr(nn.Module):
         return x
 
 
+@ARCH_REGISTRY.register(scale="upscaling_factor")
 def plksr_tiny(**kwargs):
     return plksr(n_blocks=12, kernel_size=13, use_ea=False, **kwargs)

@@ -2,7 +2,10 @@
 from torch import nn
 from torch.nn import functional as F
 
+from neosr.utils.registry import ARCH_REGISTRY
 
+
+@ARCH_REGISTRY.register(scale="upscale")
 class compact(nn.Module):
     """A compact VGG-style network structure for super-resolution.
 

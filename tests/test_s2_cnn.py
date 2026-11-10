@@ -15,8 +15,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from neosr.archs import ARCH_REGISTRY as ARCHS
 from neosr.archs import (
-    ARCHS,
     aether_arch,
     build_network,
     cfsr_arch,
@@ -40,7 +40,7 @@ LANE = {
     *("sebica", "cfsr", "hasn", "plainusr", "ea2fpn", "desrgan", "flexnet", "unet"),
     *("dunet", "patchgan", "metagan", "resgan"),
 }
-ROWS = sorted(n for n, (stem, _) in ARCHS.items() if stem.removesuffix("_arch") in LANE)
+ROWS = sorted(n for n, row in ARCHS.items() if row.module.removesuffix("_arch") in LANE)
 
 
 @pytest.fixture(autouse=True)

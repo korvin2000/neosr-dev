@@ -8,6 +8,7 @@ from torch.utils.checkpoint import checkpoint
 
 from neosr.archs.arch_util import DropPath, shift_mask, to_2tuple, window_sdpa
 from neosr.archs.swinir_arch import calculate_mask
+from neosr.utils.registry import ARCH_REGISTRY
 
 
 class ChannelAttention(nn.Module):
@@ -730,6 +731,7 @@ class Upsample(nn.Sequential):
         super(Upsample, self).__init__(*m)
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 class drct(nn.Module):
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -932,6 +934,7 @@ class drct(nn.Module):
         return x[:, :, : h * s, : w * s]
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def drct_l(**kwargs):
     return drct(
         depths=(6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6),
@@ -940,6 +943,7 @@ def drct_l(**kwargs):
     )
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def drct_xl(**kwargs):
     return drct(
         depths=(6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6),
@@ -948,5 +952,6 @@ def drct_xl(**kwargs):
     )
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def drct_s(**kwargs):
     return drct(embed_dim=48, depths=(2, 2, 2, 2), num_heads=(6, 6, 6, 6), **kwargs)

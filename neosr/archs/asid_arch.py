@@ -4,6 +4,8 @@ from einops import rearrange
 from einops.layers.torch import Rearrange, Reduce
 from torch import einsum, nn
 
+from neosr.utils.registry import ARCH_REGISTRY
+
 
 class LayerNormFunction(torch.autograd.Function):
     @staticmethod
@@ -738,6 +740,7 @@ class IDSG_A(nn.Module):
         return self.esa(out), a1, a2, a3, a4, a5, a6
 
 
+@ARCH_REGISTRY.register(scale="scale")
 class asid(nn.Module):
     def __init__(
         self,
@@ -871,5 +874,6 @@ class asid(nn.Module):
         return out[:, :, : H * self.up_scale, : W * self.up_scale]
 
 
+@ARCH_REGISTRY.register(scale="scale")
 def asid_d8(**kwargs):
     return asid(res_num=8, d8=True, **kwargs)

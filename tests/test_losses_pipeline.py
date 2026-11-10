@@ -14,7 +14,8 @@ from torch.nn import functional as F
 
 import neosr.losses as losses
 from neosr.config import ConfigError, load_config
-from neosr.losses import LOSSES, SLOT_KEY, build_loss, build_losses
+from neosr.losses import LOSS_REGISTRY as LOSSES
+from neosr.losses import SLOT_KEY, build_loss, build_losses
 from neosr.losses.base import Context, Loss
 from neosr.utils.factory import inject_scale, resolve
 
@@ -179,11 +180,10 @@ def test_losses_table_is_complete_and_scale_free():
         if isinstance(node, ast.ClassDef)
         and any("LOSS_REGISTRY" in ast.unparse(d) for d in node.decorator_list)
     }
-    if registered:  # until T3-Z deletes the decorators
-        assert registered == set(LOSSES)
+    assert registered == set(LOSSES)  # every row is a class (design T7: the scan reads these)
     # PatchLoss, the only loss that took the run scale, was removed (Phase L1)
-    for name, (_, scale_kw) in LOSSES.items():
-        obj = resolve(LOSSES, "neosr.losses", "t", name)
+    for name, (_, scale_kw, _) in LOSSES.items():
+        obj = resolve(LOSSES, "t", name)
         assert scale_kw is None, name
         assert not {"scale", "upscale"} & set(inspect.signature(obj).parameters), name
 
@@ -298,7 +298,7 @@ def dry_build(cfg, *, scale, section):
     """
     kw = dict(cfg)
     name = kw.pop("type")
-    obj = resolve(LOSSES, "neosr.losses", section, name)
+    obj = resolve(LOSSES, section, name)
     inject_scale(LOSSES, section, name, kw, scale)
     stub = GanG(**kw) if name == "gan_loss" else L1(**kw)
     if name == "gan_loss":
@@ -333,7 +333,7 @@ def test_shipped_configs_dry_run(path, monkeypatch):
 # ---- T1 §6 A1 gate: the real constructors (runs once B1/A2 make every class a Loss) ----------
 
 MIGRATED = all(
-    issubclass(resolve(LOSSES, "neosr.losses", "t", n), Loss) for n in LOSSES
+    issubclass(resolve(LOSSES, "t", n), Loss) for n in LOSSES
 )
 
 

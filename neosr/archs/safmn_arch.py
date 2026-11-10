@@ -3,6 +3,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from neosr.utils.registry import ARCH_REGISTRY
+
 
 # Layer Norm
 class LayerNorm(nn.Module):
@@ -174,6 +176,7 @@ class BasicLayer(nn.Module):
         return self.conv(self.layers(x)) + x
 
 
+@ARCH_REGISTRY.register(scale="upscaling_factor")
 class safmn(nn.Module):
     def __init__(
         self,
@@ -208,6 +211,7 @@ class safmn(nn.Module):
         return x
 
 
+@ARCH_REGISTRY.register(scale="upscaling_factor")
 def safmn_l(**kwargs):
     return safmn(dim=128, n_blocks=16, **kwargs)
 
@@ -266,6 +270,7 @@ class AttBlock_pp(nn.Module):
         return out
 
 
+@ARCH_REGISTRY.register(scale="upscaling_factor")
 class light_safmnpp(nn.Module):
     def __init__(self, dim=32, n_blocks=2, ffn_scale=1.5, upscaling_factor=4):
         super().__init__()

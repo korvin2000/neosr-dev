@@ -6,6 +6,7 @@ from torch.nn.init import trunc_normal_
 from torch.nn.utils import spectral_norm
 
 from neosr.archs.arch_util import DropPath
+from neosr.utils.registry import ARCH_REGISTRY
 
 
 class Attention(nn.Module):
@@ -145,6 +146,7 @@ class Blocks(nn.Module):
         return self.blocks(x).permute(0, 3, 1, 2)
 
 
+@ARCH_REGISTRY.register(scale=None)
 class metagan(nn.Module):
     def __init__(
         self,

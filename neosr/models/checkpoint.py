@@ -17,8 +17,8 @@ import numpy as np
 import torch
 from torch import nn
 
-from neosr.archs import ARCHS
 from neosr.config import ConfigError
+from neosr.utils.registry import ARCH_REGISTRY
 from neosr.utils.rng import get_state as neosr_get_state
 from neosr.utils.rng import set_state as neosr_set_state
 
@@ -120,7 +120,7 @@ def merge_network(
     out = dict(given)
     if not saved:
         return out
-    native = ARCHS.get(saved.get("type"), (None, None))[1]
+    native = ARCH_REGISTRY.get(saved.get("type"), (None, None))[1]
     saved = {k: v for k, v in saved.items() if k != native}
     if out.setdefault("type", saved.get("type")) != saved.get("type"):
         log.warning(

@@ -5,6 +5,7 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 
 from neosr.losses.base import Loss
+from neosr.utils.registry import LOSS_REGISTRY
 
 _reduction_modes: list[str] = ["none", "mean", "sum"]
 
@@ -23,6 +24,7 @@ def huber_loss(
     return F.huber_loss(pred, target, reduction=reduction, delta=delta)
 
 
+@LOSS_REGISTRY.register()
 class psnr_loss(Loss):
     """-PSNR (peak 1) as a loss: 10 * log10(MSE_i + eps) per image in dB, then `reduction` over the
     images ('mean' | 'sum': a training term is a scalar); fp32 (the log of small MSEs)."""
@@ -48,6 +50,7 @@ class psnr_loss(Loss):
         return getattr(db, self.reduction)()
 
 
+@LOSS_REGISTRY.register()
 class L1Loss(Loss):
     """L1 (mean absolute error, MAE) loss.
 
@@ -77,6 +80,7 @@ class L1Loss(Loss):
         return l1_loss(pred, target, reduction=self.reduction)
 
 
+@LOSS_REGISTRY.register()
 class MSELoss(Loss):
     """MSE (L2) loss.
 
@@ -106,6 +110,7 @@ class MSELoss(Loss):
         return mse_loss(pred, target, reduction=self.reduction)
 
 
+@LOSS_REGISTRY.register()
 class HuberLoss(Loss):
     """HuberLoss
 
@@ -138,6 +143,7 @@ class HuberLoss(Loss):
         return huber_loss(pred, target, delta=self.delta, reduction=self.reduction)
 
 
+@LOSS_REGISTRY.register()
 class chc_loss(Loss):
     """Clipped pseudo-Huber with Cosine Similarity Loss.
 

@@ -4,6 +4,7 @@ import torch
 from torch import nn
 
 from neosr.archs.arch_util import DropPath, to_2tuple
+from neosr.utils.registry import ARCH_REGISTRY
 
 
 class ChannelAttention(nn.Module):
@@ -602,6 +603,7 @@ class Upsample(nn.Sequential):
         super().__init__(*m)
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 class microsr(nn.Module):
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -783,6 +785,7 @@ class microsr(nn.Module):
         return x[:, :, : h * self.upscale, : w * self.upscale]
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def microsr_light(**kwargs):
     return microsr(
         embed_dim=48,

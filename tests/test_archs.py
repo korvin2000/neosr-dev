@@ -15,7 +15,8 @@ import pytest
 import torch
 from torch import Tensor
 
-from neosr.archs import ARCHS, build_network
+from neosr.archs import ARCH_REGISTRY as ARCHS
+from neosr.archs import build_network
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = Path(d) if (d := os.environ.get("NEOSR_ARCH_FIXTURE")) else None
@@ -42,7 +43,7 @@ TRAIN_TOO_BIG = {
 
 def cases() -> list:
     out = []
-    for name, (stem, kw) in ARCHS.items():
+    for name, (stem, kw, _) in ARCHS.items():
         for scale in (1,) if name in ONLY_1X else (2, 4) if kw else (None,):
             marks = []
             if (name, scale) in UNSUPPORTED:
@@ -122,7 +123,7 @@ print(json.dumps(res))
 
 @pytest.fixture(scope="module")
 def imports(tmp_path_factory) -> dict:
-    stems = sorted({stem for stem, _ in ARCHS.values()})
+    stems = sorted({row.module for row in ARCHS.values()})
     env = {
         **os.environ,
         "PYTHONPATH": str(ROOT),
@@ -143,7 +144,7 @@ def imports(tmp_path_factory) -> dict:
     return json.loads(r.stdout.strip().splitlines()[-1])
 
 
-@pytest.mark.parametrize("stem", sorted({stem for stem, _ in ARCHS.values()}))
+@pytest.mark.parametrize("stem", sorted({row.module for row in ARCHS.values()}))
 def test_import_without_opt(stem: str, imports: dict) -> None:
     assert imports[stem] is None, imports[stem]
     assert imports["_cuda"] is False

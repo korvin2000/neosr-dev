@@ -13,8 +13,10 @@ from neosr.data.data_util import (
 )
 from neosr.data.file_client import FileClient
 from neosr.utils import img2tensor
+from neosr.utils.registry import DATASET_REGISTRY
 
 
+@DATASET_REGISTRY.register()
 class single(data.Dataset):
     """Read only lq images in the test phase.
 

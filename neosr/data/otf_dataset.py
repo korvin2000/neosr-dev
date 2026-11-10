@@ -24,6 +24,7 @@ from neosr.data.degradations import circular_lowpass_kernel, random_mixed_kernel
 from neosr.data.file_client import FileClient
 from neosr.data.transforms import basic_augment
 from neosr.utils import get_root_logger, img2tensor, tc
+from neosr.utils.registry import DATASET_REGISTRY
 from neosr.utils.rng import rng
 
 
@@ -76,6 +77,7 @@ def _check_kernel_keys(opt: dict[str, Any]) -> None:
             raise ConfigError(msg, key=key)
 
 
+@DATASET_REGISTRY.register()
 class otf(data.Dataset):
     """OTF degradation dataset. Originally from Real-ESRGAN.
 

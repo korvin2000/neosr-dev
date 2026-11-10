@@ -4,6 +4,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from neosr.archs.arch_util import DropPath
+from neosr.utils.registry import ARCH_REGISTRY
 
 
 class LayerNorm(nn.Module):
@@ -228,6 +229,7 @@ class EIMNBlock(nn.Module):
         )
 
 
+@ARCH_REGISTRY.register(scale="scale")
 class eimn(nn.Module):
     def __init__(
         self,
@@ -295,9 +297,11 @@ class eimn(nn.Module):
         return self.tail(identity + x)
 
 
+@ARCH_REGISTRY.register(scale="scale")
 def eimn_l(**kwargs) -> eimn:
     return eimn(embed_dims=64, num_stages=16, **kwargs)
 
 
+@ARCH_REGISTRY.register(scale="scale")
 def eimn_a(**kwargs) -> eimn:
     return eimn(embed_dims=64, num_stages=14, **kwargs)

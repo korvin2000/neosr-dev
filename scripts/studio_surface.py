@@ -1,7 +1,8 @@
 """The trainer's configuration surface as JSON: the contract NeoSR Studio's catalog is tested against.
 
-Reads the tables statically (ast; `neosr/config.py` is imported, it is torch-free), so it runs on any
-Python >= 3.11 without torch, CUDA or the project environment.
+Reads the registries through their own source scan and the remaining tables statically (ast);
+`neosr/config.py` and `neosr/utils/registry.py` are loaded by path (both are torch-free), so it runs
+on any Python >= 3.12 without torch, CUDA or the project environment.
 
     python scripts/studio_surface.py                  # rewrite studio/shared/catalog/neosr-surface.json
     python scripts/studio_surface.py --check          # exit 1 when that file is stale
@@ -27,10 +28,9 @@ INTERNAL_ARCHS = {"VGGFeatureExtractor"}  # scale-free but not a discriminator
 TYPE_NAMES = {dict: "table", list: "array"}
 
 
-def _config() -> Any:
-    spec = importlib.util.spec_from_file_location(
-        "neosr_config", ROOT / "neosr" / "config.py"
-    )
+def _load(rel: str) -> Any:
+    """A torch-free neosr module by path: importing its package would import torch."""
+    spec = importlib.util.spec_from_file_location(Path(rel).stem, ROOT / rel)
     module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     spec.loader.exec_module(module)  # type: ignore[union-attr]
     return module
@@ -55,10 +55,6 @@ def _assigned(rel: str, name: str, *, nested: bool = False) -> ast.expr:
             return node.value  # type: ignore[union-attr,return-value]
     msg = f"{rel}: no assignment to {name}"
     raise LookupError(msg)
-
-
-def _table(rel: str, name: str) -> dict[str, Any]:
-    return ast.literal_eval(_assigned(rel, name))
 
 
 def _keys(rel: str, name: str, *, nested: bool = False) -> list[str]:
@@ -91,30 +87,29 @@ def _types(expected: Any) -> str | list[str]:
 
 
 def build() -> dict[str, Any]:
-    cfg = _config()
-    archs = _table("neosr/archs/__init__.py", "ARCHS")
-    scale_free = {k for k, (_, scale) in archs.items() if scale is None}
+    cfg, reg = _load("neosr/config.py"), _load("neosr/utils/registry.py")
+    archs = reg.ARCH_REGISTRY
+    scale_free = {k for k, row in archs.items() if row.scale is None}
     return {
         "generators": sorted(archs.keys() - scale_free),
         "discriminators": sorted(scale_free - INTERNAL_ARCHS),
-        "scale_kwarg": {k: v[1] for k, v in sorted(archs.items()) if v[1]},
-        "losses": sorted(_table("neosr/losses/__init__.py", "LOSSES")),
+        "scale_kwarg": {k: row.scale for k, row in sorted(archs.items()) if row.scale},
+        "losses": sorted(reg.LOSS_REGISTRY),
         "loss_schedule_keys": list(
             ast.literal_eval(_assigned("neosr/losses/__init__.py", "SCHEDULE_KEYS"))
         ),
         "gan_types": _gan_types(),
-        "metrics": sorted(_table("neosr/metrics/__init__.py", "METRICS")),
+        "metrics": sorted(reg.METRIC_REGISTRY),
         "metric_choices": {
-            metric: {key: list(values) for key, values in choices.items()}
-            for metric, choices in _table(
-                "neosr/metrics/__init__.py", "CHOICES"
-            ).items()
+            metric: row.meta["choices"]
+            for metric, row in reg.METRIC_REGISTRY.items()
+            if "choices" in row.meta
         },
         "metric_lower": sorted(cfg.METRIC_LOWER),
         "optimizers": sorted(_keys("neosr/models/base.py", "OPTIMIZERS")),
         "schedulers": sorted(_keys("neosr/models/base.py", "SCHEDULERS")),
-        "models": sorted(_table("neosr/models/__init__.py", "MODELS")),
-        "datasets": sorted(_table("neosr/data/__init__.py", "DATASETS")),
+        "models": sorted(reg.MODEL_REGISTRY),
+        "datasets": sorted(reg.DATASET_REGISTRY),
         "scales": sorted(cfg.SCALES),
         "required": list(cfg.REQUIRED),
         "schema": {
@@ -130,7 +125,7 @@ def build() -> dict[str, Any]:
 
 def validate(paths: list[str]) -> int:
     """load_config + validate_train per file; a ConfigWarning (unknown key) counts as a failure."""
-    cfg, failed = _config(), 0
+    cfg, failed = _load("neosr/config.py"), 0
     for path in paths:
         try:
             with warnings.catch_warnings():

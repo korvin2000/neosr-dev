@@ -10,6 +10,8 @@ from torch.nn.init import trunc_normal_
 from .arch_util import to_2tuple, DropPath, shift_mask, window_sdpa
 from .swinir_arch import calculate_mask
 
+from neosr.utils.registry import ARCH_REGISTRY
+
 
 class Mlp(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
@@ -729,6 +731,7 @@ class UpsampleOneStep(nn.Sequential):
         return flops
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 class swinirdense(nn.Module):
     r""" SwinIR
         A PyTorch impl of : `SwinIR: Image Restoration Using Swin Transformer`, based on Swin Transformer.

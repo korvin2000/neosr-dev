@@ -10,6 +10,7 @@ from torch.utils.checkpoint import checkpoint
 
 from neosr.archs.arch_util import to_2tuple, window_sdpa
 from neosr.archs.swinir_arch import calculate_mask
+from neosr.utils.registry import ARCH_REGISTRY
 
 
 # Shuffle operation for Categorization and UnCategorization operations.
@@ -908,6 +909,7 @@ class UpsampleOneStep(nn.Sequential):
         super(UpsampleOneStep, self).__init__(*m)
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 class atd(nn.Module):
     """Transcending the Limit of Local Window: Advanced Super-Resolution Transformer
         with Adaptive Token Dictionary. - https://arxiv.org/abs/2401.08209
@@ -1221,6 +1223,7 @@ class atd(nn.Module):
         return x
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def atd_light(**kwargs):
     return atd(
         img_size=64,

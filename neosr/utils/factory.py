@@ -1,30 +1,30 @@
 """Shared lookup and construction for the per-package builders (archs, losses, data, models, metrics)."""
 
-import importlib
 import inspect
 from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
 from neosr.config import ConfigError
-
-Table = Mapping[
-    str, tuple[str, str | None]
-]  # name -> (module under the package, scale kwarg | None)
+from neosr.utils.registry import Registry
 
 
-def resolve(table: Table, package: str, section: str, name: Any) -> Any:
-    if not isinstance(name, str) or name not in table:
+def resolve(registry: Registry, section: str, name: Any) -> Any:
+    if not isinstance(name, str) or name not in registry:
         msg = f"[{section}] unknown type {name!r}"
-        raise ConfigError(msg, key=str(name), known=table)
-    return getattr(importlib.import_module(f"{package}.{table[name][0]}"), name)
+        raise ConfigError(msg, key=str(name), known=registry)
+    return registry.load(name)
 
 
 def inject_scale(
-    table: Table, section: str, name: str, kwargs: dict[str, Any], scale: int | None
+    registry: Registry,
+    section: str,
+    name: str,
+    kwargs: dict[str, Any],
+    scale: int | None,
 ) -> None:
     """Pass the run scale under the target's native kwarg name; an explicit contradicting value is an error."""
-    kw = table[name][1]
+    kw = registry[name].scale
     if kw is None:
         return
     if scale is None:
@@ -50,8 +50,7 @@ def construct(
 
 
 def build(
-    table: Table,
-    package: str,
+    registry: Registry,
     section: str,
     cfg: Mapping[str, Any],
     *,
@@ -62,6 +61,6 @@ def build(
     without `type`, or (`whole`, the dataset shape) as one positional dict that keeps it."""
     kwargs = deepcopy(dict(cfg))
     name = kwargs.get("type") if whole else kwargs.pop("type", None)
-    obj = resolve(table, package, section, name)
-    inject_scale(table, section, name, kwargs, scale)
+    obj = resolve(registry, section, name)
+    inject_scale(registry, section, name, kwargs, scale)
     return obj(kwargs) if whole else construct(obj, section, name, kwargs)

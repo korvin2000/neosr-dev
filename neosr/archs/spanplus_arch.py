@@ -5,6 +5,7 @@ from torch.nn.init import trunc_normal_
 
 from neosr.archs import span_arch
 from neosr.archs.arch_util import DySample
+from neosr.utils.registry import ARCH_REGISTRY
 
 
 class Conv3XC(span_arch.Conv3XC):
@@ -68,6 +69,7 @@ class SPABS(nn.Module):
         return self.conv_cat(torch.cat([x, out_end, out_b1, out_x_2], 1))
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 class spanplus(nn.Module):
     """Modified from 'Swift Parameter-free Attention Network for Efficient Super-Resolution':
     https://arxiv.org/abs/2311.12770
@@ -117,13 +119,16 @@ class spanplus(nn.Module):
         return self.upsampler(out)
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def spanplus_sts(**kwargs):
     return spanplus(blocks=[2], feature_channels=32, upsampler="ps", **kwargs)
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def spanplus_s(**kwargs):
     return spanplus(blocks=[2], feature_channels=32, **kwargs)
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def spanplus_st(**kwargs):
     return spanplus(upsampler="ps", **kwargs)

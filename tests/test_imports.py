@@ -30,13 +30,14 @@ MODULES = [
     *sorted(XFAIL),
 ]
 
-# Lazy builder tables (D3): importing the package must not import the modules its rows name.
+# Lazy registries (design T7): importing the package must neither import the modules its rows
+# name nor run the source scan.
 TABLES = {
-    "neosr.archs": "ARCHS",
-    "neosr.data": "DATASETS",
-    "neosr.losses": "LOSSES",
-    "neosr.metrics": "METRICS",
-    "neosr.models": "MODELS",
+    "neosr.archs": "ARCH_REGISTRY",
+    "neosr.data": "DATASET_REGISTRY",
+    "neosr.losses": "LOSS_REGISTRY",
+    "neosr.metrics": "METRIC_REGISTRY",
+    "neosr.models": "MODEL_REGISTRY",
 }
 
 # Parent packages that are still in XFAIL are replaced by empty namespace stubs, so that only the module's
@@ -61,12 +62,14 @@ def spy(self, args=None, namespace=None):
     return parse_known_args(self, args, namespace)
 argparse.ArgumentParser.parse_known_args = spy
 mod = importlib.import_module(module)
-rows = {f"{module}.{row[0]}" for row in getattr(mod, table).values()} if table else set()
+registry = getattr(mod, table) if table else {}
+scanned = "rows" in vars(registry) if table else False
+rows = {f"{module}.{row.module}" for row in registry.values()}
 eager = sorted(rows & sys.modules.keys())
 for sub in pkgutil.walk_packages(getattr(mod, "__path__", []), module + "."):
     importlib.import_module(sub.name)
 print(json.dumps({"file": mod.__file__, "cuda": torch.cuda.is_initialized(), "argv": argv_reads,
-                  "device": str(torch.get_default_device()), "eager": eager,
+                  "device": str(torch.get_default_device()), "eager": eager, "scanned": scanned,
                   "rng": rng_state() == rng_before}))
 """
 
@@ -113,6 +116,7 @@ def test_import_has_no_side_effects(module: str, tmp_path: Path) -> None:
     assert not info["argv"], "import read sys.argv"
     assert info["cuda"] is False
     assert info["device"] == "cpu"
-    assert info["eager"] == [], "package imported its table modules eagerly"
+    assert info["eager"] == [], "package imported its registered modules eagerly"
+    assert info["scanned"] is False, "package import ran the registry scan"
     assert info["rng"], "import changed the random, numpy or torch RNG state"
     assert not any(tmp_path.rglob("*")), "import wrote files into the working directory"

@@ -6,11 +6,13 @@ from torch.nn import functional as F
 
 from neosr.losses.base import Loss, restoring_clamp
 from neosr.losses.basic_loss import chc_loss
+from neosr.utils.registry import LOSS_REGISTRY
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 
+@LOSS_REGISTRY.register()
 class consistency_loss(Loss):
     """Color and Luma Consistency loss using Oklab and CIE L*.
 

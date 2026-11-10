@@ -4,6 +4,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from neosr.utils.registry import ARCH_REGISTRY
+
 
 def _make_pair(value):
     if isinstance(value, int):
@@ -217,6 +219,7 @@ class SPAB(nn.Module):
         return out, out1, sim_att
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 class span(nn.Module):
     """Swift Parameter-free Attention Network for Efficient Super-Resolution"""
 
@@ -339,5 +342,6 @@ class span(nn.Module):
         return self.upsampler(out)
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def span_fast(**kwargs):
     return span(feature_channels=32, bias=False, fast=True, **kwargs)

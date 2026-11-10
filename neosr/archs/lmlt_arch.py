@@ -5,6 +5,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from neosr.archs.arch_util import to_2tuple
+from neosr.utils.registry import ARCH_REGISTRY
 
 
 # Layer Norm
@@ -305,6 +306,7 @@ class AttBlock(nn.Module):
         return self.ccm(self.norm2(x)) + x
 
 
+@ARCH_REGISTRY.register(scale="upscaling_factor")
 class lmlt(nn.Module):
     def __init__(
         self,
@@ -369,9 +371,11 @@ class lmlt(nn.Module):
         return self.to_img(x)
 
 
+@ARCH_REGISTRY.register(scale="upscaling_factor")
 def lmlt_tiny(**kwargs):
     return lmlt(dim=36, **kwargs)
 
 
+@ARCH_REGISTRY.register(scale="upscaling_factor")
 def lmlt_large(**kwargs):
     return lmlt(dim=84, **kwargs)

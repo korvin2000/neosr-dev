@@ -9,6 +9,7 @@ from torch.nn import functional as F
 
 from neosr.archs.arch_util import LayerNorm2d
 from neosr.config import ConfigError
+from neosr.utils.registry import ARCH_REGISTRY
 
 
 class SimpleGate(nn.Module):
@@ -56,6 +57,7 @@ class NAFBlock(nn.Module):
         return y + self.dropout2(x) * self.gamma
 
 
+@ARCH_REGISTRY.register(scale="scale")
 class nafnet(nn.Module):
     """Defaults: the official SIDD width-32 model (enc [2, 2, 4, 8], middle 12, dec [2, 2, 2, 2])."""
 
@@ -120,6 +122,7 @@ class nafnet(nn.Module):
         return (self.ending(x) + skip)[..., :h, :w]
 
 
+@ARCH_REGISTRY.register(scale="scale")
 def nafnet_l(**kwargs) -> nafnet:
     """The official width-64 model (same block counts)."""
     return nafnet(width=64, **kwargs)

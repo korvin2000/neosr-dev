@@ -6,6 +6,8 @@ from torch import nn
 from torch.nn import functional as F
 from torch.nn.modules.batchnorm import _BatchNorm
 
+from neosr.utils.registry import ARCH_REGISTRY
+
 
 @torch.no_grad()
 def default_init_weights(module_list, scale=1, bias_fill=0, **kwargs):
@@ -165,6 +167,7 @@ def _old_layout_key(key: str, num_block: int) -> str:
     return key
 
 
+@ARCH_REGISTRY.register(scale="scale")
 class esrgan(nn.Module):
     """Networks consisting of Residual in Residual Dense Block, which is used
     in ESRGAN.

@@ -9,21 +9,9 @@ import torch
 
 from neosr.config import ConfigError
 from neosr.utils.factory import resolve
+from neosr.utils.registry import METRIC_REGISTRY
 
-__all__ = ["METRICS", "build_metric"]
-
-METRICS = {
-    "calculate_psnr": ("calculate", None),
-    "calculate_ssim": ("calculate", None),
-    "calculate_dists": ("calculate", None),
-    "calculate_topiq": ("calculate", None),
-    "calculate_lpips": ("calculate", None),
-}
-# keyword values checked when the metric is bound, not at the first validation
-CHOICES = {
-    "calculate_topiq": {"dataset": ("kadid", "pipal")},
-    "calculate_lpips": {"net": ("alex", "vgg")},
-}
+__all__ = ["METRIC_REGISTRY", "build_metric"]
 
 
 def build_metric(
@@ -38,7 +26,7 @@ def build_metric(
     kwargs = deepcopy(dict(cfg))
     name = kwargs.pop("type", None)
     kwargs.pop("better", None)  # read by the best-metric bookkeeping, not by the metric
-    ref = resolve(METRICS, "neosr.metrics", section, name)
+    ref = resolve(METRIC_REGISTRY, section, name)
     fn = getattr(sys.modules[ref.__module__], f"{name}_pt")
     sig = inspect.signature(fn)
     extra = {"device": device} if "device" in sig.parameters else {}
@@ -47,7 +35,7 @@ def build_metric(
     except TypeError as err:
         msg = f"[{section}] {name}: {err}"
         raise ConfigError(msg) from err
-    for key, allowed in CHOICES.get(name, {}).items():
+    for key, allowed in METRIC_REGISTRY[name].meta.get("choices", {}).items():
         if key in kwargs and kwargs[key] not in allowed:
             msg = f"[{section}] {name}: {key} must be one of {list(allowed)}, got {kwargs[key]!r}"
             raise ConfigError(msg)

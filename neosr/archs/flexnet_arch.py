@@ -8,6 +8,7 @@ from torch.nn import functional as F
 
 from neosr.archs.arch_util import DySample
 from neosr.archs.span_arch import cache_stale, fuse_online, param_key
+from neosr.utils.registry import ARCH_REGISTRY
 
 
 class Interpolate(nn.Module):
@@ -593,6 +594,7 @@ class MetaPipeline(nn.Module):
         return self.dec2(x)
 
 
+@ARCH_REGISTRY.register(scale="scale")
 class flexnet(nn.Module):
 
     def _init_weights(self, m):
@@ -699,5 +701,6 @@ class flexnet(nn.Module):
         return x[:, :, : h * self.scale, : w * self.scale]
 
 
+@ARCH_REGISTRY.register(scale="scale")
 def metaflexnet(**kwargs):
     return flexnet(dim=48, num_blocks=(4, 6, 6, 8), pipeline_type="meta", **kwargs)

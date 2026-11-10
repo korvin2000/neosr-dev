@@ -7,6 +7,7 @@ from torch.nn import functional as F
 from torch.nn.init import trunc_normal_
 
 from neosr.archs.arch_util import DySample
+from neosr.utils.registry import ARCH_REGISTRY
 
 
 SampleMods = Literal[
@@ -227,6 +228,7 @@ class Blocks(nn.Module):
         return self.msg(self.blocks(x))
 
 
+@ARCH_REGISTRY.register(scale="scale")
 class moesr(nn.Module):
     """Mamba out Excitation Super-Resolution"""
 

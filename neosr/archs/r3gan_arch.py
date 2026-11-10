@@ -12,6 +12,8 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
+from neosr.utils.registry import ARCH_REGISTRY
+
 SLOPE = 0.2
 
 
@@ -77,6 +79,7 @@ class Down(nn.Module):
         return self.proj(F.conv2d(x, self.fir, stride=2, padding=1, groups=x.shape[1]))
 
 
+@ARCH_REGISTRY.register(scale=None)
 class r3gan(nn.Module):
     """R3GAN discriminator; output (B, 1, H', W'), one logit per position.
 
@@ -137,11 +140,13 @@ class r3gan(nn.Module):
         return self.head(x)
 
 
+@ARCH_REGISTRY.register(scale=None)
 def r3gan_scalar128(**kwargs) -> r3gan:
     """The paper head for GT 128 (six stages)."""
     return r3gan(widths=(32, 64, 128, 256, 256, 256), head="scalar", **kwargs)
 
 
+@ARCH_REGISTRY.register(scale=None)
 def r3gan_scalar256(**kwargs) -> r3gan:
     """The paper head for GT 256 (seven stages)."""
     return r3gan(widths=(32, 64, 128, 256, 256, 256, 256), head="scalar", **kwargs)

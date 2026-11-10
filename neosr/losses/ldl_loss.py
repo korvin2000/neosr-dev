@@ -6,11 +6,13 @@ from torch.nn import functional as F
 
 from neosr.losses.base import Loss
 from neosr.losses.basic_loss import chc_loss
+from neosr.utils.registry import LOSS_REGISTRY
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 
+@LOSS_REGISTRY.register()
 class ldl_loss(Loss):
     """LDL loss. Adapted from 'Details or Artifacts: A Locally Discriminative
     Learning Approach to Realistic Image Super-Resolution':

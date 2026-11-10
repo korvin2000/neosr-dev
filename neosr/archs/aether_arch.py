@@ -31,6 +31,8 @@ from torch.ao.nn.quantized import FloatFunctional
 from torch.nn import functional as F
 from torch.nn.init import trunc_normal_
 
+from neosr.utils.registry import ARCH_REGISTRY
+
 SCALES = (2, 3, 4, 8)
 # image-domain convs (and the input stub) stay float under QAT (T5 D8)
 FLOAT_LAYERS = ("quant", "conv_first", "conv_before_upsample.0", "conv_last")
@@ -425,6 +427,7 @@ class AdaptiveUpsample(nn.Module):
 
 # ------------------- Main AetherNet Architecture ------------------- #
 
+@ARCH_REGISTRY.register(scale="scale")
 class aether(nn.Module):
     """AetherNet: Production-Ready Super-Resolution Network. `fused_init=True` builds the deploy
     topology (fused reparam convs, folded norms) for loading a fuse_model() checkpoint."""
@@ -655,16 +658,19 @@ class aether(nn.Module):
 
 
 # ------------------- Recommended Configurations ------------------- #
+@ARCH_REGISTRY.register(scale="scale")
 def aether_small(**kwargs) -> aether:
     return aether(embed_dim=96, depths=(4, 4, 4, 4), use_channel_attn=False,
                   use_spatial_attn=False, **kwargs)
 
 
+@ARCH_REGISTRY.register(scale="scale")
 def aether_medium(**kwargs) -> aether:
     return aether(embed_dim=128, depths=(6, 6, 6, 6), use_channel_attn=True,
                   use_spatial_attn=True, **kwargs)
 
 
+@ARCH_REGISTRY.register(scale="scale")
 def aether_large(**kwargs) -> aether:
     return aether(embed_dim=180, depths=(8, 8, 8, 8, 8), use_channel_attn=True,
                   use_spatial_attn=True, **kwargs)

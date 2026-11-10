@@ -7,6 +7,7 @@ from torch.nn.init import trunc_normal_
 from torch.utils import checkpoint
 
 from neosr.archs.arch_util import DropPath, shift_mask, to_2tuple, window_sdpa
+from neosr.utils.registry import ARCH_REGISTRY
 
 
 class Mlp(nn.Module):
@@ -1093,6 +1094,7 @@ class swinir(nn.Module):
         return flops
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def swinir_small(**kwargs):
     return swinir(
         img_size=64,
@@ -1105,6 +1107,7 @@ def swinir_small(**kwargs):
     )
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def swinir_medium(**kwargs):
     return swinir(
         img_size=48,
@@ -1117,6 +1120,7 @@ def swinir_medium(**kwargs):
     )
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def swinir_large(**kwargs):
     return swinir(
         img_size=64,

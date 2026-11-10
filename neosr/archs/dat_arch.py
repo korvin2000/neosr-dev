@@ -11,6 +11,7 @@ from torch.nn.init import trunc_normal_
 from torch.utils import checkpoint
 
 from neosr.archs.arch_util import DropPath, shift_mask, window_sdpa
+from neosr.utils.registry import ARCH_REGISTRY
 
 
 def img2windows(img, H_sp, W_sp):
@@ -1052,6 +1053,7 @@ class dat(nn.Module):
         return x
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def dat_s(**kwargs):
     return dat(
         in_chans=3,
@@ -1066,6 +1068,7 @@ def dat_s(**kwargs):
     )
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def dat_m(**kwargs):
     return dat(
         in_chans=3,
@@ -1080,6 +1083,7 @@ def dat_m(**kwargs):
     )
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def dat_2(**kwargs):
     return dat(
         in_chans=3,

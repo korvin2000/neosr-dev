@@ -8,6 +8,7 @@ from torch import Tensor, nn
 from torchvision import models
 
 from neosr.losses.base import Loss
+from neosr.utils.registry import LOSS_REGISTRY
 
 
 class L2pooling(nn.Module):
@@ -33,6 +34,7 @@ class L2pooling(nn.Module):
         return (out + 1e-12).sqrt()
 
 
+@LOSS_REGISTRY.register()
 class dists_loss(Loss):
     r"""DISTS. "Image Quality Assessment: Unifying Structure and Texture Similarity":
     https://arxiv.org/abs/2004.07728.

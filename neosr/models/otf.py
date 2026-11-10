@@ -8,8 +8,10 @@ from neosr.data.otf_degradation import Degrader, PairPool
 from neosr.data.transforms import paired_random_crop
 from neosr.models.image import image
 from neosr.runtime import Runtime
+from neosr.utils.registry import MODEL_REGISTRY
 
 
+@MODEL_REGISTRY.register()
 class otf(image):
     """Real-ESRGAN two-stage degradation plus the training pair pool; validation is paired, as in image."""
 

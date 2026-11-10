@@ -7,6 +7,7 @@ from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
 
 from neosr.archs.arch_util import DropPath, to_2tuple
+from neosr.utils.registry import ARCH_REGISTRY
 
 
 def _sdpa(q, k, v, attn_mask=None, dropout_p=0.0, scale=None):
@@ -917,6 +918,7 @@ class MoEUpsample(nn.Sequential):
         return x
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 class mfghmoe(nn.Module):
     r"""Token Selective Transformer
         A PyTorch implementation of : `TTST: A Top-k Token Selective Transformer for Remote Sensing Image Super-Resolution`.

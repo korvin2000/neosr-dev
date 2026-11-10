@@ -8,6 +8,7 @@ from torch.nn.init import trunc_normal_
 from torch.utils.checkpoint import checkpoint
 
 from neosr.archs.arch_util import to_2tuple
+from neosr.utils.registry import ARCH_REGISTRY
 
 
 def _sdpa(q, k, v, attn_mask=None, dropout_p=0.0, scale=None):
@@ -1106,6 +1107,7 @@ class Upsample(nn.Sequential):
         super(Upsample, self).__init__(*m)
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 class hma(nn.Module):
     r"""Multi-axis Blocking Hybrid Network
         A PyTorch implementation of : `Activating More Pixels in Image Super-Resolution Transformer`.
@@ -1394,6 +1396,7 @@ class hma(nn.Module):
         return x[:, :, : h * self.upscale, : w * self.upscale]
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def hma_medium(**kwargs):
     return hma(
         img_size=64,
@@ -1405,6 +1408,7 @@ def hma_medium(**kwargs):
     )
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def hma_large(**kwargs):
     return hma(
         img_size=48,

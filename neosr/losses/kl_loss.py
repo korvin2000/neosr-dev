@@ -3,8 +3,10 @@ from torch import Tensor
 from torch.nn import functional as F
 
 from neosr.losses.base import Loss
+from neosr.utils.registry import LOSS_REGISTRY
 
 
+@LOSS_REGISTRY.register()
 class kl_loss(Loss):
     """KL-Divergence loss."""
 

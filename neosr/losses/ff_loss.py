@@ -3,8 +3,10 @@ import torch.fft
 from torch import Tensor
 
 from neosr.losses.base import Loss
+from neosr.utils.registry import LOSS_REGISTRY
 
 
+@LOSS_REGISTRY.register()
 class ff_loss(Loss):
     """Focal Frequency Loss.
        From: https://github.com/EndlessSora/focal-frequency-loss.

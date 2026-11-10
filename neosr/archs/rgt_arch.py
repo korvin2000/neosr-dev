@@ -12,6 +12,7 @@ from torch.utils import checkpoint
 
 from neosr.archs.arch_util import DropPath, shift_mask, window_sdpa
 from neosr.archs.dat_arch import calculate_mask
+from neosr.utils.registry import ARCH_REGISTRY
 
 
 def img2windows(img, H_sp, W_sp):
@@ -755,6 +756,7 @@ class Upsample(nn.Sequential):
         super(Upsample, self).__init__(*m)
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 class rgt(nn.Module):
 
     def _init_weights(self, m):
@@ -903,5 +905,6 @@ class rgt(nn.Module):
         return x[..., : h * self.upscale, : w * self.upscale]
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 def rgt_s(**kwargs):
     return rgt(depth=[6, 6, 6, 6, 6, 6], num_heads=[6, 6, 6, 6, 6, 6], **kwargs)

@@ -10,6 +10,7 @@ from torch.nn import functional as F
 from torch.nn.init import trunc_normal_
 
 from neosr.archs.arch_util import DropPath
+from neosr.utils.registry import ARCH_REGISTRY
 
 
 def img2windows(img, H_sp, W_sp):
@@ -818,6 +819,7 @@ class UpsampleOneStep(nn.Sequential):
         super().__init__(*m)
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 class dct(nn.Module):
     """Dual Compression Transformer
     Args:

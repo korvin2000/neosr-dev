@@ -2,6 +2,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from neosr.utils.registry import ARCH_REGISTRY
+
 
 class LayerNorm(nn.Module):
     r"""From ConvNeXt (https://arxiv.org/pdf/2201.03545.pdf)"""
@@ -275,6 +277,7 @@ class UpsampleOneStep(nn.Sequential):
         return h * w * self.num_feat * 3 * 9
 
 
+@ARCH_REGISTRY.register(scale="upscale")
 class cfsr(nn.Module):
 
     def _init_weights(self, m: nn.Module) -> None:

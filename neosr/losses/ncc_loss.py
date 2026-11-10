@@ -1,8 +1,10 @@
 from torch import Tensor
 
 from neosr.losses.base import Loss
+from neosr.utils.registry import LOSS_REGISTRY
 
 
+@LOSS_REGISTRY.register()
 class ncc_loss(Loss):
     """Normalized Cross-Correlation loss."""
 
