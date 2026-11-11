@@ -51,6 +51,36 @@ count as ties.
     the shared mechanisms (FDL dominance, clamp, augmentation share) apply to every template, the optimizer
     choice is the least general part.
 
+## Session-9 screens (2026-11-11, 8k updates, R5 protocol)
+Protocol (stricter than the one above; tool `scripts/ab/`, `scripts/ab/README.md`): the owner's 10,607 x4 pairs
+split by recovered source group (R5, `../stage3/r3gan/RESULTS.md` section 0); every arm starts from the 20k
+non-GAN pretrain `P0_pretrain` with the shipped realplksr + metagan template (bf16, seed 7), 8000 updates, EMA
+weights. Judges on the 219 kept dev tiles (211 source groups): TOPIQ-pipal, LPIPS-alex, DISTS, PSNR. Per-image
+paired differences against B0 with a 95 % bootstrap CI over source groups (10,000 resamples). Floor per metric =
+max(|B0 - B0s2| (seed 2), 0.05 dB PSNR, 1 % of B0 for TOPIQ/LPIPS/DISTS): today PSNR 0.05, TOPIQ 0.0065, LPIPS
+0.0019 (seed), DISTS 0.0015. A metric is better or worse only beyond its floor with a CI excluding 0; an arm is
+LOSS if a perceptual metric is worse, WIN if at least 2 of 3 are better and none worse, else TIE. 8k is a screen:
+a WIN on a GAN default needs a second seed and a >= 20k run before it flips (Fable consult, 13:55).
+8k dev means (PSNR/TOPIQ/LPIPS/DISTS): B0 30.407/0.6548/0.1577/0.1493, B0s2 30.402/0.6527/0.1596/0.1507.
+
+14. `grad_clip = true` stays the template default (B1, `grad_clip = "spike"`): TIE at 6k and 8k (8k paired: PSNR
+    +0.0008, TOPIQ -0.0007, LPIPS +0.0015 [+0.0011, +0.0020] under its 0.0019 floor, DISTS 0.0000). The fixed clip
+    is near idle in this regime (clipped_g ~2 %, clipped_d 0 % after 300 updates), so the screen cannot separate
+    the two; per the pre-agreed rule no clip arm flips today, a WIN would have gone to a second seed and the
+    >= 20k list. Where clipping is active (R3GAN: G clipped in 95-100 % of the first 2k updates) the question stays
+    open (`../STATUS.md`, "Needs the Linux machine" item 7).
+15. LDL (`[train.ldl_opt]`, B2 without it): TIE at 6k and 8k (8k paired: PSNR +0.0122, TOPIQ -0.0005, LPIPS
+    +0.0014, DISTS -0.0003), -4.8 % ms/update (104.6 vs 109.9), LDL's G-gradient share 0.000 % at B0's 8k weights.
+    Pre-agreed rule: a TIE or WIN without a LOSS flips the templates provisionally. Held by a Fable consult (14:41)
+    on new evidence: more late G-gradient spikes without LDL (`grad_norm_g` window means > 1.2 after update 2000:
+    B0 0, B0s2 4 (max 3.87), B2 6 (max 10.61)). Criterion fixed before the run: the seed replicate B2s2 is clean
+    with at most 4 such windows and a max <= 7.7, then the flip (prepared as bd54d64b: 85 templates, Studio
+    presets, training guide) merges as provisional; else LDL stays and the >= 20k list records "metrics TIE, more
+    late G-gradient spikes without LDL". <<PENDING: B2s2 windows / max, verdict, the decision and its commit>>
+16. B3 (`fdl_opt.fp32_backbone = false`) was not screened: it is not faster on this setup (116.5 vs 109.9
+    ms/update; it saves ~160 MiB), so a quality tie could not flip the default. The docs that promised "~2x faster
+    FDL" now give the measurement.
+
 ## Kept opt-in pending an A/B
 `tight_canvas` (OTF), `aug_antialias`, CRAFT `pad_extra_window = false`, span_fast `fan_in_init`, `"spike"`
 clip, `gan_type = "rpgan"`, R1/R2, `fdl_opt.checkpoint`.

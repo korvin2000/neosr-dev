@@ -61,7 +61,7 @@ trained probe, unaugmented batches, gamma 1). The clip incidence that matters is
 | r3gan patch, rpgan, gammas 0 (ordinary update) | 105.2 | - | 3.30 GB | +8 % |
 | **R1 r3gan patch, R1/R2 every update** | **719.2** | **700.6** | 3.30 GB (compile 3.18) | **+637 %** |
 | R4 r3gan_scalar256, R1/R2 every update | 725.4 | - | 3.31 GB | +643 % |
-- **The cost gate fails by far**: the penalty pass costs ~614 ms per update (719 - 105) against an estimate of +0-10 ms;
+- **The cost gate fails by far** (fixed 2026-11-11, section 4): the penalty pass costs ~614 ms per update (719 - 105) against an estimate of +0-10 ms;
   memory is fine (+0.03 GB with bf16; the fp32 penalty peaks at 5.61 GB vs 3.22 GB in the 2k runs). The 2k runs took
   0.71 s (bf16) and 0.71 s (fp32) per update: precision is not the bottleneck. Hypothesis (unverified): the double
   backward of grouped convs (group width 16) and of the depthwise FIR runs a slow path (e.g. a per-group loop) on CUDA.
@@ -87,3 +87,34 @@ ratio 0.82-0.83 is close to the 0.8 bound and cannot be separated from run-to-ru
 Indicative only (no A1 control at 2k): versus the pretrain the GAN start costs 1.17 dB dev PSNR and gains +0.013
 TOPIQ-pipal and -0.012 LPIPS; D is not at chance (margin 0.08-0.09 > 0.01), but D's gradient is clipped in about half
 of the updates (template max-norm 1.0) and G's in ~90 %.
+
+## 4. Session 9 (2026-11-11): the penalty cost fixed, the 8k screen
+### Cause and fix (94c36bde)
+`torch.profiler`, one regularised D update (bf16, channels_last, B 8, GT 256): ATen's conv double backward
+(`_convolution_double_backward`) took 96 % of the CUDA time. For the weight term it runs one conv per group with
+grad_output as a full-size kernel, even for the constant FIR buffer: 635 conv calls per pass instead of 48. The
+FIR in `Down` cost ~350 ms per update (wasted: the buffer takes no gradient), the grouped 3x3 `lin2` ~120 ms. Fix:
+r3gan's convs run through a custom autograd function whose input gradient is a `conv_transpose2d`, so the double
+backward uses cuDNN's grouped kernels; it computes only the gradients a pass uses and runs its backward outside
+autocast. Same math and state_dict: forward bitwise, fp32 gradients within 1e-7, bf16 weight gradients within
+their own rounding (`tests/test_s3_r3gan.py`, CPU and CUDA parity). D-only regularised update: 647 -> 34.9 ms.
+
+### Cost gate, re-measured (`scripts/bench.py`, GPU alone, bf16 eager, 3 x 50 updates, R5 data, P0 pretrain)
+| arm | ms/update (min-max) | peak VRAM | vs template |
+|---|---|---|---|
+| template B0 (A0, metagan) | 109.9 (108.5-117.5) | 3269 MiB | - |
+| R3GAN recipe (`R1_patch_g1`, reg_every 1), before (b622aff) | 732.2 (728.6-740.8) | 3298 MiB | +566 % |
+| R3GAN recipe, after (24ba81d6) | 122.5 (122.2-123.4) | 3300 MiB | **+11 %** |
+
+**Verdict: the cost gate (+30 % ms, +1.5 GB) now PASSES** (6.0x faster end to end). Round 1 of R6 as planned
+drops from ~21 to ~4 GPU-hours per 20k round. Training dynamics are unchanged by the fix (exact rewrite).
+
+### 8k screen (R5 protocol of `../../stage2/DECISIONS.md` 14-16): R3 vs A1 vs B0
+Arms on the session's frozen code 59a6fbc4 (the fix plus the DR-02 health log): `R3_patch_g1` (r3gan patch, rpgan,
+R1/R2 gamma 1 every update, w 0.3), `A1_nogan` (no D), B0 (template; run earlier on b622aff, the same numerics for a non-r3gan arm). Health of R3 in its first 2k updates: G
+clipped in 95-100 % of the updates (max-norm 1.0), D in 4-75 %, `out_d_acc` 0.53-1.00, `grad_sr_ratio` ~0.01-0.03
+(the adversarial gradient on sr is 1-3 % of the other terms'), raw r1/r2 ~0.01-0.02; dev at 2k
+29.22/0.651/0.174/0.163 (PSNR/TOPIQ/LPIPS/DISTS).
+<<PENDING: 8k dev means and paired verdicts R3 vs B0, R3 vs A1, A1 vs B0 (scripts/ab/analyze.py, floors from
+B0/B0s2); clip and health summary over 8k; what it means for R6>>
+

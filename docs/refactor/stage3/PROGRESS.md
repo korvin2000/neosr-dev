@@ -415,3 +415,44 @@ Not a stage-3 step; logged here because this is the current log.
   experiments), `next_tasks.md` rewritten as a re-ranked 4-hour plan: short GPU measurements, 8k A/Bs
   (`grad_clip = "spike"`, no LDL, bf16 FDL backbone, a seed replicate), the R1/R2 penalty pass, test
   infrastructure, the ONNX sweep and the Studio adapter in parallel lanes.
+
+### Session 9, the run (2026-11-11, Linux machine): measurements, five lanes, 8k screens
+How it ran: the main thread owned the GPU (one lock, a queue for the A/B pairs); five lanes worked in their own
+worktrees (P penalty pass, T test infrastructure, O ONNX sweep, S Studio adapter, H GAN health log). Every lane
+commit was reviewed by Codex and an independent reviewer, each finding confirmed by two skeptics, and fixed before
+it merged (squashed on `master`). Decisions with a Fable consult at 13:55 (GPU schedule, gate rule, drop order)
+and 14:41 (the queue tail, the LDL flip held). Source log: `experiments/s9_ab/NOTES.md` (gitignored).
+- **GPU measurements** (`scripts/bench.py`, GPU alone, bf16 eager, R5 data, P0 pretrain): template B0 109.9
+  ms/update (108.5-117.5), 3269 MiB; `fdl_opt.fp32_backbone = false` 116.5 (113.6-118.1), 3109 MiB, not faster:
+  the "~2x faster FDL" docs were corrected (4705562e, 343e202f); without LDL 104.6 (103.0-108.0), 3232 MiB
+  (-4.8 %); `compile = true` 86.7 (-21 %), 3104 MiB, first update 162 s. `scripts/term_grads.py` (G-gradient
+  shares) at the P0 pretrain: FDL 81.2 %, GAN 16.5 %, MS-SSIM 1.4 %, L1 0.53 %, consistency 0.35 %, LDL 0.000 %; at
+  B0's 8k weights: 74.3 / 16.6 / 7.1 / 1.7 / 0.44 / 0.000 %. unet D: 129.5 ms, 4117 MiB (+18 %, +848 MiB).
+  Validation metric memory at 1080p/4K: `../STATUS.md`, "Needs the Linux machine" item 9.
+- **P, R1/R2 penalty** (94c36bde): ATen's conv double backward ran one conv per group, also for the constant FIR
+  (96 % of the CUDA time). r3gan's convs now take their input gradient as a `conv_transpose2d` (exact; parity on
+  CPU and CUDA). D-only regularised update 647 -> 34.9 ms; R3GAN recipe 732.2 -> 122.5 ms/update, +11 % vs the
+  template: the R4 cost gate passes (`r3gan/RESULTS.md` section 4). Review: weight gradients computed in passes
+  that discard them (G's step, R1's inner grad: +28 % CPU) and autocast in the backward, fixed before the merge.
+  DR-07 (cd3b0adb): a D without a usable double backward (DySample) or with BatchNorm is refused at model build,
+  one message shared with `config.py`'s torch-free check (two review rounds).
+- **T, tests** (fd4c0e47): markers `cuda`/`slow`, the fast CPU subset (1800 passed, 16 skipped, 98.6 s), fixture
+  paths from environment variables, a CI workflow (not run yet). Then GP-05 (a CUDA test: the first validation
+  pass peaks 6.5 MiB above the second, 2.1 GB with the fix disabled), GP-07 (readme compile note), D's lr in the
+  log line (6f3ca7e5), order-independent lr/GP-05 tests (a172e067).
+- **O, ONNX sweep**: the ten archs whose pad changed export and verify dynamically at `convert.py`'s three shapes;
+  `srformer_medium` left `STATIC_ONLY` (48469bc2: ORT vs eager 6.3e-7 at six multi-window shapes; a tiled 24x24
+  mask would move the output by ~1e-3).
+- **S, Studio**: real-trainer mode (e97902ba, experimental, simulator default; three review rounds with 13, 7 and
+  9 findings: per-run namespace, pid lock, graceful stop; a CPU end-to-end run against `train.py` with stop and
+  resume), S.11 constructor parameters in the surface contract (176990cc, 2ede3c2e), `/api/environment` (587cbdb2).
+- **H, GAN health** (59a6fbc4, DR-02): `grad_sr_gan`, `grad_sr_ratio`, `out_d_acc`, `out_d_abs` on log updates,
+  computed by hooks inside the one real backward (the first design crashed with a compiled D); bitwise parity of
+  training with the log on/off. 2-rank gloo DDP tests: r3gan + R1/R2 + the log (c10b89c5), `save_best` (1951d9f3).
+- **A/B harness** in the repository (`scripts/ab/`, c03c44f0; 16 review findings fixed in f2f7d917).
+- **8k screens** (R5 protocol, gate in `../stage2/DECISIONS.md` 14-16): pair 1 B0/B0s2 gave the floors; B1
+  (`"spike"` clip) TIE, default unchanged; B2 (no LDL) TIE, flip held until B2s2. <<PENDING: R3_patch_g1, A1_nogan,
+  U_unet01, M_metagan003, W_wavelet0, B2s2 verdicts; the LDL flip decision>>
+- **Not done / pending:** <<PENDING: the session-9 full suite>>; the CI workflow has not run; compile parity on
+  the A/B data (B0 compiled) moved to a later session.
+
