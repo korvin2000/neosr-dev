@@ -154,3 +154,18 @@ Consequences:
   generic where that costs little (e.g. `convert.py --prune` calls any network's `switch_to_deploy`).
 - Small, exact fixes in the core may be made without asking first (owner, the same day); the house rules for a
   code step (targeted tests, Codex review of the diff, one commit) still hold.
+
+## Owner decisions, 2026-11-11 (session 9: two open audit findings)
+- **T-11 (host syncs per update): rejected.** A step without the `isfinite` sync was measured and is not faster
+  (stage 2 GP-09: 116.2 -> 115.9 ms realplksr, 6.3 -> 6.3 ms compact L1, the launch-bound case with 57 % GPU
+  idle). Merging the G and D reads into one would split `Phase.step` and couple the two phases' skip
+  transactions; the fp16 half relies on `GradScaler` internals, and no template uses fp16. One sync per phase
+  stays the design (T2 D13). Revisit only if a whole-step CUDA graph becomes a goal (that removes every sync, a
+  different design).
+- **ST-14 (abrupt D input switch at `wavelet_init`): deferred.** The transient is real but no harm to quality
+  is shown, no run has crossed the templates' `wavelet_init = 80000`, and a new key is a feature. Which fix is
+  right is open too: a cross-fade mixes RGB and SWT bands in the same channels; `wavelet_init` at the GAN
+  start (config only) or a short D warm-up are alternatives, and `wavelet_guided` itself has no A/B. Trigger:
+  a run past 80k or the R6 A/B shows a dip after the switch, or the templates' `wavelet_guided` is decided.
+- **Session plan:** a 4-hour session on the Linux machine with parallel lanes and no multi-hour GPU runs
+  (`next_tasks.md`); core quality, GAN modes, speed and stability first, Studio in parallel.

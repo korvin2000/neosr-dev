@@ -1,12 +1,12 @@
 # Project status (single entry point)
 
-Updated 2026-11-10. Read this first; the per-stage logs (`PROGRESS.md`, `stage2/PROGRESS.md`,
+Updated 2026-11-11. Read this first; the per-stage logs (`PROGRESS.md`, `stage2/PROGRESS.md`,
 `stage3/PROGRESS.md`) hold the history and the numbers. Update this file whenever a track changes state.
 
 ## Machines and what runs where (owner, 2026-11-10)
 | machine | checkout | role |
 |---|---|---|
-| Linux workstation, RTX 4090 | `/home/korvin/apps/neosr-dev` (+ worktree `.worktrees/refactor`), venv with torch | **every real test and measurement**: the pytest suite (CPU and CUDA), training runs, A/Bs, profiling, benchmarks, ONNX verification. The A/B harness, the pretrain and the data live here only (`experiments/`, gitignored) |
+| Linux workstation, RTX 4090 | `/home/korvin/apps/neosr-dev`, venv with torch. The worktree `.worktrees/refactor` (branch `refactor/stabilize`) is fully merged into `master`, as are the `s2/*` branches; it is kept only for its gitignored `experiments/r3gan_ab` (1.4 GB: the pretrain, the R5 splits, the A/B harness) | **every real test and measurement**: the pytest suite (CPU and CUDA), training runs, A/Bs, profiling, benchmarks, ONNX verification. The A/B harness, the pretrain and the data live here only (`experiments/`, gitignored) |
 | Windows workstation (Ryzen 5 5500U, 6 cores, 31 GB RAM, no GPU) | `C:\work2000\neosr-dev`, CPU-only `.venv` (torch 2.9.1+cpu) since 2026-11-10 | code analysis and review, documentation, small core changes checked by **targeted** CPU tests, NeoSR Studio (the UI prototype). Slow CPU: no suite runs, no sweeps, no training |
 
 Consequences:
@@ -44,8 +44,9 @@ Disputed or open questions go to the owner; agents do not settle them alone.
 ## Owner priorities (2026-11-10): read before picking work
 **The next session starts from `next_tasks.md` in the repository root.** Session 7 (2026-11-10) finished the
 three tasks the owner had fixed: the registries (3 below), the audit closure matrix (1a) and the small core
-items (1b). What is left: the Linux confirmation of that work, the 15 audit findings still open
-(`stage2/CLOSURE.md`), then Studio.
+items (1b). Session 8 (Linux) ran the full suite and the small core items of the audit. What is left
+(2026-11-11): the ONNX sweep, the 5 audit findings still open (`stage2/CLOSURE.md`), the short GPU
+measurements and 8k A/Bs of the session-9 plan (`next_tasks.md`), then Studio.
 
 **What "the core" means (owner, 2026-11-10, `DECISIONS.md`):** the training framework and its ecosystem
 (losses, metrics, schedulers, optimizers, the GAN implementations, utilities), its speed and stability, as the
@@ -55,11 +56,10 @@ a framework contract needs them. Small, exact core fixes may be made without ask
 The owner sets the order; an agent does not promote a track on its own reading of the documents. Current order:
 1. **A stable, reliable core** ("works like a Swiss watch": fast, reliable, good quality) before any new feature
    work. Concretely: (a) the closure matrix of the stage-2 audit: **done** (`stage2/CLOSURE.md`: 167 findings =
-   130 done, 16 opt-in, 6 rejected, 15 open; five of the open ones were fixed on the spot), the 15 open ones
-   remain; (b) the small core items: **done** (the pad-to-window helper for 14 archs instead of hma alone, the
+   131 done, 16 opt-in, 7 rejected, 8 deferred, 5 open on 2026-11-11), the 5 open ones remain; (b) the small core items: **done** (the pad-to-window helper for 14 archs instead of hma alone, the
    dead `rep_rt4ksr` block, `config.total_iter`; per-arch capability metadata: the registry half is decided,
-   the Studio half is open); (c) what the Linux machine must confirm (full suite, the ONNX sweep, items of
-   "Needs the Linux machine").
+   the Studio half is open); (c) what the Linux machine must confirm (full suite: done 2026-11-10; the ONNX
+   sweep; items of "Needs the Linux machine").
 2. **NeoSR Studio / UI**: finish it (next steps in "Possible on the Windows machine", item 4).
 3. **Registration: done** (session 7). The five registries are back (`ARCH_REGISTRY`, `LOSS_REGISTRY`,
    `METRIC_REGISTRY`, `DATASET_REGISTRY`, `MODEL_REGISTRY` with `@...register()`), lazy: the decorator is a
@@ -84,7 +84,7 @@ model to follow.
 | R3GAN track | code done (R1-R3), data done (R5), qualification R4: bf16 PASS (provisional, no replicate), **cost gate FAIL**; **A/B (R6) not run: paused** | `stage3/PROGRESS.md` "PAUSED", `stage3/r3gan/RESULTS.md` |
 | Stage 3 Phase B (OTF realism, i-LN, KD/ECO, dynamo exporter, ...) | **parked by the owner (2026-11-10)**. OTF realism: **design draft 2** (Codex-reviewed); steps **O1-O3 done** (antialiased resampler and `resize_mode*` keys; per-sample `noise_prob*` / `jpeg_prob*` gates, `blur_prob`, the clean path; the unsharp mask `sharpen_*` at LQ scale; all opt-in, defaults bitwise unchanged), O4 (`degrade.py`) and O5 (readme, templates, Studio fields) open; the owner's answers Q1-Q4 open. The rest not started; the owner ordered Phase B after R3GAN | `stage3/otf/DESIGN.md`, `stage3/REVIEW.md` "Final list" |
 | Registries (design T7) | **done on Windows, waits for the Linux suite** | `design/T7_registration.md`, `neosr/utils/registry.py`, `tests/test_registry.py` |
-| Stage-2 audit closure | matrix done; 2026-11-10: A-11 and the metrics sub-items done, 7 arch-specific findings deferred (owner's goal); **7 open**: 4 need an A/B or a measurement (A-04, L-07, L-16, L-15), 3 owner decisions (T-11, ST-14, D-16) | `stage2/CLOSURE.md` |
+| Stage-2 audit closure | matrix done; 2026-11-10: A-11 and the metrics sub-items done, 7 arch-specific findings deferred (owner's goal); 2026-11-11: T-11 rejected, ST-14 deferred (owner); **5 open**: 4 need an A/B or a measurement (A-04, L-07, L-16, L-15), D-16 waits with the parked OTF track | `stage2/CLOSURE.md` |
 | NeoSR Studio (`studio/`) | prototype: real recipe model, TOML compiler and validator; **training is simulated** (no adapter to `train.py`). Catalog synced to the trainer on 2026-11-10 and guarded by a contract | `studio/README.md`, "Studio contract" below |
 
 Last full suite: 2583 passed, 0 failed, 199 skipped, 5 xfailed (CPU + CUDA on the RTX 4090, 12 min,
@@ -126,7 +126,8 @@ The order of work is "Owner priorities" above; this list only says what fits thi
    and the residual analysis O4b).
 2. **Stage-2 audit, the open findings fixable here: done 2026-11-10** on the Linux machine (A-11, the MT-08/14/15
    sub-items, the A-07/W-09 doc mismatch); the arch-specific ones (A-12, A-17, W-16) are deferred by the owner's
-   goal. Owner decisions wanted: T-11, ST-14, D-16 (`stage2/CLOSURE.md`).
+   goal. T-11 rejected and ST-14 deferred by the owner (2026-11-11); D-16 waits with the parked OTF track
+   (`stage2/CLOSURE.md`).
 3. **Penalty-pass cost note** before the profiling session: read `r3gan_arch.py` and the `gan_loss` penalty path,
    list the double-backward candidates (grouped 3x3, depthwise FIR) and the cheap alternatives to try first.
 4. **Studio, next steps** (Node only): arch constructor parameters in the surface contract (ast of the arch

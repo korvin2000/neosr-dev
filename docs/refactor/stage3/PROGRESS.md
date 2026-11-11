@@ -406,3 +406,12 @@ Not a stage-3 step; logged here because this is the current log.
   a diverged net's NaN into 0, finite metrics instead of NaN; float16 keeps the NaN and is still exact for
   0..255. Its second finding (a Windows case alias of one file refused) is fixed too. Windows portability of
   the tests (STATUS item 7) done, verified on Linux only.
+
+### Session 9 (2026-11-11, Linux machine): two owner decisions, a 4-hour plan
+- **Owner decisions** (`../DECISIONS.md`, 2026-11-11): T-11 rejected (GP-09 measured no gain from a sync-free
+  step), ST-14 deferred (no run has crossed `wavelet_init = 80000`; the right fix is open). Closure matrix now
+  131 done, 16 opt-in, 7 rejected, 8 deferred, 5 open.
+- **Docs refreshed:** `STATUS.md` (counts, the merged `refactor/stabilize` worktree kept only for its
+  experiments), `next_tasks.md` rewritten as a re-ranked 4-hour plan: short GPU measurements, 8k A/Bs
+  (`grad_clip = "spike"`, no LDL, bf16 FDL backbone, a seed replicate), the R1/R2 penalty pass, test
+  infrastructure, the ONNX sweep and the Studio adapter in parallel lanes.
