@@ -28,13 +28,13 @@ one. Verdicts on judgement calls are listed under "Notes" below.
 ## Summary
 Updated 2026-11-10 (Linux session): A-11 done; seven arch-specific findings deferred by the owner's goal
 (`DECISIONS.md`, "the goal is the framework, not the archs"). Updated 2026-11-11 (session 9): the owner
-rejected T-11 and deferred ST-14 (`DECISIONS.md`, 2026-11-11).
+rejected T-11 and deferred ST-14 and L-16 (`DECISIONS.md`, 2026-11-11).
 
 | report | findings | done | opt-in | rejected | deferred | open |
 |---|---|---|---|---|---|---|
 | `analysis/trainer.md` | 17 | 13 | 3 | 1 | 0 | 0 |
 | `analysis/optimizers.md` | 13 | 12 | 0 | 1 | 0 | 0 |
-| `analysis/losses.md` | 18 | 12 | 3 | 0 | 0 | 3 |
+| `analysis/losses.md` | 18 | 12 | 3 | 0 | 1 | 2 |
 | `analysis/data.md` | 20 | 17 | 2 | 0 | 0 | 1 |
 | `analysis/archs_window.md` | 16 | 12 | 1 | 0 | 3 | 0 |
 | `analysis/archs_mixed.md` | 19 | 17 | 0 | 0 | 2 | 0 |
@@ -42,7 +42,7 @@ rejected T-11 and deferred ST-14 (`DECISIONS.md`, 2026-11-11).
 | `analysis/metrics.md` | 17 | 17 | 0 | 0 | 0 | 0 |
 | `analysis/stability.md` | 15 | 10 | 3 | 1 | 1 | 0 |
 | `analysis/gpu_profile.md` | 14 | 8 | 2 | 4 | 0 | 0 |
-| **total** | **167** | **131** | **16** | **7** | **8** | **5** |
+| **total** | **167** | **131** | **16** | **7** | **9** | **4** |
 
 ## Open findings, ranked
 ### Fixed in session 7 (were open when the matrix was built)
@@ -71,8 +71,7 @@ them or the owner trains that arch; the rows below keep the evidence and the pro
 |---|---|---|---|---|
 | 1 | A-04 | P1 | the template discriminator `metagan` (84 templates) feeds G an adversarial gradient 250-800x the SN U-Net's; GroupNorm after the SN conv | >= 20k updates, x4: metagan@0.3 vs unet@0.1 vs metagan@0.03 (same question as STATUS "Needs the Linux machine" item 4 and the R6 arms A0/A1) |
 | 2 | L-07 | P2 | `ldl_opt` (weight 1.0, all 85 templates) contributes almost nothing | `scripts/term_grads.py` at the current weights, then one arm without it (Phase 0, E3) |
-| 3 | L-16 | P3 | bf16-quantised generator output (fp32 tail) | A/B at a high-PSNR checkpoint; the owner decides whether it is wanted |
-| 4 | L-15 | P3 | FDL gradient may carry the 14 px ViT grid (hypothesis) | nothing until artifacts are seen |
+| 3 | L-15 | P3 | FDL gradient may carry the 14 px ViT grid (hypothesis) | nothing until artifacts are seen |
 
 ### Open, the owner decides (not a measurement)
 | id | P | question |
@@ -84,6 +83,7 @@ them or the owner trains that arch; the rows below keep the evidence and the pro
 |---|---|---|
 | T-11 | rejected | measured: a step without the `isfinite` sync is not faster (GP-09: 116.2 -> 115.9, 6.3 -> 6.3, 159.5 -> 159.5, 95.2 -> 95.4 ms; the 6.3 ms compact-L1 step is launch-bound, 57 % GPU idle). Merging the G and D reads would split `Phase.step` and couple the two phases' skip transactions; the fp16 half leans on `GradScaler` internals and no template uses fp16. One sync per phase stays the design (T2 D13), guarded by `test_model_update_keeps_one_host_sync_per_phase`. Revisit only if a whole-step CUDA graph becomes a goal (then every sync goes, a different design) |
 | ST-14 | deferred | the transient is real (acceptance run, switch at 500: `grad_norm_d` 7 -> 47 bf16, settled in ~100-200 updates) but no harm to quality is shown: no run has crossed the templates' `wavelet_init = 80000`, and a new key is a feature. The fix itself is open: a cross-fade mixes RGB and SWT bands in the same channels; `wavelet_init` at the GAN start (config only, no switch) or a D warm-up are alternatives, and `wavelet_guided` itself has no A/B. Trigger: a run past 80k or the R6 A/B shows a dip after the switch, or the templates' `wavelet_guided` is decided; then compare today / fade / wavelet from the GAN start |
+| L-16 | deferred | the owner set it aside (2026-11-11): low impact at 25-35 dB by the report's own rating; revisit with a high-PSNR (fidelity) recipe |
 
 ## Notes on judgement calls
 - **`rejected` rows that follow the report itself:** GP-09, GP-10, GP-11, GP-13 and ST-13 are findings whose own
@@ -159,7 +159,7 @@ them or the owner trains that arch; the rows below keep the evidence and the pro
 | L-13 | P3 | Losses assume 3-channel sRGB [0,1]: color 'y' crashes consistency/fdl(dinov2), kl returns 0; mean/std breaks RGB losses | done | neosr/config.py validate_train: color = "y" with consistency_loss, kl_loss or fdl_loss (dinov2) is a ConfigError; tests/test_config.py::test_validate_train_errors (3 rows); dataset mean/std was rejected before (D-12); commit aebbf83 | - |
 | L-14 | P3 | consistency cosine gate is always on and adds ~1e-5; comment is wrong | done | comment corrected at neosr/losses/consistency_loss.py (the gate is on from the start, ~1e-5); the default is unchanged, dropping the term would need an A/B; commit aebbf83 | - |
 | L-15 | P3 | FDL gradient carries the fixed 14-px ViT grid (hypothesis) | open | No trace of a fix or a decision; fdl_loss.py:269-276 still pads with a fixed split; the report makes it conditional on "artifacts are seen" | None until grid artifacts show up in an FDL-trained model; then A/B a random split of the reflect pad in dinov2.get_features (fdl_loss.py:261) |
-| L-16 | P3 | bf16-quantised generator output (cross-lane: fp32 generator tail) | open | G forward and sr stay inside the autocast block (neosr/models/image.py:328-333); no arch runs a fp32 tail; no decision found in stage2 or stage3 docs. The report rates it low impact at 25-35 dB | Ask the owner whether it is wanted; if so, wrap the final conv of one arch (e.g. neosr/archs/compact_arch.py) in torch.autocast(enabled=False) and A/B at a high-PSNR checkpoint |
+| L-16 | P3 | bf16-quantised generator output (cross-lane: fp32 generator tail) | deferred | G forward and sr stay inside the autocast block (neosr/models/image.py:328-333); no arch runs a fp32 tail; no decision found in stage2 or stage3 docs. The report rates it low impact at 25-35 dB | Ask the owner whether it is wanted; if so, wrap the final conv of one arch (e.g. neosr/archs/compact_arch.py) in torch.autocast(enabled=False) and A/B at a high-PSNR checkpoint Owner 2026-11-11: deferred (see "Decided by the owner 2026-11-11"). |
 | L-17 | P3 | FDL sr-branch activation checkpointing (opt-in) | opt-in | key train.fdl_opt.checkpoint = true (default False, fdl_loss.py:324): fdl_loss.py:182-193 (_Recomputed, recompute only when grad is on), :229-231 (dinov2 wraps blocks), :328-330 (ValueError for non-dinov2); tests/test_s2_losses.py::test_fdl_checkpoint_is_bitwise_and_saves_memory (needs the cached DINOv2 hub repo) and ::test_fdl_checkpoint_needs_dinov2; readme.md:202; DECISIONS.md:55-56 lists it as kept opt-in. The GPU saving (~1.0-1.3 GiB at b16) is unverified | Measure peak memory and ms/update with checkpoint on/off on the 4090 (realplksr+metagan template); keep opt-in unless the owner wants it for small-VRAM cards |
 | L-18 | P3 | Test gaps: consistency precision, ff sync, rewrite parity tests, R1 math-SDPA, no git-history dependence | done | tests/test_s2_losses.py has all five: consistency precision (test_consistency_is_fp32_under_autocast, plus tests/test_losses.py::test_compute_weights_kernel[consistency_loss-*]), ff sync (test_ff_loss_does_not_sync, CUDA only), in-file references for L-04/L-05/L-06 (old_blur, old_local_weights, Gaussian2D with check_rewrite), R1 through metagan under math SDPA (test_lazy_r1_double_backward_through_discriminators[metagan-cpu]) | - |
 

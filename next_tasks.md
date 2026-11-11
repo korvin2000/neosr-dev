@@ -22,9 +22,9 @@ in parallel. Multi-hour runs are out of scope.
 
 Out of the 4-hour window (each needs hours of GPU): the R3GAN A/B R6, A-04 at >= 20k, Phase 0 E2/E4/E5 at
 20k with two seeds, the 80k+ long run, the rpgan / R1-R2 acceptance run (>= 20k), DDP with NCCL (two GPUs).
-Parked by the owner: OTF realism (`docs/refactor/stage3/otf/DESIGN.md`), all of stage-3 Phase B. Ideas not
-decided: section 6 (pyvips). Owner questions still open: L-16 (fp32 generator tail: wanted at all?), D-16
-(waits with OTF).
+Parked by the owner: OTF realism (`docs/refactor/stage3/otf/DESIGN.md`), all of stage-3 Phase B. Deferred by the owner
+(2026-11-11): section 6 (pyvips) and L-16 (fp32 generator tail). D-16 waits with OTF. Run decisions are
+delegated: the main session decides after consulting Fable (t5, high) and logs each decision (section 3.4).
 
 ## 0. Rules of the house (they caused friction once already)
 - **The owner sets the priorities.** Do not promote a track because a document calls it a goal; when the next step
@@ -50,7 +50,7 @@ decided: section 6 (pyvips). Owner questions still open: L-16 (fp32 generator ta
 | single status page, machines, open work | `docs/refactor/STATUS.md` |
 | owner and consensus decisions | `docs/refactor/DECISIONS.md` |
 | stage logs (history, numbers) | `docs/refactor/PROGRESS.md` (stage 1), `stage2/PROGRESS.md`, `stage3/PROGRESS.md` (also sessions 7-9) |
-| the 167 audit findings | `docs/refactor/stage2/CLOSURE.md` (131 done, 16 opt-in, 7 rejected, 8 deferred, 5 open) |
+| the 167 audit findings | `docs/refactor/stage2/CLOSURE.md` (131 done, 16 opt-in, 7 rejected, 9 deferred, 4 open) |
 | the 8k A/B protocol and the template decisions | `docs/refactor/stage2/DECISIONS.md` ("Template objective", "Kept opt-in pending an A/B") |
 | GPU profile of the templates (launch-bound step, clip at 100 %, FDL cost) | `docs/refactor/stage2/analysis/gpu_profile.md` section 0 |
 | R3GAN track, R4 numbers, harness | `docs/refactor/stage3/PROGRESS.md` "PAUSED", `stage3/r3gan/RESULTS.md`; runs and harness in the gitignored `.worktrees/refactor/experiments/r3gan_ab/` |
@@ -151,14 +151,41 @@ the owner's gate; the Codex reviews of P, T and S can run as one parallel step w
 | 3:20-3:50 | - | docs: `STATUS.md`, `CLOSURE.md`, `stage2/DECISIONS.md`, `stage3/PROGRESS.md`, this file; push on the owner's word |
 | 3:50-4:00 | buffer | |
 
+### 3.4 Flexible pool and swap rules (session 9 started 13:30)
+Run decisions are the main session's, after a Fable consult (t5, effort high) at each checkpoint; each decision
+is logged in `stage3/PROGRESS.md` with its evidence. **Checkpoints:** T+0:45 (bench numbers, first A/B pair
+timed, the discriminator research shortlist), T+1:50 (A/B gate), T+2:45 (what still fits before the suite).
+
+**Swap rules.**
+1. Hard stops: the full suite starts by T+3:10, docs by T+3:25. A GPU job starts only if it ends before the
+   next hard stop with 10 minutes to spare.
+2. GPU priority when windows compete: lane P's timing > the A/B arms in the order B0 = B0s2 > B1 > B2 > B3 >
+   B5 > pool items. An arm that cannot finish in time is dropped, not shortened (a shorter arm is not comparable).
+3. A measurement (class S) that decides a question beats an A/B arm (class A8) that only narrows it.
+4. A lane stuck on its approach after its budget (P: no exact fix by T+2:00) stops coding and records what it
+   learned (P: profile, cause, `reg_every` 1/4/16 costs); its GPU window goes back to the pool.
+5. A lane that finishes early pulls the next class-0 item; idle GPU time pulls the next class-S item.
+
+**Pool** (filled further from `docs/refactor/stage3/discriminator/RESEARCH_REVIEW.md` when it lands):
+| item | GPU class | value | needs |
+|---|---|---|---|
+| D cost: `bench.py` with `network_d = unet` (and the research candidates) vs metagan | S (~3 min each) | the speed half of A-04: metagan is 27 % of the step | - |
+| `term_grads.py` on B0's 8k weights vs the pretrain: G's adversarial share after training | S | A-04's gradient half without a 20k run | B0 done |
+| 8k arms `network_d = unet` at 0.1 and metagan at 0.03 (A-04 screen; the >= 20k run stays the decision) | A8 x2 | early sign for the template D | queue slack |
+| B5: the winners of B1-B3 together | A8 | interaction | two or more winners |
+| a second seed of an arm to be flipped | A8 | robustness of a flip | the gate |
+| the A/B harness into `scripts/ab/` (pointed at the checkout, 8k and 20k budgets) | 0 | every later A/B | - |
+| Studio: OTF keys in `degradations.ts`; arch constructor parameters in the surface (S.11) | 0 | Studio catalog complete | lane S merged |
+| GP-05 peak-memory test; GP-07 readme note on `compile` for transformer templates | 0 | closes two sub-items | - |
+
 ---
 
 ## 4. The open audit findings (`docs/refactor/stage2/CLOSURE.md`)
 Decided 2026-11-11: **T-11 rejected** (GP-09 measured no gain), **ST-14 deferred** (trigger: a run past
-`wavelet_init` or R6 shows a dip). 5 open:
+`wavelet_init` or R6 shows a dip), **L-16 deferred** (owner). 4 open:
 - **needs a run:** A-04 the template discriminator (P1; >= 20k, the R6 arms A0/A1; this session only measures
-  the adversarial share with `term_grads.py`), L-07 LDL (this session: G1 + arm B2), L-16 bf16 output tail (the
-  owner first says whether it is wanted), L-15 FDL grid (only if artifacts show);
+  the adversarial share with `term_grads.py`), L-07 LDL (this session: G1 + arm B2), L-15 FDL grid (only if artifacts
+  show);
 - **waits with OTF:** D-16.
 Seven arch-specific findings are deferred by the owner's goal (A-12, A-17, W-09, W-12, W-16, MX-15, MX-19).
 
@@ -182,7 +209,7 @@ trainer's validator), `npx ng build --configuration development --output-path di
 
 ---
 
-## 6. Ideas waiting for the owner's decision (not tasks; do not start)
+## 6. Ideas deferred by the owner (not tasks; do not start)
 
 ### 6.1 Replace OpenCV decoding by pyvips for lazy (region) reads
 **The suggestion as the owner received it** (Russian, with typos, 2026-11-10): "maybe replace cv with pyvips:

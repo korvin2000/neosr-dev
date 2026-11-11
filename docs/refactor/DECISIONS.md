@@ -167,5 +167,11 @@ Consequences:
   right is open too: a cross-fade mixes RGB and SWT bands in the same channels; `wavelet_init` at the GAN
   start (config only) or a short D warm-up are alternatives, and `wavelet_guided` itself has no A/B. Trigger:
   a run past 80k or the R6 A/B shows a dip after the switch, or the templates' `wavelet_guided` is decided.
+- **L-16 (fp32 generator tail) and the pyvips lazy-read idea (`next_tasks.md` 6.1): deferred** (owner, the
+  same day).
+- **Run decisions delegated (owner, the same day):** within the session plan, which A/B arms and measurements
+  run, which tasks are swapped for cheaper or more useful ones as time runs out, and the gate on the 8k A/B
+  results are decided by the main session after consulting Fable (t5, effort high), without asking the owner.
+  Every such decision is logged with its evidence; default flips stay marked provisional (8k, one arch).
 - **Session plan:** a 4-hour session on the Linux machine with parallel lanes and no multi-hour GPU runs
   (`next_tasks.md`); core quality, GAN modes, speed and stability first, Studio in parallel.
