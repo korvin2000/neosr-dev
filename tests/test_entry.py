@@ -21,11 +21,10 @@ from neosr.runtime import Runtime
 
 ROOT = Path(__file__).resolve().parents[1]
 CPU = Runtime(torch.device("cpu"), 0, 1, 0, False)
+# Machine-specific fixture (shared with test_checkpoint.py): a trained esrgan export; skipped when absent.
 NET_G_2000 = Path(
-    os.environ.get(
-        "NEOSR_NET_G_2000",
-        "/home/korvin/apps/neosr-dev/experiments/train_esrgan/models/net_g_2000.pth",
-    )
+    os.environ.get("NEOSR_NET_G_2000")
+    or "/home/korvin/apps/neosr-dev/experiments/train_esrgan/models/net_g_2000.pth"
 )
 
 
@@ -543,8 +542,7 @@ num_conv = 2
 
 
 @pytest.mark.skipif(
-    not NET_G_2000.is_file(),
-    reason="needs experiments/train_esrgan/models/net_g_2000.pth",
+    not NET_G_2000.is_file(), reason=f"needs {NET_G_2000} (set NEOSR_NET_G_2000)"
 )
 def test_test_py_reproduces_old_loader_psnr(tmp_path, data):
     """net_g_2000.pth through read_weights (test.py) gives the PSNR of the old loader's weights exactly."""

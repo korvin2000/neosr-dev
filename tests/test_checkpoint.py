@@ -15,8 +15,10 @@ from neosr.models import checkpoint as ck
 from neosr.utils import rng as neosr_rng
 
 LOG = logging.getLogger("test_checkpoint")
+# Machine-specific fixture (shared with test_entry.py): a trained esrgan export; skipped when absent.
 ESRGAN_G = Path(
-    "/home/korvin/apps/neosr-dev/experiments/train_esrgan/models/net_g_2000.pth"
+    os.environ.get("NEOSR_NET_G_2000")
+    or "/home/korvin/apps/neosr-dev/experiments/train_esrgan/models/net_g_2000.pth"
 )
 
 
@@ -96,7 +98,9 @@ def test_read_weights_rejects_state_and_unknown(tmp_path):
         ck.read_weights(p)
 
 
-@pytest.mark.skipif(not ESRGAN_G.is_file(), reason="esrgan export absent")
+@pytest.mark.skipif(
+    not ESRGAN_G.is_file(), reason=f"needs {ESRGAN_G} (set NEOSR_NET_G_2000)"
+)
 def test_read_weights_esrgan_export():
     sd = ck.read_weights(ESRGAN_G)
     assert sd

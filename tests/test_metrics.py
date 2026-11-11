@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -14,7 +15,8 @@ from neosr.metrics.calculate import release_metric_nets
 from neosr.models.base import base
 from neosr.utils.img_util import img2tensor, tensor2img
 
-VAL_GT = Path("/home/korvin/apps/data/val/GT")
+# Machine-specific fixture: the validation images REFERENCE was recorded on; skipped when absent.
+VAL_GT = Path(os.environ.get("NEOSR_VAL_GT") or "/home/korvin/apps/data/val/GT")
 HUB = Path(torch.hub.get_dir()) / "checkpoints"
 NET_WEIGHTS = {
     "dists": [
@@ -122,7 +124,7 @@ def test_build_metric_config_errors():
     assert cfg == {"type": "calculate_psnr", "crop_border": 4}  # input not mutated
 
 
-@pytest.mark.skipif(not VAL_GT.is_dir(), reason="validation images not available")
+@pytest.mark.skipif(not VAL_GT.is_dir(), reason=f"needs {VAL_GT} (set NEOSR_VAL_GT)")
 @pytest.mark.parametrize("name", sorted(REFERENCE))
 def test_psnr_ssim_match_reference(name):
     data = _pair(name)

@@ -10,15 +10,24 @@ Updated 2026-11-11. Read this first; the per-stage logs (`PROGRESS.md`, `stage2/
 | Windows workstation (Ryzen 5 5500U, 6 cores, 31 GB RAM, no GPU) | `C:\work2000\neosr-dev`, CPU-only `.venv` (torch 2.9.1+cpu) since 2026-11-10 | code analysis and review, documentation, small core changes checked by **targeted** CPU tests, NeoSR Studio (the UI prototype). Slow CPU: no suite runs, no sweeps, no training |
 
 Consequences:
-- On the Windows machine prefer work that needs no compute at all; run single test files or `-k` selections only
-  (measured: 360 config/registry/import tests take 2 min, one `import neosr.*` subprocess ~10 s). Never start the
-  full suite, the per-arch sweeps (`test_archs*`, the `test_s2_*` arch files, `test_losses_pipeline`), ONNX export
-  sweeps or a training run there.
+- On the Windows machine prefer work that needs no compute at all; run single test files, `-k` selections or at
+  most the **fast CPU subset** `pytest -m "not slow and not cuda"` (measured: 360 config/registry/import tests take
+  2 min, one `import neosr.*` subprocess ~10 s). Never start the full suite, the per-arch sweeps (`test_archs*`, the
+  `test_s2_*` arch files, `test_losses_pipeline`), ONNX export sweeps or a training run there.
+- Test markers (set in `tests/conftest.py`, registered in `pyproject.toml`): `cuda` (needs a CUDA device: read
+  from the tests' CUDA skip marks and device parameters) and `slow` (the reviewed `SLOW` list: per-arch sweeps,
+  per-arch ONNX exports, the shipped-config constructors, torch.compile, the import subprocesses). The fast CPU
+  subset is 1814 of 2740 tests, 93 s on the Linux machine (`CUDA_VISIBLE_DEVICES= OMP_NUM_THREADS=8`; the full CPU
+  suite 7 min). It needs the network once: ~31 tests load VGG16/19, LPIPS/TOPIQ (torch hub cache) and the DISTS
+  weights (`neosr/losses/dists_weights.pth`). `.github/workflows/tests.yml` runs it plus the Studio checks on
+  push/PR (weights cached).
 - A core change made on the Windows machine counts as **verified only for the tests named next to it**; list it
   under "Waiting for the Linux machine" below until the full suite ran there, and keep such changes small.
 - Torch-free checks: `python scripts/studio_surface.py` (`--check`, `--validate <toml>`) and everything under
   `studio/` (`npm run typecheck`, `npx ng test --watch=false`, `npm run contract`, `ng build`).
-- Paths like `/home/korvin/...` in the logs and in three test fixtures are the Linux machine's and are correct there.
+- Paths like `/home/korvin/...` in the logs are the Linux machine's. The two machine-specific test fixtures default
+  to them and are overridden by `NEOSR_NET_G_2000` (a trained esrgan `net_g_2000.pth`: `test_checkpoint.py`,
+  `test_entry.py`) and `NEOSR_VAL_GT` (the validation GT images: `test_metrics.py`); without the file the tests skip.
 
 ### The Windows CPU environment (not `uv sync`: the lock pins CUDA wheels)
 ```bash
@@ -28,6 +37,7 @@ python -m uv pip install --python .venv/Scripts/python.exe torch==2.9.1 torchvis
 python -m uv export --frozen --no-hashes --no-emit-project | grep -vE "^(torch|torchvision|nvidia-|triton|onnxruntime-gpu)" > req.txt
 python -m uv pip install --python .venv/Scripts/python.exe -r req.txt onnxruntime pytest ruff
 .venv/Scripts/python.exe -m pytest tests/test_config.py -q -p no:cacheprovider
+.venv/Scripts/python.exe -m pytest tests -m "not slow and not cuda" -q -p no:cacheprovider   # fast CPU subset
 ```
 Versions follow `uv.lock` except the CPU builds of torch/torchvision and `onnxruntime` instead of `onnxruntime-gpu`.
 
@@ -137,10 +147,10 @@ The order of work is "Owner priorities" above; this list only says what fits thi
    on the Linux machine): needs one copy step there, then review and cleanup can happen here.
 
 **Seconds to minutes of CPU (targeted tests):**
-6. **Test infrastructure**: pytest markers (`cuda`, `slow`, `fixture`) and a fast CPU subset in `pyproject.toml`
-   (this machine needs it most); the three fixture paths (`tests/test_checkpoint.py:19`, `tests/test_entry.py:27`,
-   `tests/test_metrics.py:17`) from an environment variable with today's values as defaults; a GitHub Actions
-   workflow for the fast subset plus the Studio checks (stage-1 follow-up S.4).
+6. **Test infrastructure: done 2026-11-11** on the Linux machine (stage-1 follow-up S.4): markers `cuda`/`slow`
+   and the fast CPU subset (see "Consequences" above), the fixture paths from `NEOSR_NET_G_2000`/`NEOSR_VAL_GT`,
+   `.github/workflows/tests.yml` (fast subset; Studio typecheck, unit tests, contract). The workflow has not run
+   yet, and the subset's time on this machine is unmeasured.
 7. **Windows portability of the tests: done 2026-11-10** (Linux-verified only; the next Windows run confirms):
    the gloo DDP test skips on win32 (gloo cannot resolve the Windows host name; whether DDP works on Windows at
    all is unverified), run-generated files are read and written as UTF-8 (`test_entry.py`, `test_s3_exports.py`,

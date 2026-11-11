@@ -1,0 +1,76 @@
+# Fast CPU test subset of the trainer plus the NeoSR Studio checks.
+# The full suite (per-arch sweeps, ONNX exports, CUDA) runs on the Linux workstation, not here.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  trainer:
+    name: trainer (pytest -m "not slow and not cuda")
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CUDA_VISIBLE_DEVICES: ""
+      PY: .venv/bin/python
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # parity tests in test_losses.py / test_gan.py `git show` old revisions
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      # The subset loads pretrained weights (VGG16/19 and LPIPS/TOPIQ via torch.hub, DISTS into
+      # neosr/losses/): downloaded once, then restored. Bump the key to refresh it.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/torch/hub
+            neosr/losses/dists_weights.pth
+          key: torch-weights-v1
+      # uv.lock pins CUDA wheels: CPU torch/torchvision from the PyTorch CPU index, the rest from the
+      # lock without torch, nvidia-*, triton and onnxruntime-gpu (docs/refactor/STATUS.md, Windows recipe).
+      - name: Install the CPU environment
+        run: |
+          python -m pip install uv
+          uv venv --python 3.13 .venv
+          uv pip install --python "$PY" torch==2.9.1 torchvision==0.24.1 --index-url https://download.pytorch.org/whl/cpu
+          uv export --frozen --no-hashes --no-emit-project | grep -vE "^(torch|torchvision|nvidia-|triton|onnxruntime-gpu)" > req.txt
+          uv pip install --python "$PY" -r req.txt onnxruntime==1.23.2 pytest
+      - name: Fast CPU subset
+        run: $PY -m pytest tests -m "not slow and not cuda" -q -p no:cacheprovider
+
+  studio:
+    name: studio (typecheck, unit tests, contract)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NG_CLI_ANALYTICS: "false"
+    defaults:
+      run:
+        working-directory: studio
+    steps:
+      - uses: actions/checkout@v5
+      # studio/package.json has no "engines"; 22 satisfies the lock's floor (Angular 22: ^22.22.3).
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: studio/package-lock.json
+      # `npm run contract` calls `python ../scripts/studio_surface.py`, which is torch-free (stdlib only).
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: npm ci
+      - run: npm run typecheck
+      # @angular/build:unit-test runs vitest in jsdom: no browser needed.
+      - run: npx ng test --watch=false
+      - run: npm run contract
