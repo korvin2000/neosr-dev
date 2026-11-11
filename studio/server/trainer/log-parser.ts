@@ -169,8 +169,8 @@ export class TrainerLogParser {
         if (p?.[2] !== undefined) {
           scalars.push(['sys/data_wait', Number(p[2])]);
         }
-      } else if (key === 'lr') {
-        scalars.push(['lr/g', Number((value as string).split(' ')[0])]);
+      } else if (key === 'lr' || key === 'lr_d') {
+        scalars.push([key === 'lr' ? 'lr/g' : 'lr/d', Number((value as string).split(' ')[0])]);
       } else if (key === 'eta') {
         etaSec = parseEta(value as string);
       } else {

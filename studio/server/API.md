@@ -74,7 +74,7 @@ Log line → event (the clock is the trainer's update, mapped to the curriculum 
 | any non-blank line except tqdm bars | `log` (level from the record: INFO → info, WARNING → warn, ERROR/CRITICAL and traceback lines → error; timestamp and colour codes stripped) |
 | `Starting at epoch E, update U.` | status `running` (from `starting`), `phase` |
 | `nothing to do: update N >= total_iter` | `progress` at N (a resume of a finished phase); the run ends `completed` |
-| `[ epoch: … ] [ iter: N ] [ performance: X it/s, data D% ] [ lr: … ] [ eta: … ] [ key: v ] …` | `progress` (`itersPerSec` X, `etaSec` = eta + later phases at X), `scalar` per key: `l_<net>_<x>` → `loss/<net>/<x>`, `out_d_<x>` → `out/d/<x>`, `grad_norm_<net>`, `clipped_<net>`, `skipped_<net>` → `<kind>/<net>`, `nonfinite_<key>` → `nonfinite/<series>`, others → `train/<key>`; `lr/g` (first value); `sys/data_wait` (D) |
+| `[ epoch: … ] [ iter: N ] [ performance: X it/s, data D% ] [ lr: … ] [ lr_d: … ] [ eta: … ] [ key: v ] …` | `progress` (`itersPerSec` X, `etaSec` = eta + later phases at X), `scalar` per key: `l_<net>_<x>` → `loss/<net>/<x>`, `out_d_<x>` → `out/d/<x>`, `grad_norm_<net>`, `clipped_<net>`, `skipped_<net>` → `<kind>/<net>`, `nonfinite_<key>` → `nonfinite/<series>`, others → `train/<key>`; `lr/g`, `lr/d` (first value; `lr_d` only with a D phase); `sys/data_wait` (D) |
 | `skipped_<net>` > 0 in that line | `warning` `NONFINITE` |
 | `Validation <dataset>` + `# <metric>: <value>…` lines | `validation` (`images: []`); the first dataset sets `bestMetric` |
 | `saving update N` (confirmed by the next line; dropped if the process then dies) | `checkpoint` `net_g_N.pth` (+ `net_d_N.pth` when `network_d` was logged), `N.state`; `sizeMb` from `one export set is X MiB` |

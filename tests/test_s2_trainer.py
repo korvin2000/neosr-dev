@@ -923,6 +923,14 @@ def test_message_logger_shows_the_data_share(caplog):
         })
     assert "[ performance: 2.000 it/s, data 25% ]" in caplog.text
     assert "data:" not in caplog.text
+    assert "[ lr: 1.00e-03 ] [ eta:" in caplog.text  # no D phase: no lr_d field
+
+
+def test_message_logger_shows_the_d_lr(caplog):
+    ml = MessageLogger({"name": "x", "logger": {"total_iter": 10}}, None)
+    with caplog.at_level(logging.INFO, logger="neosr"):
+        ml({"epoch": 0, "iter": 1, "lrs": [1e-3, 5e-4], "lrs_d": [2e-4], "time": 0.5})
+    assert "[ lr: 1.00e-03 5.00e-04 ] [ lr_d: 2.00e-04 ] [ eta:" in caplog.text
 
 
 # ---------------------------------------------------------------------------- T-12 keep_exports

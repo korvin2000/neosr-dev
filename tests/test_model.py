@@ -239,6 +239,7 @@ def test_train_step(tmp_path, d, accumulate, ema):
     m = build(make_opt(tmp_path, d=d, ema=ema, accumulate=accumulate))
     assert (m.ema is not None) == (ema > 0)
     assert set(m.phases) == ({"net_g", "net_d"} if d else {"net_g"})
+    assert m.current_lr("d") == ([pytest.approx(1e-4)] if d else [])  # logged as lr_d
     if d:
         assert m.net_d.training
         assert m.net_d_adv is m.net_d_fwd is m.net_d

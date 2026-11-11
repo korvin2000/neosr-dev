@@ -115,6 +115,7 @@ class MessageLogger:
         epoch: int = log_vars.pop("epoch")
         current_iter: int = int(log_vars.pop("iter"))
         lrs: list[Any] = log_vars.pop("lrs")
+        lrs_d: list[Any] = log_vars.pop("lrs_d", [])
         message = (
             f"[ epoch:{epoch:4d} ] {tc.light_green}[ iter:{current_iter:7,d} ]{tc.end}"
         )
@@ -128,11 +129,11 @@ class MessageLogger:
                 seconds=int(time_sec_avg * (self.max_iters - current_iter))
             )
             speed = 1 / iter_time if iter_time > 0 else 0.0
-            lr = " ".join(f"{v:.2e}" for v in lrs)
+            lr = f"[ lr: {' '.join(f'{v:.2e}' for v in lrs)} ] "
+            if lrs_d:  # D's lr only when a D phase exists
+                lr += f"[ lr_d: {' '.join(f'{v:.2e}' for v in lrs_d)} ] "
             wait = "" if data is None else f", data {100 * data:.0f}%"
-            message += (
-                f" [ performance: {speed:.3f} it/s{wait} ] [ lr: {lr} ] [ eta: {eta} ] "
-            )
+            message += f" [ performance: {speed:.3f} it/s{wait} ] {lr}[ eta: {eta} ] "
         for k, v in log_vars.items():
             message += f"[ {k}: {v:.4e} ] "
             if self.tb_logger is not None:

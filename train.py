@@ -233,7 +233,12 @@ def train(cfg: dict[str, Any], rt: Runtime) -> None:
                 done = stopping or u >= total
                 if u % print_freq == 0 or done:
                     # get_current_log is a collective under DDP: every rank calls it
-                    log_vars = {"epoch": epoch, "iter": u, "lrs": model.current_lr()}
+                    log_vars = {
+                        "epoch": epoch,
+                        "iter": u,
+                        "lrs": model.current_lr(),
+                        "lrs_d": model.current_lr("d"),
+                    }
                     log_vars |= {
                         "time": timer.get_avg_time(),
                         "data": data_wait.share(),

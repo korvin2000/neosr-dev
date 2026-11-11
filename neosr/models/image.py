@@ -474,8 +474,10 @@ class image(base):
             msg = "non-finite weights or buffers; the last committed checkpoint stands"
             raise FloatingPointError(msg)
 
-    def current_lr(self) -> list[float]:
-        return [step_lr(g) for g in self.g.opt.param_groups]
+    def current_lr(self, net: str = "g") -> list[float]:
+        """The step lr of every param group of G or D ("d"; [] without a D phase)."""
+        phase = self.g if net == "g" else self.d
+        return [] if phase is None else [step_lr(g) for g in phase.opt.param_groups]
 
     # ---------------------------------------------------------------- evaluation
     @contextmanager

@@ -81,13 +81,13 @@ describe('TrainerLogParser on synthetic lines', () => {
   it('reads a GAN progress line: D series, a skipped update, several lrs, a multi-day eta', () => {
     const { events } = parse([
       `${TS} INFO: [image] network_d: metagan2, parameters: 1,234`,
-      `${TS} INFO: [ epoch:   3 ] \x1b[1;32m[ iter: 12,300 ]\x1b[0m [ performance: 3.910 it/s, data 7% ] [ lr: 1.00e-04 5.00e-05 ] [ eta: 1 day, 2:03:04 ] [ l_g_total: 1.0000e+00 ] [ l_d_real: 3.0000e-01 ] [ out_d_fake: -2.0000e-01 ] [ grad_norm_d: 5.0000e-01 ] [ skipped_g: 2.0000e+00 ] [ nonfinite_l_g_gan: 1.0000e+00 ] `,
+      `${TS} INFO: [ epoch:   3 ] \x1b[1;32m[ iter: 12,300 ]\x1b[0m [ performance: 3.910 it/s, data 7% ] [ lr: 1.00e-04 5.00e-05 ] [ lr_d: 2.00e-04 ] [ eta: 1 day, 2:03:04 ] [ l_g_total: 1.0000e+00 ] [ l_d_real: 3.0000e-01 ] [ out_d_fake: -2.0000e-01 ] [ grad_norm_d: 5.0000e-01 ] [ skipped_g: 2.0000e+00 ] [ nonfinite_l_g_gan: 1.0000e+00 ] `,
       `${TS} INFO: saving update 12300`,
       `${TS} INFO: one export set is 40.0 MiB; logger.keep_exports = 0 (0 keeps every set)`,
     ]);
     expect(ofType(events, 'progress')[0]?.body).toMatchObject({ itersPerSec: 3.91, etaSec: 93_784, nativeIter: 12_300 });
     const series = Object.fromEntries(ofType(events, 'scalar').map((e) => [e.body.series, e.body.value]));
-    expect(series).toMatchObject({ 'sys/data_wait': 7, 'lr/g': 1e-4, 'loss/d/real': 0.3, 'out/d/fake': -0.2, 'grad_norm/d': 0.5, 'skipped/g': 2, 'nonfinite/loss/g/gan': 1 });
+    expect(series).toMatchObject({ 'sys/data_wait': 7, 'lr/g': 1e-4, 'lr/d': 2e-4, 'loss/d/real': 0.3, 'out/d/fake': -0.2, 'grad_norm/d': 0.5, 'skipped/g': 2, 'nonfinite/loss/g/gan': 1 });
     expect(ofType(events, 'warning').map((e) => e.body.code)).toEqual(['NONFINITE']);
     expect(ofType(events, 'checkpoint')[0]?.body).toEqual({ type: 'checkpoint', files: ['net_g_12300.pth', 'net_d_12300.pth', '12300.state'], sizeMb: 40, state: true });
   });
