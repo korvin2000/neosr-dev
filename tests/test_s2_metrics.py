@@ -382,6 +382,46 @@ def test_validation_runs_without_cudnn_autotune(tmp_path):
         torch.backends.cudnn.benchmark = was
 
 
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+def test_first_validation_pass_has_no_autotune_memory_peak(tmp_path):
+    """GP-05: with the training flags (benchmark on, benchmark_limit = 0) a first validation pass over
+    new image shapes would run cuDNN's exhaustive search, whose workspaces dwarf the net: 2.1 GB peak
+    against 6.5 MiB for this net on an RTX 4090 with no_cudnn_autotune disabled (4.8 GB in the stage-2
+    profile). The first pass must peak like the second one (shapes known); 2x + 64 MiB absorbs
+    allocator rounding and stays far below any search workspace."""
+    m = make_model(tmp_path, device="cuda", metrics={"p": {"type": "calculate_psnr"}})
+    c = 64
+    m.net_g = nn.Sequential(
+        nn.Conv2d(3, c, 3, padding=1),
+        nn.ReLU(),
+        nn.Conv2d(c, c, 3, padding=1),
+        nn.ReLU(),
+        nn.Conv2d(c, 3 * S * S, 3, padding=1),
+        nn.PixelShuffle(S),
+    ).cuda()
+    loaders = [
+        DataLoader(PairSet([f"/data/lq/s{i}.png"], hw=hw), batch_size=1)
+        for i, hw in enumerate([(96, 128), (128, 80), (72, 120)])
+    ]
+
+    def peak_mib() -> float:
+        torch.cuda.synchronize()
+        base = torch.cuda.memory_allocated()
+        torch.cuda.reset_peak_memory_stats()
+        for i, loader in enumerate(loaders):
+            m.validation(loader, i, None, save_img=False)
+        torch.cuda.synchronize()
+        return (torch.cuda.max_memory_allocated() - base) / 2**20
+
+    flags = torch.backends.cudnn.benchmark, torch.backends.cudnn.benchmark_limit
+    torch.backends.cudnn.benchmark, torch.backends.cudnn.benchmark_limit = True, 0
+    try:
+        first, steady = peak_mib(), peak_mib()
+    finally:
+        torch.backends.cudnn.benchmark, torch.backends.cudnn.benchmark_limit = flags
+    assert first <= 2 * steady + 64, (first, steady)
+
+
 class OOMOnce(Tiny):
     """Raises a CUDA OOM for full images (wider than `limit`) `n` times."""
 

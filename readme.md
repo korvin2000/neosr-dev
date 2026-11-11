@@ -127,6 +127,13 @@ fp16, faster, overflow above 65504; fp16 AMP only), `compile` and `compile_mode`
 `find_unused_parameters` (DDP),
 `input_size`/`in_chans` (log MACs if `torchprofile` is installed), `print_network`.
 
+`compile = true` pays on long GPU runs at a fixed `patch_size`: the step is launch-bound. Measured (RTX 4090,
+realplksr + metagan template, bf16 AMP, `scripts/bench.py` 3x100 updates): 86.7 ms/update instead of 109.9 (-21 %),
+peak VRAM 3104 instead of 3269 MiB, but the first update takes 162 s instead of 44 s (compile warm-up). It compiles
+the training forward of G and of a D without BatchNorm (metagan included; a BatchNorm D and the R1/R2 penalty
+stay eager); validation, saving and EMA use the eager module. It does not pay for short runs or tests, and every
+new input shape recompiles (`dynamic=False`).
+
 ### datasets
 
 | type | use |
