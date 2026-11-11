@@ -190,10 +190,11 @@ target = "lq"         # reference: "gt" (default) or "lq" = bicubic-upscaled lq 
   `skipped_g`/`skipped_d`, and `nonfinite_<key>` (count of left-out non-finite values) when there were any. The
   performance field also shows the share of the window spent waiting for training batches (`data 12%`).
 - **GAN health** (with a discriminator): measured only in the update that is logged (every `print_freq`-th and
-  the last; a stop request's final log has none), per micro-batch and rank-local, then averaged over that
-  update's micro-batches, a skipped update included; no extra host sync. Training stays bitwise the same with the
-  log on or off: verified on the tested configurations (CPU eager, a compiled D under CPU inductor, CUDA bf16 for
-  the no-sync check); DDP is unverified. `grad_sr_gan` =
+  the last; a stop request's final log has none), per micro-batch on each rank's own data, then averaged over
+  that update's micro-batches (a skipped update included) and over the ranks; no extra host sync. Training stays
+  bitwise the same with the log on or off: verified on the tested configurations (CPU eager, a compiled D under
+  CPU inductor, CUDA bf16 for the no-sync check, 2-rank gloo DDP on the CPU with r3gan + rpgan + R1/R2).
+  `grad_sr_gan` =
   `|d(w * l_g_gan)/d sr|` (the adversarial terms as applied, weight and ramp included, every `gan_loss` slot
   summed; norm over the micro-batch),
   `grad_sr_ratio` = `grad_sr_gan / |d(other G terms)/d sr|` (absent without another term; >> 1: the adversarial
