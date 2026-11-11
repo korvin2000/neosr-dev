@@ -5,6 +5,7 @@ config.SCHEMA, the gan types or convert.py's export tables): run `python scripts
 update the Studio catalog its own contract test (`studio/src/app/core/catalog-contract.spec.ts`) names.
 """
 
+import ast
 import importlib.util
 import inspect
 import json
@@ -85,3 +86,56 @@ def test_arch_signatures_match_the_imported_constructors():
         for key in sig.get("fixed", ()):
             with pytest.raises(TypeError, match="multiple values"):
                 obj(**{key: None})
+
+
+PRESETS = """
+class base:
+    def __init__(self, width=8, depth=2, act="relu"):
+        pass
+
+def renamed(channels=16, **kwargs):
+    return base(width=channels, **kwargs)
+
+def derived(blocks=4, **kwargs):
+    return base(depth=blocks * 2, **kwargs)
+
+def forwarded(width=32, **kwargs):
+    return base(width=width, act="gelu", **kwargs)
+"""
+
+
+@pytest.mark.parametrize(
+    ("preset", "expected"),
+    [
+        # a renamed parameter: the base key is bound, the preset's own name is what TOML sets
+        (
+            "renamed",
+            {
+                "params": {"width": 16, "depth": 2, "act": "relu", "channels": 16},
+                "fixed": ["width"],
+            },
+        ),
+        # used, not forwarded: the base key is bound to an expression, the own parameter is open
+        (
+            "derived",
+            {
+                "params": {"width": 8, "depth": None, "act": "relu", "blocks": 4},
+                "nonliteral": ["depth"],
+                "fixed": ["depth"],
+            },
+        ),
+        # forwarded under its own name: open, with the preset's default
+        (
+            "forwarded",
+            {"params": {"width": 32, "depth": 2, "act": "gelu"}, "fixed": ["act"]},
+        ),
+    ],
+)
+def test_preset_resolution(preset, expected):
+    defs = {n.name: n for n in ast.parse(PRESETS).body}
+    assert surface._signature(defs, preset, "fixture").as_json() == expected
+    namespace: dict = {}
+    exec(PRESETS, namespace)  # noqa: S102  (the fixture above: its bound keys really are rejected)
+    for key in expected.get("fixed", ()):
+        with pytest.raises(TypeError, match="multiple values"):
+            namespace[preset](**{key: 1})

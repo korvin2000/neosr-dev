@@ -136,8 +136,8 @@ class Signature:
 
 def _signature(defs: dict[str, ast.stmt], name: str, rel: str) -> Signature:
     """A class's `__init__`; a preset `def p(**kwargs): return base(k=v, ..., **kwargs)` resolves
-    to the base's parameters with the literal keywords as fixed defaults (its own parameters stay
-    open)."""
+    to the base's parameters with the keywords it passes as fixed, plus its own parameters, which
+    stay open (a renamed or derived one: the base key is fixed, the preset's name is open)."""
     node = defs.get(name)
     if isinstance(node, ast.ClassDef):
         init = next(
@@ -174,11 +174,19 @@ def _signature(defs: dict[str, ast.stmt], name: str, rel: str) -> Signature:
     for kw in call.keywords:
         if kw.arg is None:
             continue
-        if isinstance(kw.value, ast.Name) and kw.value.id in own.params:
-            sig.params[kw.arg] = own.params[kw.value.id]  # forwarded: stays open
-        else:
-            sig.params[kw.arg] = _default(kw.value)
-            sig.fixed.add(kw.arg)
+        # every keyword the preset passes is bound (a TOML value for it raises TypeError), unless
+        # it forwards its own parameter of the same name, which the loop below opens again
+        name_ = kw.value.id if isinstance(kw.value, ast.Name) else None
+        sig.params[kw.arg] = (
+            own.params[name_] if name_ in own.params else _default(kw.value)
+        )
+        sig.fixed.add(kw.arg)
+    for (
+        key,
+        default,
+    ) in own.params.items():  # the preset's own parameters are what TOML sets
+        sig.params[key] = default
+        sig.fixed.discard(key)
     return sig
 
 

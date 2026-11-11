@@ -27,6 +27,13 @@ import {
   type PlanContext,
 } from './graph';
 import type { Problem, Severity } from './problems';
+import type { ParamInfo } from '../catalog/data-types';
+
+/** Set keys a preset binds itself (`fixed`, checked against the constructors): NeoSR raises TypeError for any value. */
+function presetBound(params: unknown, info: readonly ParamInfo[]): string[] {
+  const set = (params ?? {}) as Record<string, unknown>;
+  return info.filter((p) => p.fixed && set[p.key] !== undefined).map((p) => p.key);
+}
 
 export interface ValidateOptions {
   readonly platform?: 'windows' | 'linux';
@@ -207,6 +214,9 @@ export function validateRecipe(recipe: Recipe, ctx: PlanContext, options: Valida
           add('blocker', 'native', `Remove "${key}" from the architecture options: NeoSR injects the run scale and rejects a conflicting value.`, { nodeId: ctx.model.id, fieldKey: 'params' });
         }
       }
+      for (const key of presetBound(params, arch.params)) {
+        add('blocker', 'native', `Remove "${key}" from the architecture options: the ${arch.label} preset sets it, and the trainer rejects another value.`, { nodeId: ctx.model.id, fieldKey: 'params' });
+      }
       if (ctx.data && arch.windowSize) {
         for (const { phase } of ranges) {
           const patch = Number(phaseNodeValues(ctx.data, phase.id)['patch_size']);
@@ -225,6 +235,9 @@ export function validateRecipe(recipe: Recipe, ctx: PlanContext, options: Valida
       add('blocker', 'native', `"${dType}" is a generator; network_d needs a discriminator type.`, { nodeId: ctx.dmodel.id, fieldKey: 'type' });
     }
     const head = DISCRIMINATORS.find((d) => d.type === dType);
+    for (const key of presetBound(nodeValues(ctx.dmodel)['params'], head?.params ?? [])) {
+      add('blocker', 'native', `Remove "${key}" from the discriminator options: the ${head?.label} preset sets it, and the trainer rejects another value.`, { nodeId: ctx.dmodel.id, fieldKey: 'params' });
+    }
     if (head?.gtCrop && ctx.data) {
       for (const { phase } of ranges.filter(({ phase }) => phaseHasGan(rows, phase.id))) {
         const gt = Number(phaseNodeValues(ctx.data, phase.id)['patch_size']) * scale;

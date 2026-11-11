@@ -66,11 +66,36 @@ function signatureProblems(type: string, params: readonly ParamInfo[], windowSiz
       }
     }
   }
-  // a None default is computed in the constructor (grformer): nothing literal to compare
-  if (windowSize !== undefined && literal('window_size') && typeof sig.params['window_size'] === 'number' && sig.params['window_size'] !== windowSize) {
-    bad.push(`${type}: windowSize ${windowSize}, constructor window_size ${JSON.stringify(sig.params['window_size'])}`);
+  if (windowSize !== undefined) {
+    const source = windowSource(type, sig);
+    if (source === undefined) {
+      bad.push(`${type}: windowSize ${windowSize} has no source in the constructor: add one to WINDOW_SOURCES`);
+    } else if (source !== 'computed' && source !== windowSize) {
+      bad.push(`${type}: windowSize ${windowSize}, constructor ${source}`);
+    }
   }
   return bad;
+}
+
+const maxOf = (key: string) => (p: Readonly<Record<string, unknown>>) => (Array.isArray(p[key]) ? Math.max(...(p[key] as number[])) : undefined);
+const firstOf = (key: string) => (p: Readonly<Record<string, unknown>>) => (Array.isArray(p[key]) ? (p[key] as number[])[0] : undefined);
+/**
+ * Where `windowSize` comes from when the constructor has no numeric `window_size` default:
+ * another parameter, or 'computed' (a None default the constructor resolves itself).
+ */
+const WINDOW_SOURCES: Readonly<Record<string, 'computed' | ((p: Readonly<Record<string, unknown>>) => number | undefined)>> = {
+  ...Object.fromEntries(['dat_s', 'dat_m', 'dat_2', 'rgt', 'rgt_s'].map((t) => [t, maxOf('split_size')])),
+  ...Object.fromEntries(['hit_srf', 'hit_srf_medium', 'hit_srf_large'].map((t) => [t, firstOf('base_win_size')])),
+  ...Object.fromEntries(['dct', 'grformer', 'grformer_medium', 'grformer_large'].map((t) => [t, 'computed' as const])),
+};
+
+function windowSource(type: string, sig: ArchSignature): number | 'computed' | undefined {
+  const own = sig.params['window_size'];
+  if (typeof own === 'number' && !sig.nonliteral?.includes('window_size')) {
+    return own;
+  }
+  const source = WINDOW_SOURCES[type];
+  return source === 'computed' ? source : source?.(sig.params);
 }
 const opaque = surface.opaque.map((p) => new RegExp(`^${p.replace(/[.]/g, '\\.').replace(/\*/g, '.*')}$`));
 
@@ -179,6 +204,21 @@ describe('catalog contract with the trainer (neosr-surface.json)', () => {
 });
 
 describe('validator mirrors the trainer rules', () => {
+  it('refuses a value for a key the preset binds, also from an imported or saved recipe', () => {
+    const recipe = buildTemplate('2x-hat-s');
+    const generator = node(recipe, NODE_TYPES.generator);
+    expect(blockers(recipe)).toEqual([]);
+    const edited = commands.setValues(generator.id, { params: { embed_dim: 144 } }).apply(recipe);
+    expect(blockers(edited).some((m) => m.includes('"embed_dim"') && m.includes('preset sets it'))).toBe(true);
+    const saved = JSON.parse(JSON.stringify(edited)) as Recipe;
+    expect(blockers(saved).some((m) => m.includes('"embed_dim"'))).toBe(true);
+    const toml = compileRecipe(edited).phases[0]!.text;
+    const imported = importToml(toml, emptyRecipe('imported')).recipe;
+    expect(blockers(imported).some((m) => m.includes('"embed_dim"'))).toBe(true);
+    const open = commands.setValues(generator.id, { params: { mlp_ratio: 3 } }).apply(recipe);
+    expect(blockers(open)).toEqual([]);
+  });
+
   it('refuses nafnet at a scale other than 1', () => {
     const recipe = buildTemplate('1x-restore-span');
     const generator = node(recipe, NODE_TYPES.generator);
