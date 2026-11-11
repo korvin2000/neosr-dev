@@ -216,7 +216,7 @@ target = "lq"         # reference: "gt" (default) or "lq" = bicubic-upscaled lq 
 | [Consistency](https://github.com/neosr-project/neosr/wiki/Losses#consistency_opt-consistency_loss) (Oklab and CIE L*) | `consistency_loss` |
 | [KL divergence](https://pytorch.org/docs/stable/generated/torch.nn.KLDivLoss.html) | `kl_loss` |
 | [MS-SWD](https://github.com/real-hjq/MS-SWD) | `msswd_loss` |
-| [FDL](https://github.com/eezkni/FDL) (`model = "dinov2" \| "vgg" \| "resnet" \| "effnet"`) | `fdl_loss`; `fp32_backbone = false` runs the DINOv2 backbone in bf16 for ~2x faster FDL at 256 px patches (opt-in: gradients drift, see docs/refactor/analysis/perf.md); `checkpoint = true` (DINOv2) recomputes the backbone activations in backward: same result, less memory, slower |
+| [FDL](https://github.com/eezkni/FDL) (`model = "dinov2" \| "vgg" \| "resnet" \| "effnet"`) | `fdl_loss`; `fp32_backbone = false` runs the DINOv2 backbone in bf16 at 256 px patches: it saves memory, not time (RTX 4090, realplksr + metagan template, bf16 AMP: 116.5 vs 109.9 ms/update, peak VRAM 3109 vs 3269 MiB; opt-in: gradients drift, see docs/refactor/analysis/perf.md); `checkpoint = true` (DINOv2) recomputes the backbone activations in backward: same result, less memory, slower |
 
 ## training
 

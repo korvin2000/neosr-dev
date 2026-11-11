@@ -303,11 +303,14 @@ class fdl_loss(Loss):
     `checkpoint=True` (dinov2 only, opt-in) recomputes the backbone's sr-branch activations in
     backward: bitwise the same loss and gradient, ~70 % less saved memory, ~+20 % FDL time (L-17).
 
-    By default the whole loss runs in fp32. `fp32_backbone=False` (opt-in, ~2x faster FDL) runs the
-    DINOv2 backbone under the trainer's autocast for patches of at least `amp_min_size` px per side,
-    the FFT / sort head always in fp32; smaller patches and the CNN backbones stay fp32
+    By default the whole loss runs in fp32. `fp32_backbone=False` (opt-in) runs the DINOv2 backbone
+    under the trainer's autocast for patches of at least `amp_min_size` px per side, the FFT / sort
+    head always in fp32; smaller patches and the CNN backbones stay fp32
     (docs/refactor/analysis/perf.md §3.1: bf16 features drift or blow up the phase gradient there,
-    and even at 256 px the pixel gradient differs by up to 60%, so it is not the default).
+    and even at 256 px the pixel gradient differs by up to 60%, so it is not the default). It saves
+    memory, not time: RTX 4090, realplksr + metagan template, bf16 AMP, eager, scripts/bench.py
+    3 x 100 updates (2026-11-11): 116.5 ms/update vs 109.9 with the fp32 backbone, peak VRAM 3109
+    vs 3269 MiB.
     """
 
     amp_min_size = 256  # smallest validated patch side for the autocast backbone
