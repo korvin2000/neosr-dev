@@ -1,2 +1,4 @@
 # Runtime data of the prototype backend; only the folders are tracked.
 */*.json
+# a real run's phase TOMLs
+runs/*/

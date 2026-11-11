@@ -10,12 +10,14 @@ Read `design/NeoSR_Studio_UI_Concept.md` (one level up, in `../design/`) for the
 |---|---|
 | Install | `npm install` (already done) |
 | Web dev server (proxy `/api` → 4310) | `npm run web` → http://localhost:4300 |
-| Backend | `npm run api` |
+| Backend | `npm run api` (simulated runs, `tsx watch`) |
+| Backend with the real trainer | `npm run api:real` (no watch: `tsx watch` kills the backend 5 s after a reload or Ctrl-C, before trainers can save; `NEOSR_PYTHON`, `NEOSR_ROOT`: see `server/API.md`, "Real trainer"). On Windows a backend shutdown kills live trainers without a checkpoint |
 | Both | `npm start` |
 | Typecheck (fast, no templates) | `npx tsc -p tsconfig.app.json --noEmit` |
 | Full build incl. templates (**use a private output path when others may build concurrently**) | `npx ng build --configuration development --output-path dist/check-<yourname>` |
 | Compiler smoke test | `npx tsx tools/smoke-compile.ts` |
 | Unit tests (compiler, importer, validator, sections, catalog contract) | `npx ng test --watch=false` |
+| Backend unit tests (trainer log parser against a recorded run, trainer runner with a fake process) | `npm run test:server` |
 | Regenerate the trainer surface (`shared/catalog/neosr-surface.json`, generated: never edit) | `npm run surface` |
 | Trainer contract: surface current + compiled TOMLs pass the trainer's `load_config` + `validate_train` | `npm run contract` |
 
@@ -39,6 +41,8 @@ shared/                      TypeScript shared by browser and server (import as 
   compile/import-toml.ts     importToml(text, emptyRecipe(name)) → { recipe, warnings, preserved }
   compile/toml-writer.ts     TomlLine { text, kind, origin?: { nodeId, fieldKey } } (source map)
 server/                      Express backend (see server/API.md) — do not edit unless you own it
+  sim/                       deterministic trainer simulator (the default)
+  trainer/                   real trainer: log-parser.ts (pure: train.py output → event bodies), trainer-runner.ts (spawn, stop, resume, shutdown), run-dirs.ts (output folders, per-run namespace, resume TOML, lock), fixtures/
 src/app/
   core/recipe-store.ts       RecipeStore (the one editable recipe) — see below
   core/commands.ts           every edit is a Command; see list below

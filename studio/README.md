@@ -2,7 +2,7 @@
 
 A web UI for configuring, launching and watching [NeoSR](https://github.com/neosr-project/neosr) training runs. One canonical **recipe** is edited through three synchronized views — a guided **Wizard**, a ComfyUI/chaiNNer-style **node Graph**, and the generated **TOML** — and launched into a run cockpit that replaces TensorBoard for the common case.
 
-> **Prototype status.** The TOML compiler, the validator and the recipe model are real and produce NeoSR-ready configs. Training is **simulated** by the bundled Node backend: no `neosr-train` is launched, no dataset is scanned, no file is written into the NeoSR repository. Every simulated number is labelled as such in the UI. The concept and its review are in `../design/NeoSR_Studio_UI_Concept.md`.
+> **Prototype status.** The TOML compiler, the validator and the recipe model are real and produce NeoSR-ready configs. Training is **simulated** by default by the bundled Node backend: no `neosr-train` is launched, no dataset is scanned, no file is written into the NeoSR repository. Every simulated number is labelled as such in the UI. `STUDIO_TRAINER=real` switches new runs to the actual `train.py` (see `server/API.md`, "Real trainer"). The concept and its review are in `../design/NeoSR_Studio_UI_Concept.md`.
 
 ## Run it
 

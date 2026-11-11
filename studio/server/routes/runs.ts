@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import type { RunEvent } from '../../shared/run.model';
+import { TRAINER_MODE } from '../config';
 import { badRequest, bodyOf, notFound, optionalNumber, platformOf } from '../http';
 import { isImageId, isImageKind, renderValidationImage } from '../sim/images';
 import { parseRecipe } from '../store/recipe-store';
@@ -17,7 +18,8 @@ runsRouter.get('/runs', (_req, res) => {
 runsRouter.post('/runs', (req, res) => {
   const body = bodyOf(req.body);
   const recipe = parseRecipe(body['recipe']);
-  const platform = platformOf(body['platform']) ?? hostPlatform();
+  // a real run compiles for the machine that runs it
+  const platform = TRAINER_MODE === 'real' ? hostPlatform() : (platformOf(body['platform']) ?? hostPlatform());
   res.status(201).json(runStore.create(recipe, platform, optionalNumber(body['speed'])));
 });
 

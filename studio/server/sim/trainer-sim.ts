@@ -244,7 +244,7 @@ function nativeOf(phase: SimPhase, iter: number): number {
   return phase.nativeStart + (iter - phase.start);
 }
 
-function enterPhase(s: SimState, out: RunEvent[], now: number): void {
+export function enterPhase(s: SimState, out: RunEvent[], now: number): void {
   const phase = currentPhase(s);
   if (!phase) {
     return;
@@ -426,7 +426,7 @@ function validationImage(s: SimState, set: ValSet, id: ImageId, metrics: Readonl
   };
 }
 
-function updateBest(s: SimState, metrics: Readonly<Record<string, number>>): void {
+export function updateBest(s: SimState, metrics: Readonly<Record<string, number>>): void {
   const name = s.plan.metrics.find((m) => m in metrics);
   if (!name) {
     return;
@@ -473,7 +473,7 @@ function tickEvents(s: SimState, out: RunEvent[], now: number, phase: SimPhase):
 
 // --- emission --------------------------------------------------------------------------------
 
-function emit(s: SimState, out: RunEvent[], now: number, body: RunEventBody): void {
+export function emit(s: SimState, out: RunEvent[], now: number, body: RunEventBody): void {
   const event: RunEvent = { ...body, seq: ++s.seq, runId: s.plan.runId, iter: s.iter, at: iso(now) };
   s.events.push(event);
   out.push(event);
@@ -483,16 +483,16 @@ function emit(s: SimState, out: RunEvent[], now: number, body: RunEventBody): vo
   }
 }
 
-function setStatus(s: SimState, out: RunEvent[], now: number, status: RunStatus, message?: string): void {
+export function setStatus(s: SimState, out: RunEvent[], now: number, status: RunStatus, message?: string): void {
   s.status = status;
   emit(s, out, now, { type: 'status', status, message });
 }
 
-function log(s: SimState, out: RunEvent[], now: number, line: string, level: 'info' | 'warn' | 'error' = 'info'): void {
+export function log(s: SimState, out: RunEvent[], now: number, line: string, level: 'info' | 'warn' | 'error' = 'info'): void {
   emit(s, out, now, { type: 'log', level, line });
 }
 
-function warn(s: SimState, out: RunEvent[], now: number, code: string, message: string): void {
+export function warn(s: SimState, out: RunEvent[], now: number, code: string, message: string): void {
   s.warnings++;
   emit(s, out, now, { type: 'warning', code, message });
 }
@@ -556,7 +556,7 @@ export function downsample(points: readonly ScalarPoint[], max = 2000): ScalarPo
   return out;
 }
 
-function truncateSeries(s: SimState, iter: number): void {
+export function truncateSeries(s: SimState, iter: number): void {
   for (const key of Object.keys(s.series)) {
     s.series[key] = (s.series[key] ?? []).filter((p) => p.iter <= iter);
   }

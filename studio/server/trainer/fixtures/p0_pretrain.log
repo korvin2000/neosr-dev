@@ -1,0 +1,63 @@
+28-10-2026 05:34 PM | INFO: PyTorch 2.9.1+cu128, device cuda:0 (NVIDIA GeForce RTX 4090)
+28-10-2026 05:34 PM | INFO: Training information:
+-------- Model: P0_pretrain
+-------- Processes: 1, device: cuda:0
+-------- Patch size: 64
+-------- Dataset size: 10007
+-------- Batch size per process: 8, accumulate: 1
+-------- Updates per epoch: 1250.0
+-------- Total updates: 20000
+28-10-2026 05:34 PM | INFO: validation set dev: 300 images
+28-10-2026 05:34 PM | INFO: validation set val8: 8 images
+28-10-2026 05:34 PM | INFO: [image] network_g: realplksr, parameters: 7,389,680
+28-10-2026 05:34 PM | INFO: Using model [image].
+28-10-2026 05:34 PM | INFO: AMP: bf16; non-deterministic, seed 7.
+28-10-2026 05:34 PM | INFO: Starting at epoch 0, update 0.
+28-10-2026 05:34 PM | INFO: [ epoch:   0 ] [1;32m[ iter:    100 ][0m [ performance: 4.176 it/s, data 0% ] [ lr: 2.00e-04 ] [ eta: 1:19:25 ] [ l_g_pix: 1.7889e-01 ] [ l_g_mssim: 3.4647e-01 ] [ l_g_consistency: 1.0501e-01 ] [ l_g_ldl: 9.1399e-03 ] [ l_g_fdl: 6.3983e-01 ] [ l_g_total: 1.2793e+00 ] [ grad_norm_g: 1.0688e+02 ] [ clipped_g: 1.0000e+00 ] [ skipped_g: 0.0000e+00 ] 
+28-10-2026 05:34 PM | INFO: [ epoch:   0 ] [1;32m[ iter:    200 ][0m [ performance: 5.830 it/s, data 0% ] [ lr: 2.00e-04 ] [ eta: 0:56:36 ] [ l_g_pix: 7.3281e-02 ] [ l_g_mssim: 1.6840e-01 ] [ l_g_consistency: 4.2330e-02 ] [ l_g_ldl: 4.2831e-04 ] [ l_g_fdl: 4.0169e-01 ] [ l_g_total: 6.8612e-01 ] [ grad_norm_g: 4.9738e+01 ] [ clipped_g: 1.0000e+00 ] [ skipped_g: 0.0000e+00 ] 
+28-10-2026 05:35 PM | INFO: [ epoch:   0 ] [1;32m[ iter:    300 ][0m [ performance: 9.986 it/s, data 0% ] [ lr: 2.00e-04 ] [ eta: 0:48:31 ] [ l_g_pix: 4.9484e-02 ] [ l_g_mssim: 1.0693e-01 ] [ l_g_consistency: 2.4841e-02 ] [ l_g_ldl: 2.1613e-04 ] [ l_g_fdl: 3.4074e-01 ] [ l_g_total: 5.2221e-01 ] [ grad_norm_g: 2.6467e+01 ] [ clipped_g: 1.0000e+00 ] [ skipped_g: 0.0000e+00 ] 
+28-10-2026 05:35 PM | INFO: [ epoch:   0 ] [1;32m[ iter:    400 ][0m [ performance: 10.000 it/s, data 0% ] [ lr: 2.00e-04 ] [ eta: 0:44:22 ] [ l_g_pix: 3.7138e-02 ] [ l_g_mssim: 7.9974e-02 ] [ l_g_consistency: 1.4994e-02 ] [ l_g_ldl: 1.7292e-04 ] [ l_g_fdl: 3.1045e-01 ] [ l_g_total: 4.4273e-01 ] [ grad_norm_g: 1.3469e+01 ] [ clipped_g: 1.0000e+00 ] [ skipped_g: 0.0000e+00 ] 
+28-10-2026 05:35 PM | INFO: [ epoch:   0 ] [1;32m[ iter:    500 ][0m [ performance: 12.297 it/s, data 0% ] [ lr: 2.00e-04 ] [ eta: 0:40:36 ] [ l_g_pix: 3.2554e-02 ] [ l_g_mssim: 6.7525e-02 ] [ l_g_consistency: 1.2128e-02 ] [ l_g_ldl: 1.4315e-04 ] [ l_g_fdl: 2.9062e-01 ] [ l_g_total: 4.0297e-01 ] [ grad_norm_g: 7.9388e+00 ] [ clipped_g: 1.0000e+00 ] [ skipped_g: 0.0000e+00 ] 
+28-10-2026 05:37 PM | INFO: [ epoch:   1 ] [1;32m[ iter:  1,800 ][0m [ performance: 11.523 it/s, data 0% ] [ lr: 2.00e-04 ] [ eta: 0:29:10 ] [ l_g_pix: 2.5512e-02 ] [ l_g_mssim: 5.2784e-02 ] [ l_g_consistency: 5.8167e-03 ] [ l_g_ldl: 1.2178e-04 ] [ l_g_fdl: 2.6230e-01 ] [ l_g_total: 3.4653e-01 ] [ grad_norm_g: 1.6172e+00 ] [ clipped_g: 9.6000e-01 ] [ skipped_g: 0.0000e+00 ] 
+28-10-2026 05:37 PM | INFO: [ epoch:   1 ] [1;32m[ iter:  1,900 ][0m [ performance: 11.725 it/s, data 0% ] [ lr: 2.00e-04 ] [ eta: 0:28:50 ] [ l_g_pix: 2.5124e-02 ] [ l_g_mssim: 5.0843e-02 ] [ l_g_consistency: 5.7339e-03 ] [ l_g_ldl: 1.3312e-04 ] [ l_g_fdl: 2.6113e-01 ] [ l_g_total: 3.4296e-01 ] [ grad_norm_g: 1.5710e+00 ] [ clipped_g: 9.2000e-01 ] [ skipped_g: 0.0000e+00 ] 
+28-10-2026 05:37 PM | INFO: [ epoch:   1 ] [1;32m[ iter:  2,000 ][0m [ performance: 11.851 it/s, data 0% ] [ lr: 2.00e-04 ] [ eta: 0:28:30 ] [ l_g_pix: 2.4986e-02 ] [ l_g_mssim: 5.0477e-02 ] [ l_g_consistency: 5.6571e-03 ] [ l_g_ldl: 1.2784e-04 ] [ l_g_fdl: 2.5952e-01 ] [ l_g_total: 3.4077e-01 ] [ grad_norm_g: 1.6394e+00 ] [ clipped_g: 9.4000e-01 ] [ skipped_g: 0.0000e+00 ] 
+28-10-2026 05:37 PM | INFO: Validation dev
+
+	 # psnr: 29.7477[1;32m........ Best: 29.7477 @ 2000 iter[0m
+	 # topiq: 0.6024[1;32m........ Best: 0.6024 @ 2000 iter[0m
+	 # lpips: 0.2329[1;32m........ Best: 0.2329 @ 2000 iter[0m
+	 # dists: 0.1873[1;32m........ Best: 0.1873 @ 2000 iter[0m
+
+28-10-2026 05:37 PM | INFO: Validation val8
+
+	 # psnr: 28.4372[1;32m........ Best: 28.4372 @ 2000 iter[0m
+	 # topiq: 0.5948[1;32m........ Best: 0.5948 @ 2000 iter[0m
+	 # lpips: 0.2757[1;32m........ Best: 0.2757 @ 2000 iter[0m
+	 # dists: 0.1658[1;32m........ Best: 0.1658 @ 2000 iter[0m
+
+28-10-2026 05:37 PM | INFO: [ epoch:   1 ] [1;32m[ iter:  2,100 ][0m [ performance: 12.277 it/s, data 0% ] [ lr: 2.00e-04 ] [ eta: 0:29:30 ] [ l_g_pix: 2.4648e-02 ] [ l_g_mssim: 4.9439e-02 ] [ l_g_consistency: 5.5724e-03 ] [ l_g_ldl: 1.1851e-04 ] [ l_g_fdl: 2.6213e-01 ] [ l_g_total: 3.4191e-01 ] [ grad_norm_g: 1.4880e+00 ] [ clipped_g: 8.3000e-01 ] [ skipped_g: 0.0000e+00 ] 
+28-10-2026 05:37 PM | INFO: [ epoch:   1 ] [1;32m[ iter:  2,200 ][0m [ performance: 12.267 it/s, data 0% ] [ lr: 2.00e-04 ] [ eta: 0:29:06 ] [ l_g_pix: 2.5418e-02 ] [ l_g_mssim: 5.1063e-02 ] [ l_g_consistency: 5.7349e-03 ] [ l_g_ldl: 1.2957e-04 ] [ l_g_fdl: 2.6001e-01 ] [ l_g_total: 3.4236e-01 ] [ grad_norm_g: 1.8025e+00 ] [ clipped_g: 9.5000e-01 ] [ skipped_g: 0.0000e+00 ] 
+28-10-2026 05:42 PM | INFO: [ epoch:   3 ] [1;32m[ iter:  4,900 ][0m [ performance: 12.393 it/s, data 0% ] [ lr: 2.00e-04 ] [ eta: 0:23:52 ] [ l_g_pix: 2.4302e-02 ] [ l_g_mssim: 4.8548e-02 ] [ l_g_consistency: 4.9482e-03 ] [ l_g_ldl: 1.2994e-04 ] [ l_g_fdl: 2.5220e-01 ] [ l_g_total: 3.3013e-01 ] [ grad_norm_g: 9.1705e-01 ] [ clipped_g: 2.7000e-01 ] [ skipped_g: 0.0000e+00 ] 
+28-10-2026 05:42 PM | INFO: [ epoch:   3 ] [1;32m[ iter:  5,000 ][0m [ performance: 12.504 it/s, data 0% ] [ lr: 2.00e-04 ] [ eta: 0:23:38 ] [ l_g_pix: 2.4356e-02 ] [ l_g_mssim: 4.8630e-02 ] [ l_g_consistency: 4.9696e-03 ] [ l_g_ldl: 1.2258e-04 ] [ l_g_fdl: 2.5311e-01 ] [ l_g_total: 3.3119e-01 ] [ grad_norm_g: 9.6115e-01 ] [ clipped_g: 3.9000e-01 ] [ skipped_g: 0.0000e+00 ] 
+28-10-2026 05:42 PM | INFO: saving update 5000
+28-10-2026 05:42 PM | INFO: one export set is 28.3 MiB; logger.keep_exports = 0 (0 keeps every set)
+28-10-2026 05:42 PM | INFO: [ epoch:   4 ] [1;32m[ iter:  5,100 ][0m [ performance: 12.557 it/s, data 1% ] [ lr: 2.00e-04 ] [ eta: 0:23:25 ] [ l_g_pix: 2.4085e-02 ] [ l_g_mssim: 4.7427e-02 ] [ l_g_consistency: 4.8739e-03 ] [ l_g_ldl: 1.2302e-04 ] [ l_g_fdl: 2.5081e-01 ] [ l_g_total: 3.2732e-01 ] [ grad_norm_g: 8.6329e-01 ] [ clipped_g: 2.3000e-01 ] [ skipped_g: 0.0000e+00 ] 
+28-10-2026 05:42 PM | INFO: [ epoch:   4 ] [1;32m[ iter:  5,200 ][0m [ performance: 12.551 it/s, data 0% ] [ lr: 2.00e-04 ] [ eta: 0:23:12 ] [ l_g_pix: 2.4012e-02 ] [ l_g_mssim: 4.8113e-02 ] [ l_g_consistency: 4.7667e-03 ] [ l_g_ldl: 1.2003e-04 ] [ l_g_fdl: 2.5121e-01 ] [ l_g_total: 3.2822e-01 ] [ grad_norm_g: 8.2549e-01 ] [ clipped_g: 2.2000e-01 ] [ skipped_g: 0.0000e+00 ] 
+28-10-2026 06:02 PM | INFO: [ epoch:  15 ] [1;32m[ iter: 19,800 ][0m [ performance: 12.555 it/s, data 0% ] [ lr: 2.00e-04 ] [ eta: 0:00:17 ] [ l_g_pix: 2.3511e-02 ] [ l_g_mssim: 4.5996e-02 ] [ l_g_consistency: 3.9673e-03 ] [ l_g_ldl: 1.2311e-04 ] [ l_g_fdl: 2.3434e-01 ] [ l_g_total: 3.0793e-01 ] [ grad_norm_g: 5.5769e-01 ] [ clipped_g: 1.0000e-02 ] [ skipped_g: 0.0000e+00 ] 
+28-10-2026 06:02 PM | INFO: [ epoch:  15 ] [1;32m[ iter: 19,900 ][0m [ performance: 12.519 it/s, data 0% ] [ lr: 2.00e-04 ] [ eta: 0:00:08 ] [ l_g_pix: 2.3157e-02 ] [ l_g_mssim: 4.5794e-02 ] [ l_g_consistency: 3.8942e-03 ] [ l_g_ldl: 1.1118e-04 ] [ l_g_fdl: 2.3481e-01 ] [ l_g_total: 3.0776e-01 ] [ grad_norm_g: 5.5376e-01 ] [ clipped_g: 1.0000e-02 ] [ skipped_g: 0.0000e+00 ] 
+28-10-2026 06:03 PM | INFO: [ epoch:  15 ] [1;32m[ iter: 20,000 ][0m [ performance: 12.460 it/s, data 0% ] [ lr: 2.00e-04 ] [ eta: 0:00:00 ] [ l_g_pix: 2.2355e-02 ] [ l_g_mssim: 4.4297e-02 ] [ l_g_consistency: 3.8374e-03 ] [ l_g_ldl: 9.4895e-05 ] [ l_g_fdl: 2.3270e-01 ] [ l_g_total: 3.0329e-01 ] [ grad_norm_g: 5.3708e-01 ] [ clipped_g: 2.0000e-02 ] [ skipped_g: 0.0000e+00 ] 
+28-10-2026 06:03 PM | INFO: Validation dev
+
+	 # psnr: 30.3988[1;32m........ Best: 30.3988 @ 20000 iter[0m
+	 # topiq: 0.6394[1;32m........ Best: 0.6394 @ 20000 iter[0m
+	 # lpips: 0.1854[1;32m........ Best: 0.1854 @ 20000 iter[0m
+	 # dists: 0.1608[1;32m........ Best: 0.1608 @ 20000 iter[0m
+
+28-10-2026 06:03 PM | INFO: Validation val8
+
+	 # psnr: 28.9900[1;32m........ Best: 28.9900 @ 20000 iter[0m
+	 # topiq: 0.6354[1;32m........ Best: 0.6354 @ 20000 iter[0m
+	 # lpips: 0.2192[1;32m........ Best: 0.2192 @ 20000 iter[0m
+	 # dists: 0.1489[1;32m........ Best: 0.1481 @ 18000 iter[0m
+
+28-10-2026 06:03 PM | INFO: End of training at update 20000. Time consumed: 0:28:58

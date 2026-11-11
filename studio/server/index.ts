@@ -1,6 +1,6 @@
 /** NeoSR Studio prototype backend: see server/API.md. */
 import express, { type ErrorRequestHandler, type RequestHandler } from 'express';
-import { PORT } from './config';
+import { NEOSR_PYTHON, NEOSR_ROOT, PORT, TRAINER_MODE } from './config';
 import { HttpError, isRecord } from './http';
 import { compileRouter } from './routes/compile';
 import { environmentRouter } from './routes/environment';
@@ -9,6 +9,11 @@ import { recipesRouter } from './routes/recipes';
 import { runsRouter } from './routes/runs';
 import { recipeStore } from './store/recipe-store';
 import { runStore } from './store/run-store';
+
+/** How long a backend shutdown waits for live trainers to save and exit. */
+const SHUTDOWN_MS = 120_000;
+/** A second shutdown signal exits at once only this long after the first. */
+const ESCAPE_AFTER_MS = 1000;
 
 const cors: RequestHandler = (req, res, next) => {
   res.set({
@@ -66,9 +71,26 @@ function main(): void {
   recipeStore.load();
   runStore.load();
   runStore.seedIfEmpty();
-  createApp().listen(PORT, () => {
-    console.log(`[api] NeoSR Studio backend (simulated) listening on http://localhost:${PORT}`);
+  const server = createApp().listen(PORT, () => {
+    const mode = TRAINER_MODE === 'real' ? `real trainer: ${NEOSR_PYTHON} train.py in ${NEOSR_ROOT}` : 'simulated';
+    console.log(`[api] NeoSR Studio backend (${mode}) listening on http://localhost:${PORT}`);
   });
+  let closingAt: number | undefined;
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    process.on(signal, () => {
+      if (closingAt !== undefined) {
+        // one Ctrl-C can arrive twice (terminal group + a relaying npm/tsx): only a later one means "leave now"
+        if (Date.now() - closingAt > ESCAPE_AFTER_MS) {
+          process.exit(1);
+        }
+        return;
+      }
+      closingAt = Date.now();
+      server.close();
+      // live trainers save at their next update boundary; their final status is persisted before exit
+      void runStore.shutdown(SHUTDOWN_MS).finally(() => process.exit(0));
+    });
+  }
 }
 
 main();

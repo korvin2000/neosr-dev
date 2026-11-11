@@ -1,6 +1,6 @@
 # NeoSR Studio — backend API (prototype)
 
-Express 5 on port **4310**, JSON everywhere, SSE for run events. The Angular dev server proxies `/api` to it (`proxy.conf.json`). The backend is a **simulation**: it compiles recipes with the shared compiler, stores recipes as JSON files and runs a deterministic trainer simulator that emits the same event shapes a real NeoSR adapter would.
+Express 5 on port **4310**, JSON everywhere, SSE for run events. The Angular dev server proxies `/api` to it (`proxy.conf.json`). By default the backend is a **simulation**: it compiles recipes with the shared compiler, stores recipes as JSON files and runs a deterministic trainer simulator. With `STUDIO_TRAINER=real` new runs launch the actual `train.py` instead and its output is mapped onto the same event shapes (see [Real trainer](#real-trainer)); the environment, library, dataset scan and validation images stay mocked in both modes.
 
 Shared types: `shared/recipe.model.ts`, `shared/run.model.ts`, `shared/compile/compile.ts` (`compileRecipe`), `shared/compile/problems.ts`, `shared/templates.ts`.
 
@@ -15,12 +15,12 @@ Shared types: `shared/recipe.model.ts`, `shared/run.model.ts`, `shared/compile/c
 | POST | `/api/compile` | `{ recipe, platform? }` → `CompileResult` | Thin wrapper over `compileRecipe` (the browser also compiles locally; this exists for parity checks and for the run launcher) |
 | POST | `/api/import` | `{ text, name? }` → `ImportResult` | Wrapper over `importToml(text, emptyRecipe(name), name)`; 400 with `{ error }` on parse failure |
 | GET | `/api/runs` | → `RunSummary[]` | Newest first |
-| POST | `/api/runs` | `{ recipe: Recipe, platform?: 'windows'\|'linux', speed?: number }` → `RunDetail` | Compiles; **400 `{ problems }` if any blocker**. Creates the run (`queued`), starts the simulator. `speed` = simulated updates per real second (default 400). |
+| POST | `/api/runs` | `{ recipe: Recipe, platform?: 'windows'\|'linux', speed?: number }` → `RunDetail` | Compiles; **400 `{ problems }` if any blocker**. Creates the run (`queued`), starts the simulator. `speed` = simulated updates per real second (default 400). Real mode: compiles for the host platform, ignores `speed`, `simulated: false`. |
 | GET | `/api/runs/:id` | → `RunSnapshot` | Detail + full event list (capped, see below) + series + lastSeq |
 | GET | `/api/runs/:id/events?after=<seq>` | SSE | Replays events with `seq > after`, then streams live. Each SSE message: `id: <seq>`, `event: run`, `data: <RunEvent JSON>`. Heartbeat comment every 15 s. |
 | POST | `/api/runs/:id/stop` | `{ force?: boolean }` → `RunSummary` | Graceful: `stopping` → `saving` (writes a checkpoint event) → `stopped`. Force: `stopped` immediately, no checkpoint. |
 | POST | `/api/runs/:id/resume` | → `RunSummary` | Only from `stopped` / `disconnected`: continues from the last checkpoint iteration (NeoSR `--auto_resume`), status `running` |
-| POST | `/api/runs/:id/chaos` | `{ kind: 'disconnect' \| 'nan' }` → `RunSummary` | Demo only: `disconnect` sets status `disconnected` and pauses emission; `nan` emits a warning `NONFINITE` + `skipped/g` scalar spike then continues |
+| POST | `/api/runs/:id/chaos` | `{ kind: 'disconnect' \| 'nan' }` → `RunSummary` | Demo only (400 for a real run): `disconnect` sets status `disconnected` and pauses emission; `nan` emits a warning `NONFINITE` + `skipped/g` scalar spike then continues |
 | DELETE | `/api/runs/:id` | → 204 | Stops the simulator |
 | GET | `/api/runs/:id/images/:imageId` | `?kind=lq\|sr\|gt&iter=<n>` → `image/svg+xml` | Procedural validation images (see below) |
 | GET | `/api/library/models` | → `ModelFile[]` | `{ file, path, arch, scale, iter, sizeMb, runName, variant: 'ema'\|'eval'\|'state', updatedAt }` — mock list of ~8 checkpoints across 3 fake experiments plus the generators of finished simulated runs |
@@ -44,6 +44,49 @@ Derive everything from the compiled recipe (`compileRecipe(recipe).phases` and `
 Series: keep `Record<series, ScalarPoint[]>` (validation metrics as `val/<dataset>/<metric>`, system as `sys/gpu_util`, `sys/vram`, `sys/data_wait`). Cap events kept in memory at 4000 per run by dropping the oldest `log` and `system` events first; series are never dropped (downsample to ≤ 2000 points per series with stride if needed).
 
 Seed data: at startup, if no runs exist, create **two finished runs** by fast-forwarding the simulator synchronously (no timers): one from template `4x-span-fidelity` (completed, 150k) and one from `4x-curriculum` (completed, 300k, two phases), plus **one stopped** run from `2x-compact-beginner` stopped at 12,000. Also save the 8 built-in templates as recipes only if `server/data/recipes` is empty? No — recipes folder starts empty; templates come from `shared/templates.ts`.
+
+## Real trainer
+
+**Experimental**: the simulator stays the default; the open points are listed at the end of this section.
+
+`STUDIO_TRAINER=real` or the `--real` flag (`npm run api:real`; anything else: simulator) makes `POST /api/runs` start `server/trainer/trainer-runner.ts` instead of the simulator; runs created before keep their kind (`simulated` on the run). Seed runs stay simulated.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `STUDIO_TRAINER` | `sim` | `real` launches the trainer (same as `--real`) |
+| `NEOSR_ROOT` | the repository holding `studio/` | cwd of `train.py` (relative paths in the TOML resolve there; `experiments/<name>/` lands there) |
+| `NEOSR_PYTHON` | `<NEOSR_ROOT>/.venv/bin/python` (`.venv\Scripts\python.exe` on Windows) | the interpreter |
+
+- **Launcher.** Use `npm run api:real` (`node --import tsx server/index.ts --real`): `tsx watch` (`npm run api`, `npm start`) SIGKILLs the backend 5 s after a reload or Ctrl-C, so it cannot wait for the trainers to save (see Backend shutdown).
+- **One run, one namespace.** The frozen TOMLs of a real run get `name = "<compiled name>_<run id without run_>"`, and the `[path]` entries that point into an earlier phase of the same run (`resume_state`, `pretrain_network_g/_d`) follow that name (only the `<experiments_root>/<name>/` segment changes); imported paths stay as written. Each run therefore writes and resumes only its own `experiments/<name>_<id>`. `RunDetail.tomls` holds these TOMLs and `phases[].runName` (and the `phase` event's `runName`) the suffixed name, so output paths built from it point at the run's real folders.
+- **Process.** The phase TOMLs are written to `server/data/runs/<id>/<runName>.toml` (git-ignored); each phase runs `<python> train.py -opt <that file>` in `NEOSR_ROOT`, one after another (the next starts, with status `starting`, when the previous exits 0 after `End of training`). stdout and stderr (the trainer logs to stderr) are split into lines (`\n`, `\r\n`, tqdm's `\r`) and parsed by `server/trainer/log-parser.ts`, a pure module tested against a recorded run (`server/trainer/fixtures/p0_pretrain.log`).
+- **Lock.** While a trainer process runs, `<experiments_root>/<name>.studio.lock` (next to the folder: a fresh `train.py` start archives an existing folder, which would carry a lock inside away) holds its pid and, on Linux, its start time. It is written right after the spawn; if that fails, the process is killed and the phase fails. It is removed when the process exits; a lock whose process is gone (or, on Linux, whose pid now belongs to another process) is deleted when found. A lock left by a crashed or timed-out backend marks an **orphan**: launch and resume return 409 until it is gone. Stop on such a run signals the orphan's process group (Linux, where the start time verifies the pid: SIGINT, or SIGKILL with `force`) and reports `stopping` until the lock is released, then `stopped`; Delete returns 409 while it lives. On Windows the pid cannot be verified, so Stop and Delete return 409 there and the orphan must be ended by hand; a pid reused by another process keeps such a lock alive (delete the `.studio.lock` file once no trainer runs).
+- **Refused launches.** `num_gpu > 1` (400: the adapter runs plain `train.py`, not `torchrun`). Launch or resume while the backend shuts down (503). Launch or resume while a live process holds the lock of one of the run's output folders (409), or, as a guard, while those folders equal or nest in a live real run's (409; case-insensitive on Windows).
+- **Persistence.** A real run is saved on every status change and on checkpoint and validation events (at most every 10 s), so after a backend restart it comes back `disconnected` and can resume.
+- **Stop.** Graceful: SIGINT to the trainer's process group (its first Ctrl-C: it saves at the next update boundary, logs `Stopped at update N`, exits 0) → `stopping` → `saving` → `stopped`; a trainer that ends normally meanwhile still counts as `completed` (between phases: `stopped`, and a resume starts the next phase); a trainer that dies of the SIGINT during its startup (before `train.py` handles it) counts as `stopped`. Force and `DELETE`: SIGKILL to the group (Windows: `taskkill /T /F`; a graceful stop is a kill there, since Node cannot send SIGINT to it). A deleted run publishes nothing more.
+- **Backend shutdown** (SIGINT/SIGTERM): new launches and resumes are refused, every live real run not already stopping gets a graceful stop (a second SIGINT would make the trainer abort its save), the backend waits up to 120 s for the trainers to exit, saves every real run (not one deleted meanwhile), then exits. A repeated signal exits at once only when it comes more than 1 s after the first (one Ctrl-C reaches the backend twice: from the terminal and relayed by npm or tsx). A trainer still running at the deadline keeps its lock. **Windows limitation:** the stop there is `taskkill /T /F`, so a shutdown kills the trainers without a checkpoint (progress since the last periodic save is lost); stop runs from the UI first.
+- **Resume.** The same phase from the newest `<update>.state` in this run's `<experiments_root>/<name>_<id>/training_states`: the adapter writes `<phase file>.resume.toml` with `path.resume_state` set to it (an explicit `resume_state`, which the compiler writes for `continue` phases and imported resumes, would otherwise win over `--auto_resume`). Without a state there, the phase TOML runs as written. Series past that update are dropped, and the best metric, last validation and last checkpoint derived again from what is kept, before the request returns.
+
+Log line → event (the clock is the trainer's update, mapped to the curriculum clock of the current phase):
+
+| Trainer output | Events |
+|---|---|
+| any non-blank line except tqdm bars | `log` (level from the record: INFO → info, WARNING → warn, ERROR/CRITICAL and traceback lines → error; timestamp and colour codes stripped) |
+| `Starting at epoch E, update U.` | status `running` (from `starting`), `phase` |
+| `nothing to do: update N >= total_iter` | `progress` at N (a resume of a finished phase); the run ends `completed` |
+| `[ epoch: … ] [ iter: N ] [ performance: X it/s, data D% ] [ lr: … ] [ eta: … ] [ key: v ] …` | `progress` (`itersPerSec` X, `etaSec` = eta + later phases at X), `scalar` per key: `l_<net>_<x>` → `loss/<net>/<x>`, `out_d_<x>` → `out/d/<x>`, `grad_norm_<net>`, `clipped_<net>`, `skipped_<net>` → `<kind>/<net>`, `nonfinite_<key>` → `nonfinite/<series>`, others → `train/<key>`; `lr/g` (first value); `sys/data_wait` (D) |
+| `skipped_<net>` > 0 in that line | `warning` `NONFINITE` |
+| `Validation <dataset>` + `# <metric>: <value>…` lines | `validation` (`images: []`); the first dataset sets `bestMetric` |
+| `saving update N` (confirmed by the next line; dropped if the process then dies) | `checkpoint` `net_g_N.pth` (+ `net_d_N.pth` when `network_d` was logged), `N.state`; `sizeMb` from `one export set is X MiB` |
+| `End of training at update N` / `Stopped at update N` | `checkpoint` with `*_latest.pth`; the run ends `completed` / `stopped` when the process exits |
+| `best <metric> on <dataset>: … saved <file>` | `checkpoint` `[file]`, `state: false` |
+| `stop requested: saving update N` | status `saving` |
+| other WARNING records | `warning` `TRAINER_WARNING` |
+| exit ≠ 0 (not 130) | status `failed`, message: `config error: …` text (exit 2), argparse `neosr: error: …`, the traceback's exception line (`FloatingPointError: …`), or the last ERROR record; exit 130 → `stopped` |
+
+Not in the trainer's console output, so absent from real runs: `system` events (GPU utilisation, VRAM), validation images and per-image metrics, `lr/d`, the current update on validation lines (taken from the last progress line), checkpoint sizes before the first save and for `net_g_best_*`.
+
+Open points of the experimental adapter: Windows has no graceful stop (Node cannot send it SIGINT) and cannot verify an orphan's pid; `num_gpu > 1` is refused instead of launched with `torchrun`; `/api/environment`, the library, the dataset scan and validation images stay mocked; nothing ran yet against the real `train.py` (only a fake process and recorded output).
 
 ## Procedural validation images
 
