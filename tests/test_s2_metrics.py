@@ -752,7 +752,6 @@ def test_fp16_without_the_converter_fails_before_writing(
         (["-net", "atd"], "atd.*cannot be exported.*Sort"),
         (["-net", "esc"], "esc.*cannot be exported.*dynamic conv"),
         (["-net", "safmn"], "static shape.*-static C H W"),
-        (["-net", "srformer_medium"], "static shape.*shift mask"),
         (["-net", "compact", "--fulloptimization"], "fulloptimization"),
     ],
 )
@@ -790,6 +789,36 @@ def test_arch_exports_and_verifies_after_the_stage2_fixes(
     extra = ["-static", *static] if static else []
     args = _args(tmp_path, *extra, net=net)
     convert_py.to_onnx(args, build_network({"type": net}, scale=2))
+
+
+@pytest.mark.usefixtures("onnx_deps")
+def test_srformer_24px_windows_export_dynamically(tmp_path):
+    """srformer_medium's 24 px windows: the 20x20 trace pads to one window, yet the traced shift
+    mask follows the input size (end-relative slices), so the dynamic graph equals eager torch
+    where several windows shift (fp32, 1e-4; the 24x24 mask tiled there is off by ~1e-3)."""
+    import onnxruntime  # ruff: ignore[import-outside-top-level]
+
+    from neosr.archs import build_network  # ruff: ignore[import-outside-top-level]
+
+    assert "srformer_medium" not in convert_py.STATIC_ONLY
+    torch.manual_seed(0)
+    cfg = {"type": "srformer", "img_size": 48, "window_size": 24, "depths": [2]}
+    cfg |= {"embed_dim": 24, "num_heads": [2], "upsampler": "pixelshuffledirect"}
+    net = build_network(cfg, scale=2).eval()
+    with torch.no_grad():  # sharp attention, so a wrong mask shows
+        for name, p in net.named_parameters():
+            if "qkv" in name or "relative_position_bias_table" in name:
+                p.mul_(20)
+    convert_py.to_onnx(_args(tmp_path, net="srformer"), net)
+    sess = onnxruntime.InferenceSession(
+        str(tmp_path / "m_fp32.onnx"), providers=["CPUExecutionProvider"]
+    )
+    for shape in ((1, 3, 100, 60), (2, 3, 50, 74)):
+        x = torch.rand(shape)
+        with torch.inference_mode():
+            ref = net(x).numpy()
+        out = sess.run(None, {"input": x.numpy()})[0]
+        np.testing.assert_allclose(out, ref, rtol=1e-4, atol=1e-4)
 
 
 @pytest.mark.parametrize("net", ["asid", "omnisr", "ditn", "dctlsa", "microsr_light"])

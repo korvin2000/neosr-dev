@@ -289,7 +289,6 @@ STATIC_ONLY = {  # the dynamic graph is frozen at the trace shape
     "safmn_l": "adaptive_max_pool2d output sizes depend on the input",
     "light_safmnpp": "adaptive_max_pool2d output sizes depend on the input",
     "msdan": "adaptive_max_pool2d output sizes depend on the input",
-    "srformer_medium": "a 20x20 trace is one 24 px window: the shift mask freezes",
 }
 
 
