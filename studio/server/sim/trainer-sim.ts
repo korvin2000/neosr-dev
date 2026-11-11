@@ -509,7 +509,9 @@ function recordSeries(s: SimState, event: RunEvent): void {
       }
       break;
     case 'system':
-      push('sys/gpu_util', event.gpuUtil);
+      if (event.gpuUtil !== null) {
+        push('sys/gpu_util', event.gpuUtil);
+      }
       push('sys/vram', event.vramUsedGb);
       push('sys/data_wait', event.dataWaitPct);
       break;

@@ -92,6 +92,18 @@ describe('TrainerLogParser on synthetic lines', () => {
     expect(ofType(events, 'checkpoint')[0]?.body).toEqual({ type: 'checkpoint', files: ['net_g_12300.pth', 'net_d_12300.pth', '12300.state'], sizeMb: 40, state: true });
   });
 
+  it('turns the VRAM field of a CUDA progress line into a system event (no GPU utilisation)', () => {
+    const { events } = parse([
+      `${TS} INFO: [ epoch:   0 ] [ iter:     100 ] [ performance: 9.100 it/s, data 4% ] [ mem: 3.27 / 23.99 GiB ] [ lr: 2.00e-04 ] [ eta: 0:10:00 ] [ l_g_total: 1.0000e+00 ] `,
+    ]);
+    expect(ofType(events, 'system').map((e) => e.body)).toEqual([
+      { type: 'system', gpuUtil: null, vramUsedGb: 3.27, vramTotalGb: 23.99, dataWaitPct: 4 },
+    ]);
+    const series = ofType(events, 'scalar').map((e) => e.body.series);
+    expect(series).not.toContain('sys/data_wait'); // carried by the system event
+    expect(series).toContain('lr/g');
+  });
+
   it('takes the exception line of a traceback as the error and drops the save it interrupted', () => {
     const { parser, events } = parse(
       [

@@ -35,7 +35,7 @@ from neosr.utils import (
     mkdir_and_rename,
 )
 from neosr.utils.dist_util import master_only
-from neosr.utils.logger import DataWait
+from neosr.utils.logger import DataWait, window_peak_memory
 from neosr.utils.stop import StopFlag
 
 ROOT = Path(__file__).resolve().parent
@@ -242,6 +242,7 @@ def train(cfg: dict[str, Any], rt: Runtime) -> None:
                     log_vars |= {
                         "time": timer.get_avg_time(),
                         "data": data_wait.share(),
+                        "mem": window_peak_memory(rt.device),
                         **model.get_current_log(),
                     }
                     msg_logger(log_vars)

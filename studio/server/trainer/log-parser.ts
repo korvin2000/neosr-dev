@@ -21,6 +21,7 @@ const HEADER = /^(?:\d{2}-\d{2}-\d{4} \d{2}:\d{2}(?: [^|]*)? \||\d{4}-\d{2}-\d{2
 const PROGRESS = /^\[ epoch:\s*(\d+) \] \[ iter:\s*([\d,]+) \]/;
 const FIELD = /\[ ([^:\]]+): ([^\]]*?) \]/g;
 const PERFORMANCE = /^([\d.]+) it\/s(?:, data (\d+)%)?/;
+const MEM = /^([\d.]+) \/ ([\d.]+) GiB$/;
 const ETA = /^(?:(\d+) days?, )?(\d+):(\d{2}):(\d{2})$/;
 const STARTING = /^Starting at epoch \d+, update (\d+)\.$/;
 const SAVING = /^saving update (\d+)$/;
@@ -162,13 +163,15 @@ export class TrainerLogParser {
     let itersPerSec = 0;
     let etaSec = 0;
     const scalars: [string, number][] = [];
+    let dataWait: number | undefined;
+    let mem: RegExpExecArray | null = null;
     for (const [, key, value] of rest.matchAll(FIELD)) {
       if (key === 'performance') {
         const p = PERFORMANCE.exec(value as string);
         itersPerSec = p ? Number(p[1]) : 0;
-        if (p?.[2] !== undefined) {
-          scalars.push(['sys/data_wait', Number(p[2])]);
-        }
+        dataWait = p?.[2] === undefined ? undefined : Number(p[2]);
+      } else if (key === 'mem') {
+        mem = MEM.exec(value as string); // CUDA runs: the window's peak allocated / device total
       } else if (key === 'lr' || key === 'lr_d') {
         scalars.push([key === 'lr' ? 'lr/g' : 'lr/d', Number((value as string).split(' ')[0])]);
       } else if (key === 'eta') {
@@ -178,6 +181,12 @@ export class TrainerLogParser {
       }
     }
     this.emit(out, { type: 'progress', itersPerSec, etaSec, phaseIndex: this.phaseIndex, nativeIter: native });
+    if (mem) {
+      // GPU utilisation is not in the log: null; the data share rides on the system event
+      this.emit(out, { type: 'system', gpuUtil: null, vramUsedGb: Number(mem[1]), vramTotalGb: Number(mem[2]), dataWaitPct: dataWait ?? 0 });
+    } else if (dataWait !== undefined) {
+      scalars.unshift(['sys/data_wait', dataWait]);
+    }
     for (const [series, value] of scalars) {
       if (Number.isFinite(value)) {
         this.emit(out, { type: 'scalar', series, value });

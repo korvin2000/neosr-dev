@@ -85,7 +85,8 @@ export type RunEventBody =
   | { readonly type: 'validation'; readonly dataset: string; readonly metrics: Readonly<Record<string, number>>; readonly images: readonly ValidationImage[] }
   | { readonly type: 'checkpoint'; readonly files: readonly string[]; readonly sizeMb: number; readonly state: boolean }
   | { readonly type: 'phase'; readonly phaseIndex: number; readonly name: string; readonly runName: string }
-  | { readonly type: 'system'; readonly gpuUtil: number; readonly vramUsedGb: number; readonly vramTotalGb: number; readonly dataWaitPct: number }
+  /** `gpuUtil` is null when not measured (a real trainer run logs VRAM, not utilisation). */
+  | { readonly type: 'system'; readonly gpuUtil: number | null; readonly vramUsedGb: number; readonly vramTotalGb: number; readonly dataWaitPct: number }
   | { readonly type: 'warning'; readonly code: string; readonly message: string }
   | { readonly type: 'log'; readonly level: 'info' | 'warn' | 'error'; readonly line: string };
 

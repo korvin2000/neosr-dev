@@ -62,7 +62,7 @@ export class LiveRun {
   readonly logs = signal<readonly { iter: number; level: 'info' | 'warn' | 'error'; line: string; at: string }[]>([]);
   /** Non-log, non-scalar events for the timeline. */
   readonly events = signal<readonly RunEvent[]>([]);
-  readonly system = signal<{ gpuUtil: number; vramUsedGb: number; vramTotalGb: number; dataWaitPct: number } | null>(null);
+  readonly system = signal<{ gpuUtil: number | null; vramUsedGb: number; vramTotalGb: number; dataWaitPct: number } | null>(null);
   /** NeoSR's own update counter for the current phase (restarts on a fine-tune phase). */
   readonly nativeIter = signal<number | null>(null);
   readonly lastSeq = signal(0);
@@ -305,7 +305,9 @@ export class LiveRun {
       case 'system':
         this.system.set({ gpuUtil: event.gpuUtil, vramUsedGb: event.vramUsedGb, vramTotalGb: event.vramTotalGb, dataWaitPct: event.dataWaitPct });
         if (live) {
-          this.appendPoint('sys/gpu_util', { iter: event.iter, value: event.gpuUtil });
+          if (event.gpuUtil !== null) {
+            this.appendPoint('sys/gpu_util', { iter: event.iter, value: event.gpuUtil });
+          }
           this.appendPoint('sys/vram', { iter: event.iter, value: event.vramUsedGb });
           this.appendPoint('sys/data_wait', { iter: event.iter, value: event.dataWaitPct });
         }

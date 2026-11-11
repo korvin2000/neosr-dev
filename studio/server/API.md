@@ -75,7 +75,7 @@ Log line → event (the clock is the trainer's update, mapped to the curriculum 
 | any non-blank line except tqdm bars | `log` (level from the record: INFO → info, WARNING → warn, ERROR/CRITICAL and traceback lines → error; timestamp and colour codes stripped) |
 | `Starting at epoch E, update U.` | status `running` (from `starting`), `phase` |
 | `nothing to do: update N >= total_iter` | `progress` at N (a resume of a finished phase); the run ends `completed` |
-| `[ epoch: … ] [ iter: N ] [ performance: X it/s, data D% ] [ lr: … ] [ lr_d: … ] [ eta: … ] [ key: v ] …` | `progress` (`itersPerSec` X, `etaSec` = eta + later phases at X), `scalar` per key: `l_<net>_<x>` → `loss/<net>/<x>`, `out_d_<x>` → `out/d/<x>`, `grad_norm_<net>`, `clipped_<net>`, `skipped_<net>` → `<kind>/<net>`, `nonfinite_<key>` → `nonfinite/<series>`, others → `train/<key>`; `lr/g`, `lr/d` (first value; `lr_d` only with a D phase); `sys/data_wait` (D) |
+| `[ epoch: … ] [ iter: N ] [ performance: X it/s, data D% ] [ mem: U / T GiB ] [ lr: … ] [ lr_d: … ] [ eta: … ] [ key: v ] …` | `progress` (`itersPerSec` X, `etaSec` = eta + later phases at X), `scalar` per key: `l_<net>_<x>` → `loss/<net>/<x>`, `out_d_<x>` → `out/d/<x>`, `grad_norm_<net>`, `clipped_<net>`, `skipped_<net>` → `<kind>/<net>`, `nonfinite_<key>` → `nonfinite/<series>`, others → `train/<key>`; `lr/g`, `lr/d` (first value; `lr_d` only with a D phase); `sys/data_wait` (D); `mem` (CUDA runs: the window's peak allocated / device total) → `system` with `gpuUtil` null, `vramUsedGb` U, `vramTotalGb` T, `dataWaitPct` D (then no separate `sys/data_wait` scalar) |
 | `skipped_<net>` > 0 in that line | `warning` `NONFINITE` |
 | `Validation <dataset>` + `# <metric>: <value>…` lines | `validation` (`images: []`); the first dataset sets `bestMetric` |
 | `saving update N` (confirmed by the next line; dropped if the process then dies) | `checkpoint` `net_g_N.pth` (+ `net_d_N.pth` when `network_d` was logged), `N.state`; `sizeMb` from `one export set is X MiB` |
@@ -85,7 +85,7 @@ Log line → event (the clock is the trainer's update, mapped to the curriculum 
 | other WARNING records | `warning` `TRAINER_WARNING` |
 | exit ≠ 0 (not 130) | status `failed`, message: `config error: …` text (exit 2), argparse `neosr: error: …`, the traceback's exception line (`FloatingPointError: …`), or the last ERROR record; exit 130 → `stopped` |
 
-Not in the trainer's console output, so absent from real runs: `system` events (GPU utilisation, VRAM), validation images and per-image metrics, `lr/d`, the current update on validation lines (taken from the last progress line), checkpoint sizes before the first save and for `net_g_best_*`.
+Not in the trainer's console output, so absent from real runs: GPU utilisation (`system.gpuUtil` is null; VRAM comes from `mem` on CUDA runs), validation images and per-image metrics, the current update on validation lines (taken from the last progress line), checkpoint sizes before the first save and for `net_g_best_*`.
 
 Open points of the experimental adapter: Windows has no graceful stop (Node cannot send it SIGINT) and cannot verify an orphan's pid; `num_gpu > 1` is refused instead of launched with `torchrun`; the library, the dataset scan and validation images stay mocked; nothing ran yet against the real `train.py` (only a fake process and recorded output).
 

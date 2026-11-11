@@ -148,6 +148,7 @@ def main(argv=None) -> int:
     runtime = importlib.import_module("neosr.runtime")
     models = importlib.import_module("neosr.models")
     train = importlib.import_module("train")
+    logger = importlib.import_module("neosr.utils.logger")
     cfg = config.load_config(
         str(cfg_path), is_train=True, root=out, debug=False, auto_resume=a.resume
     )
@@ -183,7 +184,11 @@ def main(argv=None) -> int:
     done = {
         "seconds": time.time() - rec.t0,
         "update": total,
-        "peak_mem_gib": torch.cuda.max_memory_allocated() / 2**30,
+        # a trainer that resets the peak per log window keeps the run's peak in run_peak_memory
+        "peak_mem_gib": getattr(
+            logger, "run_peak_memory", torch.cuda.max_memory_allocated
+        )()
+        / 2**30,
     }
     tmp = out / "done.json.tmp"
     tmp.write_text(json.dumps(done), encoding="utf-8")

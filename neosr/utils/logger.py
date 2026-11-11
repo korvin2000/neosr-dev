@@ -4,6 +4,8 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+import torch
+
 from neosr.config import total_iter
 from neosr.utils.dist_util import get_dist_info, master_only
 from neosr.utils.misc import tc
@@ -29,6 +31,27 @@ class DataWait:
         out = self.waited / max(now - self.since, 1e-9)
         self.waited, self.since = 0.0, now
         return out
+
+
+_RUN_PEAK: dict[int, int] = {}  # per device index: the run's peak across window resets
+
+
+def window_peak_memory(device: torch.device) -> tuple[float, float] | None:
+    """Peak allocated GiB since the previous call and the device's total GiB (CUDA; None elsewhere).
+    Reads and resets the caching allocator's host-side statistics: no device sync."""
+    if device.type != "cuda":
+        return None
+    i = torch.cuda.current_device() if device.index is None else device.index
+    peak = torch.cuda.max_memory_allocated(i)
+    torch.cuda.reset_peak_memory_stats(i)
+    _RUN_PEAK[i] = max(_RUN_PEAK.get(i, 0), peak)
+    return peak / 2**30, torch.cuda.get_device_properties(i).total_memory / 2**30
+
+
+def run_peak_memory(index: int | None = None) -> int:
+    """Bytes: the process's peak allocated memory, including what window_peak_memory reset."""
+    i = torch.cuda.current_device() if index is None else index
+    return max(torch.cuda.max_memory_allocated(i), _RUN_PEAK.get(i, 0))
 
 
 class AvgTimer:
@@ -116,6 +139,7 @@ class MessageLogger:
         current_iter: int = int(log_vars.pop("iter"))
         lrs: list[Any] = log_vars.pop("lrs")
         lrs_d: list[Any] = log_vars.pop("lrs_d", [])
+        mem: tuple[float, float] | None = log_vars.pop("mem", None)
         message = (
             f"[ epoch:{epoch:4d} ] {tc.light_green}[ iter:{current_iter:7,d} ]{tc.end}"
         )
@@ -133,7 +157,11 @@ class MessageLogger:
             if lrs_d:  # D's lr only when a D phase exists
                 lr += f"[ lr_d: {' '.join(f'{v:.2e}' for v in lrs_d)} ] "
             wait = "" if data is None else f", data {100 * data:.0f}%"
-            message += f" [ performance: {speed:.3f} it/s{wait} ] {lr}[ eta: {eta} ] "
+            # peak allocated in the window / device total (CUDA only)
+            vram = "" if mem is None else f"[ mem: {mem[0]:.2f} / {mem[1]:.2f} GiB ] "
+            message += (
+                f" [ performance: {speed:.3f} it/s{wait} ] {vram}{lr}[ eta: {eta} ] "
+            )
         for k, v in log_vars.items():
             message += f"[ {k}: {v:.4e} ] "
             if self.tb_logger is not None:

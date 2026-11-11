@@ -26,7 +26,12 @@ from neosr.models.image import Buffers, restoring_clamp
 from neosr.models.phase import SPIKE_K, LossMeter, Phase, is_schedule_free
 from neosr.optimizers import adan_sf
 from neosr.runtime import Runtime
-from neosr.utils.logger import DataWait, MessageLogger
+from neosr.utils.logger import (
+    DataWait,
+    MessageLogger,
+    run_peak_memory,
+    window_peak_memory,
+)
 from tests.test_config import BASE, HEAD, write
 from tests.test_entry import data, logs, run_dir, states, toml, train_py  # noqa: F401
 from tests.test_model import CPU, SF, batches, build, clone, loader, make_opt, run, same
@@ -958,14 +963,47 @@ def test_message_logger_shows_the_data_share(caplog):
         })
     assert "[ performance: 2.000 it/s, data 25% ]" in caplog.text
     assert "data:" not in caplog.text
-    assert "[ lr: 1.00e-03 ] [ eta:" in caplog.text  # no D phase: no lr_d field
+    assert "[ lr: 1.00e-03 ] [ eta:" in caplog.text  # no D phase: no lr_d field; CPU: no mem
 
 
 def test_message_logger_shows_the_d_lr(caplog):
     ml = MessageLogger({"name": "x", "logger": {"total_iter": 10}}, None)
     with neosr_caplog(caplog):
-        ml({"epoch": 0, "iter": 1, "lrs": [1e-3, 5e-4], "lrs_d": [2e-4], "time": 0.5})
-    assert "[ lr: 1.00e-03 5.00e-04 ] [ lr_d: 2.00e-04 ] [ eta:" in caplog.text
+        ml({
+            "epoch": 0,
+            "iter": 1,
+            "lrs": [1e-3, 5e-4],
+            "lrs_d": [2e-4],
+            "time": 0.5,
+            "mem": (3.271, 23.99),
+        })
+    assert (
+        "it/s ] [ mem: 3.27 / 23.99 GiB ] [ lr: 1.00e-03 5.00e-04 ] [ lr_d: 2.00e-04 ] [ eta:"
+        in caplog.text
+    )
+
+
+def test_window_peak_memory_is_none_on_cpu():
+    assert window_peak_memory(torch.device("cpu")) is None
+
+
+@CUDA
+def test_window_peak_memory_resets_per_window_without_a_sync():
+    dev = torch.device("cuda", 0)
+    torch.empty(1, device=dev)  # the allocator exists (training has long initialised it)
+    window_peak_memory(dev)
+    x = torch.empty(64 * 2**20, dtype=torch.uint8, device=dev)  # 64 MiB
+    del x
+    torch.cuda.set_sync_debug_mode("error")  # any device sync raises
+    try:
+        first = window_peak_memory(dev)
+        second = window_peak_memory(dev)
+    finally:
+        torch.cuda.set_sync_debug_mode(0)
+    assert first is not None and second is not None
+    assert first[0] - second[0] >= 64 / 1024  # the 64 MiB peak belongs to the first window only
+    assert first[1] == second[1] > 0  # the device total
+    assert run_peak_memory(0) >= 64 * 2**20  # the run's peak survives the resets
 
 
 # ---------------------------------------------------------------------------- T-12 keep_exports
