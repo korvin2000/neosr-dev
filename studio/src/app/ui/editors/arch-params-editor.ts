@@ -18,7 +18,7 @@ import { parseScalar } from '../field-widget';
     <div class="grid">
       @for (p of params(); track p.key) {
         <label class="param" [class.param--set]="isSet(p.key)" [attr.title]="p.fixed ? 'Set by this preset: the trainer rejects another value' : (p.help ?? '')">
-          <span class="param__k mono">{{ p.key }}</span>
+          <span class="param__k mono">{{ p.key }}@if (p.fixed) {<span class="param__fixed"> · fixed by preset</span>}</span>
           @if (p.options?.length) {
             <select class="select" [value]="shown(p)" [disabled]="!!p.fixed" (change)="set(p, $any($event.target).value)">
               @for (o of p.options; track o) {
@@ -49,6 +49,7 @@ import { parseScalar } from '../field-widget';
     .param { display: grid; grid-template-columns: 1fr; gap: 2px; position: relative; }
     .param__k { font-size: var(--fs-xs); color: var(--text-faint); }
     .param--set .param__k { color: var(--accent-text); }
+    .param__fixed { font-family: var(--font-sans, inherit); font-style: italic; }
     .param .input, .param .select { height: 26px; font-size: var(--fs-sm); }
     .reset { position: absolute; right: 6px; bottom: 6px; color: var(--text-faint); display: inline-flex; }
     .reset:hover { color: var(--text); }
