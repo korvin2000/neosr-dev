@@ -8,15 +8,20 @@ word).
 **Owner's focus (unchanged):** a tuned, optimised core: training quality, GAN modes, speed, efficiency and
 stability, with the losses, metrics, strategies and optimisations around them; Studio in parallel.
 
+**Session 10 (2026-11-11 evening, running):** the owner delegated the open decisions; they are D1-D9 in
+`docs/refactor/DECISIONS.md` ("Delegated decisions, 2026-11-11"), made after Fable 5.2 and Codex GPT-6-Astra. The
+owner's own redux recipe is analysed in `docs/refactor/stage3/owner_recipe.md` (DISTS as the texture driver, a
+pixel + colour anchor, a weak slow D; half its listed losses were inert). The GPU queue runs from
+`experiments/s10/` (`run.sh`, `queue.txt`, `queue_s10.log`; arms from `mkcfg.py`).
+
 | rank | task | kind | GPU | section |
 |---|---|---|---|---|
-| 1 | Owner: confirm or revert the session's provisional and delegated decisions (LDL kept: its flip failed the seed replicate and waits on branch `held/ldl-flip`; no default changed by the screens; `compile = true` in the CNN templates (8k: no detectable quality difference; -21 % ms/update); the Studio real mode as experimental; the fixed-param display in Studio) | decisions | none | 2, 4 |
-| 2 | R3GAN A/B R6, now affordable: the penalty fix made a regularised update 122.5 ms (was 732); round 1 at 20k (7 arms: A0, A1, R1-R5) is ~4-5 GPU-h in total instead of ~21 h | quality A/B | hours | 3.1 |
-| 3 | A-04: at 8k no-D and metagan@0.03 lost to the template; unet@0.1 has an LPIPS lead that replicated on a second seed (WIN vs B0s2), but its D is clipped in 100 % of the updates. First the unet D's gradient scale (no code until the owner picks), then >= 20k with the GAN health log | quality A/B | hours | 3.1 |
-| 4 | The unet D's gradient scale (A-04 prerequisite): why its grad norm sits at ~30-45 at weight 0.1, so the D clip is on in every update; read the arch and the health log, a short bench if needed; no default change | core, analysis | short | 3.2 |
-| 5 | Metric memory at 4K: DISTS needs ~8.6 GiB, TOPIQ ~6 GiB at 3840x2160 (fp32); 12 GB cards cannot validate DISTS at 4K. Decide: document a limit, or a chunked DISTS that is exact | core, design | short | 3.3 |
-| 6 | Studio: one real GPU training through the real mode (it ran only on CPU), then the deferred UI items | Studio | short | 5 |
-| 7 | Housekeeping: the agent worktrees under `.claude/worktrees/` and their branches (all work is cherry-picked onto master); the old `.worktrees/refactor` keeps the R3GAN experiments | repo | none | 2 |
+| 1 | The s10 queue, ranks 1-4 (~8 GPU-h): B0/unet@0.1 8k -> 20k on two seeds; A1; T_DISTS, NoGAN_DISTS, OWN (0 -> 8k -> 20k); M@0.03, U_spike, R3 gamma 1; B2/B2s2 (LDL). Gate each block at 20k (D9) | quality A/B | hours | DECISIONS D1-D9 |
+| 2 | Compile gate: a CUDA parity script (one update eager vs compiled: metagan, unet, R1/R2), then B0_compile extended + a compiled seed 2 (D2) | speed | short + 1.1 h | D2 |
+| 3 | Short measurements: batch 8/16/32 at patch 64 (ms/update, VRAM, images/s), the DISTS-loss cost, one measured 4K validation pass, the Studio GPU lifecycle run | speed, Studio | short | D7, D8 |
+| 4 | The paired long run 20k -> 100k: A0 and the challenger the 20k verdicts name (eager, states every 4k), then the confirmation set | acceptance | ~6.5 h | D6 |
+| 5 | Then: E5 at 40k with a second P0 seed; seeds 2 of the winning new arms; R3 gamma 3 if needed; E2 as a G-only scheduler fork after the switch | quality A/B | hours | D4, D6 |
+| 6 | Studio UI: inline "fixed by preset" text on preset-bound parameters (D8); the deferred UI items | Studio | none | 5 |
 
 Parked by the owner: OTF realism (`docs/refactor/stage3/otf/DESIGN.md`), all of stage-3 Phase B. Deferred:
 section 6 (pyvips), L-16, ST-14 (trigger: a run past `wavelet_init`), D-16 (with OTF).

@@ -175,3 +175,30 @@ Consequences:
   Every such decision is logged with its evidence; default flips stay marked provisional (8k, one arch).
 - **Session plan:** a 4-hour session on the Linux machine with parallel lanes and no multi-hour GPU runs
   (`next_tasks.md`); core quality, GAN modes, speed and stability first, Studio in parallel.
+
+## Delegated decisions, 2026-11-11 (session 10: after Fable 5.2 and Codex GPT-6-Astra)
+**Delegation (owner, the same day):** decide the open questions after consulting Fable and Codex, for the owner's
+goal: train new SOTA photoreal SR models (high-frequency detail, textures) on a stable, fast base that fits one
+RTX 4090 24 GB, with compact code; priorities (1) stability, quality and efficiency of training, (2) speed,
+(3) photorealism and textures. Long GPU runs are allowed from now on.
+**Inputs:** a brief (`experiments/s9_ab/consult/brief.md`), an Opus probe of the unet D's gradient scale, two
+independent answers and a cross-review round (raw text in `experiments/s9_ab/consult/`, gitignored), and the
+analysis of the owner's own redux recipe (`stage3/owner_recipe.md`).
+
+| # | question | decision | why |
+|---|---|---|---|
+| D1 | LDL in the templates | **keep**; extend B2/B2s2 to 20k as evidence; removal needs a long run without LDL | both advisors; B2s2's LOSS sits on a ~2.5k-update D outage (Fable), which an LDL removal may itself have caused (Codex) |
+| D2 | `compile = true` in the CNN templates | **not yet**; gate = a CUDA parity check (one update eager vs compiled; metagan, unet, R1/R2), then a two-seed 20k compile pair; A/B and acceptance runs stay eager | compile is an exact rewrite, so it ships behind parity tests; one 8k seed is not enough; the challenger's compiled path is untested |
+| D3 | the template D (A-04) | **metagan@0.3 stays default and reference**; unet@0.1 is the challenger: 20k on two seeds, then the paired 100k runs | unet's grad norm of 30-70 is its parametrisation (high-res encoder, the logit-magnitude term), not a defect; under adan_sf the fixed clip rescales each step but does not damp it (resume probe: separation 0.66 / 0.79 / 0.69 with clip 1 / 50 / off); `clipped_d = 1.0` is no health signal |
+| D4 | R6 (R3GAN) | **shrunk**: R3 gamma 1 extended to 20k; gamma 3 only if that leaves a question; scalar arms and round 2 deferred; a new arm OWN replaces them | the R arms were far from the regime that worked for the owner (D lr 40x higher, GAN weight 30-60x higher, wavelet off) |
+| D5 | gradient clipping | **fixed max-norm stays the default**; one sensitivity arm (unet extended with `"spike"`); no D-only key | both advisors |
+| D6 | Phase 0 and the long run | **E4 (DISTS) promoted** to the first new arms (T_DISTS, NoGAN_DISTS, OWN); then the paired 100k run (A0 and the challenger, both eager); then E5 at 40k with a second P0 seed; E2 last, as a G-only scheduler fork after the wavelet switch | the owner's recipe shows DISTS as its texture driver; the long run must cross `wavelet_init = 80000` (CONSENSUS) |
+| D7 | metric memory at 4K | **document the limit** for cards under 24 GB; one measured 4K validation pass on the 4090; no chunked DISTS/TOPIQ | 24 GB is the target card; the 4K numbers are extrapolated so far |
+| D8 | Studio | **real mode stays experimental** until one GPU lifecycle run passes; preset-bound parameters stay visible and disabled, with inline "fixed by preset" text | both advisors |
+| D9 | the A/B protocol for 20k+ | seeds 7 and 2; matched restart boundaries (new arms stop at 8k and resume, like the extensions); endpoints 20k and 100k fixed in advance; floors recomputed at 20k from B0/B0s2; the gate unchanged, deltas against the B0/B0s2 mean reported as a sensitivity read; for arms trained on DISTS the verdict uses TOPIQ and LPIPS; health medians per 2k window from `train.jsonl`; the confirmation set once, for the frozen finalist; states every 4k in long runs; patch stays 64 (the split's LQ tiles are 64x64) | both advisors, plus the DISTS rule from `docs/training_guide.md` section 4 |
+
+Where the advisors disagreed: compiled long runs (Fable) vs eager (Codex): eager. The perception-distortion line
+and the pooled reference (Fable): reported, not gated (Codex). An early wavelet fork at 20k (Fable): not run, the
+long run crosses the real switch (Codex). R3 gamma 3 fresh (Fable) vs conditional (Codex): conditional.
+**Queue:** `experiments/s10/queue.txt` (ranks 1-4, ~8 GPU-h), then the compile pair and the short checks, then the
+paired long run once the 20k verdicts name the challenger.

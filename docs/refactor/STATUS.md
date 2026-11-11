@@ -60,6 +60,9 @@ Session 8 (Linux) ran the full suite and the small core items of the audit. What
 2026-11-11): the audit findings still open (`stage2/CLOSURE.md`; A-04 and L-07 wait on >= 20k runs; their 8k screens
 ran), the R3GAN A/B (R6, now affordable), then Studio. Session 9 did the ONNX sweep, the GPU measurements, five 8k
 screens and the R1/R2 penalty fix (`stage3/PROGRESS.md`, "Session 9").
+Session 10 (the same evening, running): the owner delegated the open decisions, now D1-D9 in `DECISIONS.md`
+("Delegated decisions, 2026-11-11"); the owner's redux recipe is analysed in `stage3/owner_recipe.md`; the GPU
+queue (20k extensions, the DISTS arms, the owner's recipe in neosr terms) runs from `experiments/s10/`.
 
 **What "the core" means (owner, 2026-11-10, `DECISIONS.md`):** the training framework and its ecosystem
 (losses, metrics, schedulers, optimizers, the GAN implementations, utilities), its speed and stability, as the

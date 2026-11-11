@@ -108,7 +108,9 @@ At 38k the logged weighted terms were total 0.141, GAN 0.0013 (about 1% of the g
 Other runs: `Experimental3`/`3B` (hyfreqmoe, r3gan 0.05-0.07 + DINOv3 perceptual 0.03-0.15 + LDL + HFEN +
 ConvNeXt + DISTS, D lr 5e-6): DISTS swings 0.12-0.18 with each config edit, PSNR collapses to 17.7 dB @33k
 (Exp3) and 14.0 dB @19k (Exp3B); at Exp3B 18.1k the DINOv3 term was 0.235 of a 0.247 total and `grad_norm_d`
-415-616. `Experimental33` (no GAN, charb 0.15 + DINOv3 0.15 + small others): 29.79 / 0.770 / 0.1825 @30k (custom
+415-616. Correction (2026-11-11, `../owner_recipe.md` section 3): the DINOv3 and ConvNeXt terms had no gradient
+(`@torch.no_grad()`), and redux applies the weight of a scheduled loss twice (r3gan 0.07 acts as 0.0049), so the
+DINOv3 term cannot have caused the collapse; a low pixel weight is the likelier cause. `Experimental33` (no GAN, charb 0.15 + DINOv3 0.15 + small others): 29.79 / 0.770 / 0.1825 @30k (custom
 arch, not re-scored here).
 
 ### 2.1 Cross-evaluation on common sets [probe]
