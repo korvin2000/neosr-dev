@@ -14,14 +14,19 @@ owner's own redux recipe is analysed in `docs/refactor/stage3/owner_recipe.md` (
 pixel + colour anchor, a weak slow D; half its listed losses were inert). The GPU queue runs from
 `experiments/s10/` (`run.sh`, `queue.txt`, `queue_s10.log`; arms from `mkcfg.py`).
 
+**D10 (owner, 2026-11-12, `DECISIONS.md`):** verdicts on window means with tau = max(1 %, 3 x null RMS) (TOPIQ:
+3 x null RMS), `analyze.py --window 12000:20000 --null A0/B0,B0/B0s2,U_unet01/U_unet01s2 A0+B0+B0s2 <arms>`;
+straight new arms; promote only leaders; one factor per arm. Read the queue's arms under both D9 (reported) and
+D10 (the calibration of the 8k screen: does any 4k-8k window verdict flip by 12k-20k?).
+
 | rank | task | kind | GPU | section |
 |---|---|---|---|---|
-| 1 | The s10 queue, ranks 1-4 (~8 GPU-h): B0/unet@0.1 8k -> 20k on two seeds; A1; T_DISTS, NoGAN_DISTS, OWN (0 -> 8k -> 20k); M@0.03, U_spike, R3 gamma 1; B2/B2s2 (LDL). Gate each block at 20k (D9) | quality A/B | hours | DECISIONS D1-D9 |
-| 2 | Compile gate: a CUDA parity script (one update eager vs compiled: metagan, unet, R1/R2), then B0_compile extended + a compiled seed 2 (D2) | speed | short + 1.1 h | D2 |
-| 3 | Short measurements: batch 8/16/32 at patch 64 (ms/update, VRAM, images/s), the DISTS-loss cost, one measured 4K validation pass, the Studio GPU lifecycle run | speed, Studio | short | D7, D8 |
-| 4 | The paired long run 20k -> 100k: A0 and the challenger the 20k verdicts name (eager, states every 4k), then the confirmation set | acceptance | ~6.5 h | D6 |
-| 5 | Then: E5 at 40k with a second P0 seed; seeds 2 of the winning new arms; R3 gamma 3 if needed; E2 as a G-only scheduler fork after the switch | quality A/B | hours | D4, D6 |
-| 6 | Studio UI: inline "fixed by preset" text on preset-bound parameters (D8); the deferred UI items | Studio | none | 5 |
+| 1 | The s10 queue (`queue.txt`, ends ~03:00 2026-11-12): ranks 1-2 done (20k, D10 reading: T_DISTS WIN on TOPIQ+LPIPS, unet LOSS (mixed), no-GAN LOSS); OWN, M@0.03, U_spike, R3 gamma 1, B2/B2s2, the compile pair still run. Gate each with `--window` and record the calibration | quality A/B | hours | D1-D10 |
+| 2 | `queue2.txt` (`run2.sh`, code2 = the D10 commit): T_DISTS seed 2, then T_DISTS_noFDL (DISTS replaces FDL), both straight 0 -> 20k | quality A/B | ~1.5 h | D10 |
+| 3 | Short measurements: batch 8/16/32 at patch 64 with and without DISTS (ms/update, steady vs start-up VRAM, images/s), the DISTS profile (channels_last / compile, exact), one measured 4K validation pass, the Studio GPU lifecycle run | speed, Studio | short | D7, D8, D10 |
+| 4 | The long pair 20k -> 100k: A0 + the finalist (compiled if D10 rule 8 holds; states every 4k; checks at 40k/60k), then the confirmation set and the visual set | acceptance | ~5 h | D10 |
+| 5 | Deferred by D10: E2, E5, R3 gamma 3 / round 2, spike clip from a fresh G, an LDL long run, U+DISTS | - | - | D10 |
+| 6 | Studio: the deferred UI items (`design/NeoSR_Studio_UI_Concept_v2.md` section 7) | Studio | none | 5 |
 
 Parked by the owner: OTF realism (`docs/refactor/stage3/otf/DESIGN.md`), all of stage-3 Phase B. Deferred:
 section 6 (pyvips), L-16, ST-14 (trigger: a run past `wavelet_init`), D-16 (with OTF).

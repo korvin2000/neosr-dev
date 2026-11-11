@@ -62,7 +62,10 @@ ran), the R3GAN A/B (R6, now affordable), then Studio. Session 9 did the ONNX sw
 screens and the R1/R2 penalty fix (`stage3/PROGRESS.md`, "Session 9").
 Session 10 (the same evening, running): the owner delegated the open decisions, now D1-D9 in `DECISIONS.md`
 ("Delegated decisions, 2026-11-11"); the owner's redux recipe is analysed in `stage3/owner_recipe.md`; the GPU
-queue (20k extensions, the DISTS arms, the owner's recipe in neosr terms) runs from `experiments/s10/`.
+queue (20k extensions, the DISTS arms, the owner's recipe in neosr terms) runs from `experiments/s10/`. On
+2026-11-12 the owner accepted D10 (`DECISIONS.md`): window-mean verdicts with a noise-based tau
+(`scripts/ab/analyze.py --window/--null`), straight new arms, promote only leaders; the D10 arms
+(`experiments/s10/queue2.txt`) follow the running queue.
 
 **What "the core" means (owner, 2026-11-10, `DECISIONS.md`):** the training framework and its ecosystem
 (losses, metrics, schedulers, optimizers, the GAN implementations, utilities), its speed and stability, as the

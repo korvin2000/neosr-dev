@@ -11,7 +11,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from scripts.ab.analyze import Data, bootstrap, main, paired, status, verdict
+from scripts.ab.analyze import (
+    Data,
+    bootstrap,
+    diagnostics,
+    main,
+    paired,
+    status,
+    verdict,
+)
 
 IT, N_GROUPS, PER_GROUP = 8000, 20, 5
 BASE = {"psnr": 30.0, "topiq": 0.65, "lpips": 0.17, "dists": 0.15}
@@ -33,25 +41,27 @@ def _data(tmp, exclude=(), n_groups=N_GROUPS) -> None:
     (tmp / "exclude.txt").write_text("\n".join(exclude))
 
 
-def _arm(runs, name, shift=None, seed=0, drop=0, skip=()) -> None:
-    """Per-image rows: a fixed per-image base (shared by every arm), small noise, plus `shift`."""
-    base = np.random.default_rng(99)
+def _arm(runs, name, shift=None, seed=0, drop=0, skip=(), its=(IT,), at=None) -> None:
+    """Per-image rows at each update of `its`: a fixed per-image base (shared by every arm and
+    update), small noise, plus `shift` (only at update `at`, if given)."""
     noise = np.random.default_rng(seed)
     (runs / name).mkdir(parents=True)
     rows = []
-    for i in _ids()[drop:]:
-        row = {"iter": IT, "dataset": "dev", "id": i}
-        for m, v in BASE.items():
-            if m in skip:
-                continue
-            scale = 0.5 if m == "psnr" else 0.01
-            row[m] = (
-                v
-                + scale * base.normal()
-                + 1e-4 * noise.normal()
-                + (shift or {}).get(m, 0.0)
-            )
-        rows.append(row)
+    for it in its:
+        base = np.random.default_rng(99)
+        for i in _ids()[drop:]:
+            row = {"iter": it, "dataset": "dev", "id": i}
+            for m, v in BASE.items():
+                if m in skip:
+                    continue
+                scale = 0.5 if m == "psnr" else 0.01
+                row[m] = (
+                    v
+                    + scale * base.normal()
+                    + 1e-4 * noise.normal()
+                    + (shift or {}).get(m, 0.0) * (at is None or it == at)
+                )
+            rows.append(row)
     lines = "".join(json.dumps(r) + "\n" for r in rows)
     (runs / name / "per_image.jsonl").write_text(lines)
 
@@ -81,6 +91,11 @@ def test_status_and_verdict():
         verdict({"topiq": "same", "lpips": "same", "dists": "same", "psnr": "worse"})
         == "TIE"
     )
+    both = {"topiq": "better", "lpips": "better", "dists": "same"}
+    one = {"topiq": "same", "lpips": "better", "dists": "better"}
+    assert verdict(both, ("topiq", "lpips")) == "WIN"  # two gated: both must be better
+    assert verdict(one, ("topiq", "lpips")) == "TIE"  # dists reported only
+    assert verdict(one, ("lpips",)) == "WIN"
 
 
 def test_gate_end_to_end(tmp_path, capsys):
@@ -236,3 +251,168 @@ def test_queue_relative_paths_failing_rc_and_blank_lines(tmp_path):
     assert not (tmp_path / "runs" / "c").exists()
     assert (tmp_path / "runs" / "b" / "ran").exists()
     assert not (tmp_path / "q.txt").read_text()
+
+
+WIN_ITS = (4000, 6000, 8000, 10000)
+
+
+def _window(tmp_path, null_shift=None):
+    """Three same-config runs (A0, B0, B0s2), validated at WIN_ITS; B0s2 optionally offset."""
+    data, runs = tmp_path / "data", tmp_path / "runs"
+    data.mkdir()
+    _data(data)
+    _arm(runs, "A0", seed=0, its=WIN_ITS)
+    _arm(runs, "B0", seed=1, its=WIN_ITS)
+    _arm(runs, "B0s2", null_shift, seed=2, its=WIN_ITS)
+    argv = ["--runs", str(runs), "--data", str(data), "--window", "4000:8000"]
+    return runs, [*argv, "--null", "A0/B0,B0/B0s2"]
+
+
+def _verdicts(capsys) -> dict[str, str]:
+    return {
+        line.split(":")[0]: line
+        for line in capsys.readouterr().out.splitlines()
+        if "|" in line
+    }
+
+
+def test_window_gate(tmp_path, capsys):
+    """D10: the window's updates only (10000 left out), a pooled reference, LOSS vs mixed LOSS,
+    and TOPIQ judged without the 1 % term (+0.002 < 1 % of 0.65 is still better)."""
+    runs, argv = _window(tmp_path)
+    _arm(runs, "win", {"topiq": 0.002, "lpips": -0.01}, seed=3, its=WIN_ITS)
+    _arm(runs, "loss", {"dists": 0.01}, seed=4, its=WIN_ITS)
+    _arm(runs, "mixed", {"lpips": -0.01, "dists": 0.01}, seed=5, its=WIN_ITS)
+    _arm(runs, "late", {"lpips": 0.05}, seed=6, its=(10000,))  # outside the window
+    _arm(runs, "short", seed=7, its=(4000, 6000))  # misses 8000
+    assert main([*argv, "A0+B0", "win", "loss", "mixed", "short"]) == 0
+    out = _verdicts(capsys)
+    assert out["win"].startswith("win: WIN")
+    assert out["loss"].startswith("loss: LOSS |")
+    assert out["mixed"].startswith("mixed: LOSS (mixed)")
+    assert "short" not in out  # not evaluated: a window update is missing
+    main([*argv, "A0", "late"])
+    assert "late: not evaluated" in capsys.readouterr().out
+
+
+def test_window_null_rms_binds_tau(tmp_path, capsys):
+    """A same-config pair 0.004 apart in LPIPS: tau = 3 x RMS(~0, 0.004) = 0.0085 > 0.005."""
+    runs, argv = _window(tmp_path, {"lpips": -0.004})
+    _arm(runs, "gain", {"lpips": -0.005}, seed=3, its=WIN_ITS)
+    main([*argv, "A0", "gain"])
+    out = capsys.readouterr().out
+    assert "lpips 0.0085" in out.split("## tau:")[1].splitlines()[0]
+    assert "gain: TIE" in out
+
+
+def test_report_only(tmp_path, capsys):
+    """An arm trained on DISTS: its DISTS gain is reported, and one gated gain is a TIE."""
+    runs, argv = _window(tmp_path)
+    _arm(runs, "d", {"lpips": -0.01, "dists": -0.01}, seed=3, its=WIN_ITS)
+    main([*argv, "A0", "d"])
+    assert "d: WIN" in capsys.readouterr().out
+    main([*argv, "--report-only", "dists", "A0", "d"])
+    out = capsys.readouterr().out
+    assert "d: TIE" in out
+    assert "## gated: topiq, lpips; reported: psnr, dists" in out
+
+
+def test_window_means_over_updates_and_pooled_runs(tmp_path, capsys):
+    """+0.03 LPIPS at one of three updates is +0.01 over the window; a pooled reference whose
+    second run is 0.004 lower sits 0.002 below the first run alone."""
+    runs, argv = _window(tmp_path, {"lpips": -0.004})
+    _arm(runs, "once", {"lpips": 0.03}, seed=3, its=WIN_ITS, at=6000)
+    main([*argv, "A0+B0s2", "once"])
+    line = _verdicts(capsys)["once"]
+    assert "lpips +0.0120 " in line  # 0.03 / 3 + 0.004 / 2
+    main([*argv, "A0", "once"])
+    assert "lpips +0.0100 " in _verdicts(capsys)["once"]
+
+
+def test_window_guards(tmp_path, capsys):
+    runs, argv = _window(tmp_path)
+    base = argv[:-2]  # without --null
+    with pytest.raises(SystemExit):
+        main([*base, "A0", "B0"])  # --window needs --null
+    with pytest.raises(SystemExit):
+        main([*argv, "--seed-ref", "B0s2", "A0", "B0"])
+    with pytest.raises(SystemExit, match="FROM:TO"):
+        main([*argv[:-4], "--window", "8000", "--null", "A0/B0", "A0", "B0"])
+    with pytest.raises(SystemExit):
+        main([*base, "--null", "A0", "A0", "B0"])
+    assert "X/Y pairs" in capsys.readouterr().err
+    with pytest.raises(SystemExit, match="no dev validation in 20000:30000"):
+        main([*argv[:-4], "--window", "20000:30000", "--null", "A0/B0", "A0", "B0"])
+    with pytest.raises(SystemExit):
+        main([
+            *base,
+            "--null",
+            "B0/B0",
+            "A0",
+            "B0",
+        ])  # a run is no noise pair with itself
+    with pytest.raises(SystemExit):
+        main([
+            *argv,
+            *(f"--report-only={m}" for m in ("topiq", "lpips", "dists")),
+            "A0",
+            "B0",
+        ])
+    # a reference run cut short (no 8000): the gate stops instead of shortening the window
+    _arm(runs, "cut", seed=8, its=(4000, 6000))
+    with pytest.raises(SystemExit, match="cut: no dev rows"):
+        main([*base, "--null", "B0/B0s2", "cut", "B0"])
+
+
+def test_diagnostics_speed_and_memory(tmp_path):
+    """ms/update: the median over log windows, a validation pause and a resume's restarted clock
+    left out; mem_gib: the first (start-up) and the steady window peak."""
+    (tmp_path / "a").mkdir()
+    t = [
+        (100, 10.0),
+        (200, 20.0),
+        (300, 30.0),
+        (400, 70.0),
+        (500, 80.0),
+        (600, 1.0),
+        (700, 11.0),
+    ]
+    mem = [12.5, 4.7, 4.7, 4.7, 4.7, 12.4, 4.7]
+    rows = [{"iter": i, "t": s, "mem_gib": m} for (i, s), m in zip(t, mem, strict=True)]
+    (tmp_path / "a" / "train.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in rows)
+    )
+    d = diagnostics(tmp_path, "a")
+    assert d["ms_update"] == pytest.approx(100.0)
+    assert d["mem_gib"] == {"first": 12.5, "steady": 4.7, "max": 12.5}
+
+
+def test_run_ab_records_the_window_peak(tmp_path, monkeypatch):
+    """run_ab's hooks put the [ mem ] peak train.py reads just before get_current_log into that
+    log row, once; every patched attribute is restored after the test."""
+    import importlib  # ruff: ignore[import-outside-top-level]
+
+    from scripts.ab.run_ab import Recorder, install_hooks  # ruff: ignore[import-outside-top-level]
+
+    base = importlib.import_module("neosr.models.base")
+    image = importlib.import_module("neosr.models.image")
+    trainer = importlib.import_module("train")
+    for obj, attr in (
+        (base.base, "log_metrics"),
+        (image.image, "validate"),
+        (image.image, "_metric"),
+        (image, "image_id"),
+    ):
+        monkeypatch.setattr(obj, attr, getattr(obj, attr))
+    monkeypatch.setattr(image.image, "get_current_log", lambda _self: {"l_g_pix": 1.0})
+    monkeypatch.setattr(trainer, "window_peak_memory", lambda _device: (4.7, 23.6))
+    rec = Recorder(tmp_path)
+    install_hooks(rec)
+    model = type("M", (), {"update": 100})()
+    trainer.window_peak_memory("cuda")
+    image.image.get_current_log(model)
+    image.image.get_current_log(model)  # no new peak read: no mem_gib
+    rows = [json.loads(x) for x in (tmp_path / "train.jsonl").read_text().splitlines()]
+    assert rows[0]["mem_gib"] == pytest.approx(4.7)
+    assert rows[0]["l_g_pix"] == pytest.approx(1.0)
+    assert "mem_gib" not in rows[1]

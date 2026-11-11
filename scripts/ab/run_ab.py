@@ -1,7 +1,8 @@
 """One A/B arm: train a TOML through train.py's own machinery (load_config, validate_train,
 setup_runtime, prepare_run, train) and log, beside the run, what scripts/ab/analyze.py reads:
 
-    train.jsonl      every get_current_log() (the print_freq cadence): losses and diagnostics
+    train.jsonl      every get_current_log() (the print_freq cadence): losses and diagnostics,
+                     mem_gib = the window's peak allocated VRAM (the [ mem ] of the log line)
     metrics.jsonl    every validation event: dataset means
     per_image.jsonl  every validation event: one row per image (id = path below the dataroot)
     done.json        only after the final validation of every val dataset: seconds, peak VRAM
@@ -34,6 +35,7 @@ class Recorder:
         self.files = {k: (out / f"{k}.jsonl").open("a", encoding="utf-8") for k in LOGS}
         self.ids: list[str] = []
         self.vals: list = []
+        self.mem: float | None = None  # the current log window's peak, GiB
 
     def write(self, key: str, row: dict) -> None:
         self.files[key].write(json.dumps(row) + "\n")
@@ -52,6 +54,8 @@ def install_hooks(rec: Recorder) -> None:
     base = importlib.import_module("neosr.models.base")
     image = importlib.import_module("neosr.models.image")
     log_metrics, get_log = base.base.log_metrics, image.image.get_current_log
+    trainer = importlib.import_module("train")
+    peak = getattr(trainer, "window_peak_memory", None)  # older checkouts: no [ mem ]
     validate, image_id, metric = (
         image.image.validate,
         image.image_id,
@@ -86,8 +90,17 @@ def install_hooks(rec: Recorder) -> None:
 
     def get_log_hook(self):
         d = get_log(self)
-        rec.write("train", {"iter": self.update, "t": time.time() - rec.t0, **d})
+        row = {"iter": self.update, "t": time.time() - rec.t0, **d}
+        if rec.mem is not None:
+            row["mem_gib"], rec.mem = rec.mem, None
+        rec.write("train", row)
         return d
+
+    # train.py reads the window's peak just before get_current_log (one log_vars literal)
+    def peak_hook(device):
+        m = peak(device)
+        rec.mem = None if m is None else m[0]
+        return m
 
     def validate_hook(self, *args, **kwargs):  # per-image state is scoped to one event
         rec.clear()
@@ -101,6 +114,8 @@ def install_hooks(rec: Recorder) -> None:
     image.image.validate = validate_hook
     image.image._metric = staticmethod(metric_hook)
     image.image_id = image_id_hook
+    if peak is not None:
+        trainer.window_peak_memory = peak_hook
 
 
 def keep_until(out: Path, update: int | None, *, final: bool = False) -> None:

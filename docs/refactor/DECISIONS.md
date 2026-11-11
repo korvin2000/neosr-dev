@@ -202,3 +202,38 @@ and the pooled reference (Fable): reported, not gated (Codex). An early wavelet 
 long run crosses the real switch (Codex). R3 gamma 3 fresh (Fable) vs conditional (Codex): conditional.
 **Queue:** `experiments/s10/queue.txt` (ranks 1-4, ~8 GPU-h), then the compile pair and the short checks, then the
 paired long run once the 20k verdicts name the challenger.
+
+## Owner decision, 2026-11-12 (D10: a faster, less noisy A/B protocol)
+**Question (owner):** check concepts as fast as possible (a lighter G such as SPAN++, other settings, fewer
+runs); the goal is the concept, not a trained model. **Inputs:** a brief and two independent answers (Fable 5.2,
+Codex GPT-6-Astra; `experiments/s10/consult/`, gitignored: `brief.md`, `synthesis.md`, Fable's scripts in `adv/`,
+re-run by the main session). **Accepted by the owner** as proposed in `synthesis.md`.
+
+Evidence: on same-config pairs (B0/B0s2/A0, U/Us2) the single-checkpoint gate called LOSS in 9 of 36 comparisons
+(all LPIPS: its 1 % floor is below one run-to-run sigma); window means halve the LPIPS noise (null RMS 0.0019 at
+one checkpoint, 0.0008 over 12k-20k); 8k ranks predicted 20k ranks over 7 arms. A lighter G saves little:
+spanplus is -13 % on the same objectives (`stage2/PROGRESS.md:86`); the step is FDL, D and the backward through
+them (`stage2/analysis/gpu_profile.md` section 2). Corrections: T_DISTS was a TIE under the D9 DISTS rule, not a
+WIN; its 12.75 GiB was a start-up peak (steady 4.70 GiB vs 3.19).
+
+| # | rule |
+|---|---|
+| 1 | verdicts use window means of the paired deltas (`analyze.py --window`): screen 4k-8k, decision 12k-20k; never one checkpoint |
+| 2 | tau per metric = max(1 % of the reference, 3 x null RMS of the window) (`--null`); TOPIQ: 3 x null RMS (its 1 % is ~10x its noise); fixed before new arms, binding only for arms started after 2026-11-12 |
+| 3 | screen at 8k: drop a clear loser (a gated metric worse, none better); promote a better arm; a no-effect arm only if cheaper or simpler; stopped checkpoints are kept; if a queued 8k-to-20k extension flips its window verdict, the screen lengthens to 12k |
+| 4 | one factor per arm, or a 2x2; multi-change recipes (OWN) are not screens |
+| 5 | no extension of clear 8k losers; seed 2 only for promoted arms; a default needs two seeds and the long pair |
+| 6 | new arms run straight 0 -> 20k (no artificial restart); A0 is the primary reference, the pool A0+B0+B0s2 the gate's |
+| 7 | metrics an arm trains on are reported, not gated (`--report-only`) |
+| 8 | long run: reference + one finalist 20k -> 100k, compiled if the compile pair passes the window gate and `compile_parity.py` passes on the finalist (a prospective revision of D2), health checks at 40k/60k; stop on a numerical failure or two consecutive LOSS windows |
+| 9 | every verdict reports ms/update and the steady VRAM, the start-up peak separately (`run_ab.py` records `mem_gib`) |
+| 10 | the confirmation set once per finalist, with the visual set and the owner's eye |
+
+Not adopted: a proxy G (both advisors: transfer to larger archs is unknown and the saving is small); a mid-run stop
+at 12-14k (saves <= 10 min per arm, 25 % false LOSS at one checkpoint); a compressed wavelet fork at 22k (not
+acceptance; both long arms cross the real switch at 80k). Deferred: E2, E5, R3 gamma 3 and round 2, spike clip
+from a fresh G, an LDL long run, the U+DISTS screen (unet is LOSS (mixed) under rule 1: LPIPS -0.005 better,
+TOPIQ -0.002 worse beyond tau on both seeds).
+**Plan:** `experiments/s10/queue2.txt` after the running queue: T_DISTS seed 2, then T_DISTS_noFDL (DISTS replaces
+FDL); then the short measurements (batch 8/16/32 with and without DISTS, the DISTS profile, one 4K validation, the
+Studio GPU run); then the long pair A0 + the finalist; then the confirmation set.

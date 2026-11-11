@@ -22,6 +22,11 @@ Gate, per metric against the reference:
 - **better / worse** only when the mean paired difference is beyond the floor in that direction and its 95 % CI excludes 0. The CI comes from a bootstrap over source groups (10,000 resamples), so tiles of one photo are not counted as independent.
 - **verdict** over the perceptual metrics: **LOSS** if TOPIQ, LPIPS or DISTS is worse; **WIN** if at least 2 of the 3 are better and none is worse; otherwise **TIE**. PSNR is shown with its own status but does not decide.
 
+**The D10 gate** (`docs/refactor/DECISIONS.md`, 2026-11-12; binding for arms started after it) replaces the one-checkpoint floor: `--window FROM:TO` compares per-image means over the validated updates in the window (screen 4000:8000, decision 12000:20000), and `--null X/Y,...` names same-config run pairs whose RMS delta sets **tau** = max(3 x null RMS, 0.05 dB PSNR or 1 % of the reference mean; TOPIQ without the 1 % term). The reference may pool runs of one config (`A0+B0+B0s2`). `--report-only dists` reports a metric the arms train on without gating it; WIN then needs every gated metric (both, of two) better. `LOSS (mixed)` = a gated metric worse and another better: not a clear loser. The diagnostics add `ms_update` (median over log windows) and `mem_gib` (the first window's start-up peak, the steady median, the maximum; `run_ab.py` logs it per window).
+   ```sh
+   python scripts/ab/analyze.py --runs <runs> --data <data> --window 12000:20000 --null A0/B0,B0/B0s2 --report-only dists A0+B0+B0s2 T_DISTS
+   ```
+
 8k runs are a screen. A default changes only by the owner's decision, and a WIN on a GAN default stays provisional until a longer run (`next_tasks.md`, `STATUS.md`).
 
 ## Running it (Linux workstation)
