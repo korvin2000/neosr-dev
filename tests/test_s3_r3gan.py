@@ -12,7 +12,7 @@ import torch.distributed as dist
 from torch import nn
 from torch.nn import functional as F
 
-from neosr.archs import build_network
+from neosr.archs import build_network, r3gan_arch
 from neosr.archs.r3gan_arch import Down, r3gan
 from neosr.config import ConfigError, validate_train
 from neosr.losses import RESERVED
@@ -242,6 +242,112 @@ def test_penalty_parameter_gradients_match_finite_differences():
     ws = tuple(params[n].detach().clone().requires_grad_() for n in names)
     assert penalty(*ws) > 0
     assert torch.autograd.gradcheck(penalty, ws, eps=1e-6, atol=1e-5)
+
+
+def _aten_conv2d(x, w, stride=1, padding=0, groups=1):
+    """The pre-rewrite convolution: ATen's own conv double backward."""
+    return F.conv2d(x, w, None, stride, padding, 1, groups)
+
+
+def _penalty_pass(net, x, eps, amp):
+    """D(x), grad_x <eps, D(x)> (create_graph) and the D-parameter gradients of ||grad||^2 + sum D:
+    the forward, backward and double backward of a regularised D update."""
+    x = x.clone().requires_grad_()
+    with torch.autocast(x.device.type, dtype=torch.bfloat16, enabled=amp):
+        out = net(x)
+        (gx,) = torch.autograd.grad((out.float() * eps).sum(), x, create_graph=True)
+    loss = gx.float().square().sum() + out.float().sum()
+    return [out, gx, *torch.autograd.grad(loss, list(net.parameters()))]
+
+
+@pytest.mark.parametrize(
+    ("dev", "amp"),
+    [("cpu", False), pytest.param("cuda", False, marks=CUDA), pytest.param("cuda", True, marks=CUDA)],
+)  # fmt: skip
+@pytest.mark.parametrize(("head", "size"), [("patch", 23), ("scalar", 16)])
+def test_conv_rewrite_equals_aten_conv_through_the_double_backward(
+    monkeypatch, dev, amp, head, size
+):
+    """conv2d() (input gradient as conv_transpose2d) against F.conv2d: the forward bitwise, the input
+    gradient and the penalty's parameter gradients within 1e-6 (relative norm) in fp32 without TF32;
+    the trainer's bf16 channels_last within 1e-3, under its own error (~1e-2 against fp64): the
+    weight gradients' bf16 rounding follows the kernel. 23 px needs the FIR's output_padding."""
+    torch.manual_seed(0)
+    mf = torch.channels_last if amp else torch.contiguous_format
+    net = _trained(r3gan(widths=(16, 32, 32), head=head)).to(dev, memory_format=mf)
+    x = torch.rand(2, 3, size, size, device=dev).contiguous(memory_format=mf)
+    eps = glm.signs(net(x)).float()
+    monkeypatch.setattr(torch.backends.cudnn, "allow_tf32", False)
+    new = _penalty_pass(net, x, eps, amp)
+    monkeypatch.setattr(r3gan_arch, "conv2d", _aten_conv2d)
+    old = _penalty_pass(net, x, eps, amp)
+    assert torch.equal(new[0], old[0])
+    tol = 1e-3 if amp else 1e-6
+    for a, b in zip(new, old, strict=True):
+        assert a.dtype == b.dtype
+        assert (a.double() - b.double()).norm() <= tol * b.double().norm()
+
+
+def test_penalty_conv_count_does_not_grow_with_the_groups(monkeypatch):
+    """ATen's conv double backward runs one conv per group (and per channel of the constant FIR);
+    conv2d() runs the same number of convs whatever the group width."""
+
+    def count(group_width):
+        torch.manual_seed(0)
+        net = r3gan(widths=(16, 32), group_width=group_width)
+        with torch.profiler.profile(
+            activities=[torch.profiler.ProfilerActivity.CPU]
+        ) as prof:
+            _penalty_pass(net, torch.rand(1, 3, 16, 16), 1.0, amp=False)
+        return sum(e.name == "aten::convolution" for e in prof.events())
+
+    assert count(1) == count(16)
+    monkeypatch.setattr(r3gan_arch, "conv2d", _aten_conv2d)
+    assert count(1) > count(16)
+
+
+def _weight_grads(run) -> int:
+    """aten::convolution_backward calls of run(): conv2d() makes them for weight gradients only."""
+    with torch.profiler.profile(
+        activities=[torch.profiler.ProfilerActivity.CPU]
+    ) as prof:
+        run()
+    return sum(e.name == "aten::convolution_backward" for e in prof.events())
+
+
+def test_conv_rewrite_skips_weight_gradients_the_pass_does_not_use():
+    """Like ATen's conv backward: no weight gradient in G's step (backward(inputs=G params)) or in
+    R1/R2's inner grad w.r.t. x; one per weighted conv in D's own backward."""
+    torch.manual_seed(0)
+    net = _trained(r3gan(widths=(16, 32)))
+    lq, shift = torch.rand(1, 3, 16, 16), torch.zeros(1, requires_grad=True)
+    x = torch.rand(1, 3, 16, 16, requires_grad=True)
+    weighted = sum(isinstance(m, nn.Conv2d) for m in net.modules())
+    assert _weight_grads(lambda: net(lq + shift).sum().backward(inputs=[shift])) == 0
+    assert (
+        _weight_grads(lambda: torch.autograd.grad(net(x).sum(), x, create_graph=True))
+        == 0
+    )
+    assert _weight_grads(lambda: net(lq).sum().backward()) == weighted
+
+
+def test_conv_rewrite_backward_ignores_the_autocast_it_runs_under(monkeypatch):
+    """An fp32 forward differentiated inside a bf16 autocast region keeps fp32 gradients, as ATen's
+    conv backward does (the backward's conv_transpose2d is an autocast op)."""
+    torch.manual_seed(0)
+    net = _trained(r3gan(widths=(16, 32)))
+    x = torch.rand(2, 3, 16, 16, requires_grad=True)
+
+    def grads():
+        out = net(x)
+        with torch.autocast("cpu", dtype=torch.bfloat16):
+            return torch.autograd.grad(out.sum(), [x, *net.parameters()])
+
+    new = grads()
+    monkeypatch.setattr(r3gan_arch, "conv2d", _aten_conv2d)
+    for a, b in zip(new, grads(), strict=True):
+        assert a.dtype == b.dtype == torch.float32
+        assert (a - b).norm() <= 1e-6 * b.norm()
 
 
 def test_activations_stay_bf16_under_autocast():
