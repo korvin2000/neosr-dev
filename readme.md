@@ -129,10 +129,12 @@ fp16, faster, overflow above 65504; fp16 AMP only), `compile` and `compile_mode`
 
 `compile = true` pays on long GPU runs at a fixed `patch_size`: the step is launch-bound. Measured (RTX 4090,
 realplksr + metagan template, bf16 AMP, `scripts/bench.py` 3x100 updates): 86.7 ms/update instead of 109.9 (-21 %),
-peak VRAM 3104 instead of 3269 MiB, but the first update takes 162 s instead of 44 s (compile warm-up). It compiles
-the training forward of G and of a D without BatchNorm (metagan included; a BatchNorm D and the R1/R2 penalty
-stay eager); validation, saving and EMA use the eager module. It does not pay for short runs or tests, and every
-new input shape recompiles (`dynamic=False`).
+peak VRAM 3104 instead of 3269 MiB, but the first update takes 162 s instead of 44 s (compile warm-up). It pays
+most on the transformer templates: DAT (`train_dat.toml`, G only compiled) 268.7 -> 193.5 ms/update (-28 %), peak
+allocated 5659 -> 4590 MiB, about 4 min warm-up (stage-2 number, not re-measured). It compiles the training forward
+of G and of a D without BatchNorm (metagan included; a BatchNorm D and the R1/R2 penalty stay eager); validation,
+saving and EMA use the eager module. It does not pay for short runs or tests; unseen training input shapes can
+trigger recompilation (`dynamic=False`; past Dynamo's cache limit the step falls back to eager).
 
 ### datasets
 

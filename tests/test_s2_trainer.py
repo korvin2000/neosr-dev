@@ -1,6 +1,7 @@
 """Stage 2, trainer lane (docs/refactor/stage2/analysis/trainer.md, stability.md): clamp and clip
 modes, the skip transaction, idle phases, resume reporting, config invariants, runtime flags."""
 
+import contextlib
 import copy
 import logging
 import math
@@ -900,6 +901,27 @@ def test_loaders_are_built_before_the_model(tmp_path, data, monkeypatch):  # noq
     assert train_py.main(["-opt", str(toml(tmp_path, data, total=2))]) == 0
     assert order == ["loaders", "model"]
     assert "it/s, data " in logs(tmp_path)  # D-13: the data-wait share next to it/s
+    assert "[ lr_d: " not in logs(tmp_path)  # no D phase
+
+
+GAN_TOML = """
+[network_d]
+type = "unet"
+num_feat = 4
+[train.optim_d]
+type = "adamw"
+lr = 2e-4
+[train.gan_opt]
+type = "gan_loss"
+loss_weight = 0.1
+"""
+
+
+def test_gan_run_logs_the_d_lr(tmp_path, data, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    cfg = toml(tmp_path, data, total=2, extra=GAN_TOML)
+    assert train_py.main(["-opt", str(cfg)]) == 0
+    assert "[ lr: 1.00e-03 ] [ lr_d: 2.00e-04 ] [ eta:" in logs(tmp_path)
 
 
 def test_data_wait_share():
@@ -910,9 +932,22 @@ def test_data_wait_share():
     assert w.share() < 0.5  # reset by the previous read
 
 
+@contextlib.contextmanager
+def neosr_caplog(caplog):
+    """caplog sees the "neosr" logger in any test order: get_root_logger sets propagate = False, so
+    the root handler caplog installs gets nothing unless it sits on "neosr" itself."""
+    log = logging.getLogger("neosr")
+    log.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.INFO, logger="neosr"):
+            yield
+    finally:
+        log.removeHandler(caplog.handler)
+
+
 def test_message_logger_shows_the_data_share(caplog):
     ml = MessageLogger({"name": "x", "logger": {"total_iter": 10}}, None)
-    with caplog.at_level(logging.INFO, logger="neosr"):
+    with neosr_caplog(caplog):
         ml({
             "epoch": 0,
             "iter": 1,
@@ -928,7 +963,7 @@ def test_message_logger_shows_the_data_share(caplog):
 
 def test_message_logger_shows_the_d_lr(caplog):
     ml = MessageLogger({"name": "x", "logger": {"total_iter": 10}}, None)
-    with caplog.at_level(logging.INFO, logger="neosr"):
+    with neosr_caplog(caplog):
         ml({"epoch": 0, "iter": 1, "lrs": [1e-3, 5e-4], "lrs_d": [2e-4], "time": 0.5})
     assert "[ lr: 1.00e-03 5.00e-04 ] [ lr_d: 2.00e-04 ] [ eta:" in caplog.text
 
