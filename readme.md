@@ -223,7 +223,7 @@ target = "lq"         # reference: "gt" (default) or "lq" = bicubic-upscaled lq 
 | [Consistency](https://github.com/neosr-project/neosr/wiki/Losses#consistency_opt-consistency_loss) (Oklab and CIE L*) | `consistency_loss` |
 | [KL divergence](https://pytorch.org/docs/stable/generated/torch.nn.KLDivLoss.html) | `kl_loss` |
 | [MS-SWD](https://github.com/real-hjq/MS-SWD) | `msswd_loss` |
-| [FDL](https://github.com/eezkni/FDL) (`model = "dinov2" \| "vgg" \| "resnet" \| "effnet"`) | `fdl_loss`; `fp32_backbone = false` runs the DINOv2 backbone in bf16 at 256 px patches: it saves memory, not time (RTX 4090, realplksr + metagan template, bf16 AMP: 116.5 vs 109.9 ms/update, peak VRAM 3109 vs 3269 MiB; opt-in: gradients drift, see docs/refactor/analysis/perf.md); `checkpoint = true` (DINOv2) recomputes the backbone activations in backward: same result, less memory, slower |
+| [FDL](https://github.com/eezkni/FDL) (`model = "dinov2" \| "vgg" \| "resnet" \| "effnet"`) | `fdl_loss`; `fp32_backbone = false` runs the DINOv2 backbone under the trainer's autocast dtype (bf16, or fp16 with `bfloat16 = false`) for SR patches of at least 256 px per side (`amp_min_size`); smaller patches, the CNN backbones and the FFT / sort head stay fp32. It saves ~160 MiB peak VRAM with no measurable speed gain (RTX 4090, realplksr + metagan template, bf16 AMP, eager, 3 x 100 updates: 113.6-118.1 ms/update, median 116.5, vs 108.5-117.5, median 109.9, with the fp32 backbone: the ranges overlap; peak VRAM 3109 vs 3269 MiB; opt-in: gradients drift, see docs/refactor/analysis/perf.md); `checkpoint = true` (DINOv2) recomputes the backbone activations in backward: same result, less memory, slower |
 
 ## training
 

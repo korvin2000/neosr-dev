@@ -285,7 +285,7 @@ Every non-empty table ending in `_opt` becomes one term; the slot name is free-f
 | `kl_loss` | `kl` | none | G | 1.0 | internal x0.03 |
 | `msswd_loss` | `msswd` | num_scale 3, num_proj 24, patch_size 11, stride 1, c 3 | G | 1.0 | internal x0.1; takes `target="lq"` |
 | `ncc_loss` | `ncc` | none | G | 1.0 | |
-| `fdl_loss` | `fdl` | model `dinov2` (`vgg`,`resnet`,`effnet`), patch_size 4, stride 1, num_proj 24, phase_weight 1.0, seed 0, fp32_backbone True, dino_layers (0..7), dino_weights (1,.5,.5,1,.5,.5,1,.1), dino_norm False, vgg_weights (.5,.5,1,1,1) | G | 1.0 | `fp32_backbone=false` = ~160 MiB less VRAM, no speed gain (RTX 4090 template, bf16), gradients drift |
+| `fdl_loss` | `fdl` | model `dinov2` (`vgg`,`resnet`,`effnet`), patch_size 4, stride 1, num_proj 24, phase_weight 1.0, seed 0, fp32_backbone True, dino_layers (0..7), dino_weights (1,.5,.5,1,.5,.5,1,.1), dino_norm False, vgg_weights (.5,.5,1,1,1) | G | 1.0 | `fp32_backbone=false` = autocast DINOv2 backbone for SR patches >= 256 px: ~160 MiB less peak VRAM, no measurable speed gain (ranges overlap; RTX 4090 template, bf16), gradients drift |
 
 Typical combinations seen in the repo:
 

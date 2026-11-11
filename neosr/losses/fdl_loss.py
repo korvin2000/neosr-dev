@@ -308,9 +308,10 @@ class fdl_loss(Loss):
     head always in fp32; smaller patches and the CNN backbones stay fp32
     (docs/refactor/analysis/perf.md §3.1: bf16 features drift or blow up the phase gradient there,
     and even at 256 px the pixel gradient differs by up to 60%, so it is not the default). It saves
-    memory, not time: RTX 4090, realplksr + metagan template, bf16 AMP, eager, scripts/bench.py
-    3 x 100 updates (2026-11-11): 116.5 ms/update vs 109.9 with the fp32 backbone, peak VRAM 3109
-    vs 3269 MiB.
+    ~160 MiB peak VRAM, with no measurable speed gain: RTX 4090, realplksr + metagan template, bf16
+    AMP, eager, scripts/bench.py 3 x 100 updates (2026-11-11): 113.6-118.1 ms/update (median
+    116.5) vs 108.5-117.5 (median 109.9) with the fp32 backbone, ranges overlapping; peak VRAM
+    3109 vs 3269 MiB.
     """
 
     amp_min_size = 256  # smallest validated patch side for the autocast backbone
