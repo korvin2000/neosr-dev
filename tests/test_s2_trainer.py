@@ -1,7 +1,6 @@
 """Stage 2, trainer lane (docs/refactor/stage2/analysis/trainer.md, stability.md): clamp and clip
 modes, the skip transaction, idle phases, resume reporting, config invariants, runtime flags."""
 
-import contextlib
 import copy
 import logging
 import math
@@ -937,22 +936,9 @@ def test_data_wait_share():
     assert w.share() < 0.5  # reset by the previous read
 
 
-@contextlib.contextmanager
-def neosr_caplog(caplog):
-    """caplog sees the "neosr" logger in any test order: get_root_logger sets propagate = False, so
-    the root handler caplog installs gets nothing unless it sits on "neosr" itself."""
-    log = logging.getLogger("neosr")
-    log.addHandler(caplog.handler)
-    try:
-        with caplog.at_level(logging.INFO, logger="neosr"):
-            yield
-    finally:
-        log.removeHandler(caplog.handler)
-
-
 def test_message_logger_shows_the_data_share(caplog):
     ml = MessageLogger({"name": "x", "logger": {"total_iter": 10}}, None)
-    with neosr_caplog(caplog):
+    with caplog.at_level(logging.INFO, logger="neosr"):
         ml({
             "epoch": 0,
             "iter": 1,
@@ -968,7 +954,7 @@ def test_message_logger_shows_the_data_share(caplog):
 
 def test_message_logger_shows_the_d_lr(caplog):
     ml = MessageLogger({"name": "x", "logger": {"total_iter": 10}}, None)
-    with neosr_caplog(caplog):
+    with caplog.at_level(logging.INFO, logger="neosr"):
         ml({
             "epoch": 0,
             "iter": 1,

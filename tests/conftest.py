@@ -1,3 +1,4 @@
+import logging
 import sys
 from pathlib import Path
 
@@ -33,6 +34,26 @@ SLOW = (
     "tests/test_s2_losses.py::test_compiled_spectral_norm_d_trains",  # 19 s
     "tests/test_imports.py::test_import_has_no_side_effects",  # 19 s (~10 s per module on Windows)
 )
+
+
+@pytest.fixture(autouse=True)
+def _caplog_sees_neosr(request):
+    """caplog sees the "neosr" logger in any test order: get_root_logger sets propagate = False on
+    its first call, so the logger is initialised here and propagates (to the root, where caplog's
+    per-phase handlers sit) while a test that requests caplog runs."""
+    if "caplog" not in request.fixturenames:
+        yield
+        return
+    from neosr.utils.logger import get_root_logger  # noqa: PLC0415
+
+    log = get_root_logger()
+    level, prop = log.level, log.propagate
+    log.propagate = True
+    try:
+        yield
+    finally:
+        log.setLevel(level)
+        log.propagate = prop
 
 
 def _needs_cuda(item: pytest.Item) -> bool:
