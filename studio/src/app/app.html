@@ -28,7 +28,13 @@
             <dt>GPU</dt><dd>{{ info.gpus[0]?.name ?? '—' }} · {{ info.gpus[0]?.vramGb ?? 0 }} GB</dd>
             <dt>NeoSR</dt><dd class="mono">{{ info.neosrPath }} <span class="faint">({{ info.neosrVersion }})</span></dd>
             <dt>Experiments</dt><dd class="mono">{{ info.experimentsRoot }}</dd>
-            <dt>Free disk</dt><dd>{{ info.freeDiskGb }} GB</dd>
+            <dt>Free disk</dt><dd>{{ info.freeDiskGb ?? '—' }} GB</dd>
+            @if (info.pythonPath) {
+              <dt>Python</dt><dd class="mono">{{ info.pythonPath }} <span class="faint">(torch {{ info.torchVersion ?? '?' }}, CUDA {{ info.cudaVersion ?? '—' }})</span></dd>
+            }
+            @for (w of info.warnings ?? []; track w) {
+              <dt>Warning</dt><dd>{{ w }}</dd>
+            }
             <dt>Platform</dt><dd>{{ info.platform }}</dd>
           </dl>
         } @else {

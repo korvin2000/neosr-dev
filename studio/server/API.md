@@ -1,12 +1,12 @@
 # NeoSR Studio — backend API (prototype)
 
-Express 5 on port **4310**, JSON everywhere, SSE for run events. The Angular dev server proxies `/api` to it (`proxy.conf.json`). By default the backend is a **simulation**: it compiles recipes with the shared compiler, stores recipes as JSON files and runs a deterministic trainer simulator. With `STUDIO_TRAINER=real` new runs launch the actual `train.py` instead and its output is mapped onto the same event shapes (see [Real trainer](#real-trainer)); the environment, library, dataset scan and validation images stay mocked in both modes.
+Express 5 on port **4310**, JSON everywhere, SSE for run events. The Angular dev server proxies `/api` to it (`proxy.conf.json`). By default the backend is a **simulation**: it compiles recipes with the shared compiler, stores recipes as JSON files and runs a deterministic trainer simulator. With `STUDIO_TRAINER=real` new runs launch the actual `train.py` instead and its output is mapped onto the same event shapes (see [Real trainer](#real-trainer)); `/api/environment` then reports the real machine; the library, dataset scan and validation images stay mocked in both modes.
 
 Shared types: `shared/recipe.model.ts`, `shared/run.model.ts`, `shared/compile/compile.ts` (`compileRecipe`), `shared/compile/problems.ts`, `shared/templates.ts`.
 
 | Method | Path | Body → Response | Notes |
 |---|---|---|---|
-| GET | `/api/environment` | → `EnvironmentInfo` | Mock: platform from `process.platform`, one GPU "NVIDIA GeForce RTX 4090" 24 GB cc 8.9, neosrPath `C:\work2000\neosr-dev`, version from `../pyproject.toml` if readable else `"dev"`, experimentsRoot `<neosrPath>\experiments`, freeDiskGb 812, simulated true |
+| GET | `/api/environment` | → `EnvironmentInfo` | Simulator: a mock (platform from `process.platform`, one GPU "NVIDIA GeForce RTX 4090" 24 GB cc 8.9, neosrPath `C:\work2000\neosr-dev`, version from `../pyproject.toml` if readable else `"dev"`, experimentsRoot `<neosrPath>\experiments`, freeDiskGb 812, simulated true). Real mode: see [Real trainer](#real-trainer), "Environment" |
 | GET | `/api/recipes` | → `RecipeSummary[]` | `{ id, name, updatedAt, templateId?, phases, arch, scale, nodeCount, description }` sorted by updatedAt desc |
 | GET | `/api/recipes/:id` | → `Recipe` | 404 if missing |
 | POST | `/api/recipes` | `Recipe` → `Recipe` | Stores `server/data/recipes/<id>.json`; keeps the client id |
@@ -57,6 +57,7 @@ Seed data: at startup, if no runs exist, create **two finished runs** by fast-fo
 | `NEOSR_ROOT` | the repository holding `studio/` | cwd of `train.py` (relative paths in the TOML resolve there; `experiments/<name>/` lands there) |
 | `NEOSR_PYTHON` | `<NEOSR_ROOT>/.venv/bin/python` (`.venv\Scripts\python.exe` on Windows) | the interpreter |
 
+- **Environment.** `/api/environment` reports `NEOSR_ROOT` (and its `pyproject.toml` version), its default `experiments` folder (a recipe's `path.experiments_root` may differ), the free disk there, `pythonPath`, `torchVersion`, `cudaVersion` and the GPUs, with `simulated: false`. One probe at startup runs `<python> -c <script>` (`server/trainer/environment-probe.ts`; torch is imported only there): `torch.cuda.device_count()`, which honours `CUDA_VISIBLE_DEVICES`, gives the GPU count, and `nvidia-smi` the name, memory, driver and compute capability (no CUDA context on a GPU that may be training; torch's device properties are the fallback, without a driver). The result is cached until the backend restarts. A failed probe (no Python, no torch, a timeout after 120 s, unexpected output) gives null versions, no GPUs and the reason in `warnings`; the backend keeps running.
 - **Launcher.** Use `npm run api:real` (`node --import tsx server/index.ts --real`): `tsx watch` (`npm run api`, `npm start`) SIGKILLs the backend 5 s after a reload or Ctrl-C, so it cannot wait for the trainers to save (see Backend shutdown).
 - **One run, one namespace.** The frozen TOMLs of a real run get `name = "<compiled name>_<run id without run_>"`, and the `[path]` entries that point into an earlier phase of the same run (`resume_state`, `pretrain_network_g/_d`) follow that name (only the `<experiments_root>/<name>/` segment changes); imported paths stay as written. Each run therefore writes and resumes only its own `experiments/<name>_<id>`. `RunDetail.tomls` holds these TOMLs and `phases[].runName` (and the `phase` event's `runName`) the suffixed name, so output paths built from it point at the run's real folders.
 - **Process.** The phase TOMLs are written to `server/data/runs/<id>/<runName>.toml` (git-ignored); each phase runs `<python> train.py -opt <that file>` in `NEOSR_ROOT`, one after another (the next starts, with status `starting`, when the previous exits 0 after `End of training`). stdout and stderr (the trainer logs to stderr) are split into lines (`\n`, `\r\n`, tqdm's `\r`) and parsed by `server/trainer/log-parser.ts`, a pure module tested against a recorded run (`server/trainer/fixtures/p0_pretrain.log`).
@@ -86,7 +87,7 @@ Log line → event (the clock is the trainer's update, mapped to the curriculum 
 
 Not in the trainer's console output, so absent from real runs: `system` events (GPU utilisation, VRAM), validation images and per-image metrics, `lr/d`, the current update on validation lines (taken from the last progress line), checkpoint sizes before the first save and for `net_g_best_*`.
 
-Open points of the experimental adapter: Windows has no graceful stop (Node cannot send it SIGINT) and cannot verify an orphan's pid; `num_gpu > 1` is refused instead of launched with `torchrun`; `/api/environment`, the library, the dataset scan and validation images stay mocked; nothing ran yet against the real `train.py` (only a fake process and recorded output).
+Open points of the experimental adapter: Windows has no graceful stop (Node cannot send it SIGINT) and cannot verify an orphan's pid; `num_gpu > 1` is refused instead of launched with `torchrun`; the library, the dataset scan and validation images stay mocked; nothing ran yet against the real `train.py` (only a fake process and recorded output).
 
 ## Procedural validation images
 

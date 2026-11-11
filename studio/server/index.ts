@@ -3,7 +3,7 @@ import express, { type ErrorRequestHandler, type RequestHandler } from 'express'
 import { NEOSR_PYTHON, NEOSR_ROOT, PORT, TRAINER_MODE } from './config';
 import { HttpError, isRecord } from './http';
 import { compileRouter } from './routes/compile';
-import { environmentRouter } from './routes/environment';
+import { environmentRouter, startEnvironmentProbe } from './routes/environment';
 import { libraryRouter } from './routes/library';
 import { recipesRouter } from './routes/recipes';
 import { runsRouter } from './routes/runs';
@@ -71,6 +71,7 @@ function main(): void {
   recipeStore.load();
   runStore.load();
   runStore.seedIfEmpty();
+  startEnvironmentProbe();
   const server = createApp().listen(PORT, () => {
     const mode = TRAINER_MODE === 'real' ? `real trainer: ${NEOSR_PYTHON} train.py in ${NEOSR_ROOT}` : 'simulated';
     console.log(`[api] NeoSR Studio backend (${mode}) listening on http://localhost:${PORT}`);

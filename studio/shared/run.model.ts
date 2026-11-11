@@ -123,8 +123,9 @@ export const METRIC_INFO: Record<string, MetricInfo> = {
 export interface GpuInfo {
   readonly name: string;
   readonly vramGb: number;
-  readonly computeCapability: string;
-  readonly driver: string;
+  /** Null when the probe of the real environment could not tell. */
+  readonly computeCapability: string | null;
+  readonly driver: string | null;
 }
 
 export interface EnvironmentInfo {
@@ -133,6 +134,12 @@ export interface EnvironmentInfo {
   readonly neosrVersion: string;
   readonly experimentsRoot: string;
   readonly gpus: readonly GpuInfo[];
-  readonly freeDiskGb: number;
+  readonly freeDiskGb: number | null;
   readonly simulated: boolean;
+  /** Real trainer mode only: the probed Python and its torch / CUDA build (null when the probe failed). */
+  readonly pythonPath?: string;
+  readonly torchVersion?: string | null;
+  readonly cudaVersion?: string | null;
+  /** Why a field is null or empty, e.g. a failed probe. */
+  readonly warnings?: readonly string[];
 }
