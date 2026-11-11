@@ -15,7 +15,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 CFG=$(realpath "$CFG") RUNS=$(realpath -m "$RUNS") QUEUE=$(realpath "$QUEUE")
 REPO=$(realpath "${REPO:-$HERE/../..}")
 PY=${PY:-$REPO/.venv/bin/python}
-[[ $PY == */* ]] && PY=$(realpath "$PY")
+[[ $PY == */* ]] && PY=$(realpath -s "$PY")  # -s: a venv python is a symlink; resolving it leaves the venv
 PAIR_MIN=${PAIR_MIN:-29}
 SINGLE_MIN=${SINGLE_MIN:-18}
 MARGIN_MIN=${MARGIN_MIN:-3}
