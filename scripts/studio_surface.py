@@ -1,6 +1,7 @@
 """The trainer's configuration surface as JSON: the contract NeoSR Studio's catalog is tested against.
 
-Reads the registries through their own source scan and the remaining tables statically (ast);
+Reads the registries through their own source scan and the remaining tables statically (ast),
+the arch constructor signatures included (`arch_params`);
 `neosr/config.py` and `neosr/utils/registry.py` are loaded by path (both are torch-free), so it runs
 on any Python >= 3.12 without torch, CUDA or the project environment.
 
@@ -80,6 +81,122 @@ def _gan_types() -> list[str]:
     raise LookupError(msg)
 
 
+NONLITERAL = object()
+
+
+def _default(node: ast.expr) -> Any:
+    try:
+        return ast.literal_eval(node)
+    except ValueError:
+        return NONLITERAL
+
+
+def _jsonable(value: Any) -> Any:
+    return [_jsonable(v) for v in value] if isinstance(value, tuple | list) else value
+
+
+class Signature:
+    """Constructor parameters: name -> literal default (`NONLITERAL`, or `REQUIRED` without one)."""
+
+    REQUIRED = object()
+
+    def __init__(self, args: ast.arguments, *, skip_self: bool = False) -> None:
+        if args.vararg is not None or args.posonlyargs:
+            msg = "positional-only or *args parameters cannot be configured from TOML"
+            raise TypeError(msg)
+        positional = args.args[1:] if skip_self else args.args
+        defaults = [None] * (len(positional) - len(args.defaults)) + list(args.defaults)
+        pairs = [
+            *zip(positional, defaults, strict=True),
+            *zip(args.kwonlyargs, args.kw_defaults, strict=True),
+        ]
+        self.params: dict[str, Any] = {
+            a.arg: self.REQUIRED if d is None else _default(d) for a, d in pairs
+        }
+        self.fixed: set[str] = set()  # bound by a preset: passing it raises TypeError
+        self.var_kwargs = args.kwarg is not None
+
+    def as_json(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "params": {
+                k: None if v is NONLITERAL or v is self.REQUIRED else _jsonable(v)
+                for k, v in self.params.items()
+            }
+        }
+        lists = {
+            "required": [k for k, v in self.params.items() if v is self.REQUIRED],
+            "nonliteral": [k for k, v in self.params.items() if v is NONLITERAL],
+            "fixed": sorted(self.fixed),
+        }
+        out |= {key: names for key, names in lists.items() if names}
+        if self.var_kwargs:
+            out["var_kwargs"] = True
+        return out
+
+
+def _signature(defs: dict[str, ast.stmt], name: str, rel: str) -> Signature:
+    """A class's `__init__`; a preset `def p(**kwargs): return base(k=v, ..., **kwargs)` resolves
+    to the base's parameters with the literal keywords as fixed defaults (its own parameters stay
+    open)."""
+    node = defs.get(name)
+    if isinstance(node, ast.ClassDef):
+        init = next(
+            (
+                b
+                for b in node.body
+                if isinstance(b, ast.FunctionDef) and b.name == "__init__"
+            ),
+            None,
+        )
+        if init is None:
+            msg = f"{rel}: {name} has no __init__ of its own"
+            raise LookupError(msg)
+        return Signature(init.args, skip_self=True)
+    if not isinstance(node, ast.FunctionDef):
+        msg = f"{rel}: {name} is not a module-level class or def"
+        raise TypeError(msg)
+    own = Signature(node.args)
+    body = [
+        b
+        for b in node.body
+        if not (isinstance(b, ast.Expr) and isinstance(b.value, ast.Constant))
+    ]
+    call = body[0].value if len(body) == 1 and isinstance(body[0], ast.Return) else None
+    if not (
+        own.var_kwargs
+        and isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and not call.args
+        and any(k.arg is None for k in call.keywords)
+    ):
+        return own  # not a preset: its own parameters are the surface
+    sig = _signature(defs, call.func.id, rel)
+    for kw in call.keywords:
+        if kw.arg is None:
+            continue
+        if isinstance(kw.value, ast.Name) and kw.value.id in own.params:
+            sig.params[kw.arg] = own.params[kw.value.id]  # forwarded: stays open
+        else:
+            sig.params[kw.arg] = _default(kw.value)
+            sig.fixed.add(kw.arg)
+    return sig
+
+
+def _arch_params(archs: Any) -> dict[str, Any]:
+    trees: dict[str, dict[str, ast.stmt]] = {}
+    out = {}
+    for name, row in sorted(archs.items()):
+        rel = f"neosr/archs/{row.module}.py"
+        if rel not in trees:
+            trees[rel] = {
+                n.name: n
+                for n in _tree(rel).body
+                if isinstance(n, ast.ClassDef | ast.FunctionDef)
+            }
+        out[name] = _signature(trees[rel], name, rel).as_json()
+    return out
+
+
 def _types(expected: Any) -> str | list[str]:
     if isinstance(expected, tuple):
         return [TYPE_NAMES.get(t, t.__name__) for t in expected]
@@ -94,6 +211,7 @@ def build() -> dict[str, Any]:
         "generators": sorted(archs.keys() - scale_free),
         "discriminators": sorted(scale_free - INTERNAL_ARCHS),
         "scale_kwarg": {k: row.scale for k, row in sorted(archs.items()) if row.scale},
+        "arch_params": _arch_params(archs),
         "losses": sorted(reg.LOSS_REGISTRY),
         "loss_schedule_keys": list(
             ast.literal_eval(_assigned("neosr/losses/__init__.py", "SCHEDULE_KEYS"))

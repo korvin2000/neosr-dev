@@ -1,15 +1,18 @@
 """The Studio contract: studio/shared/catalog/neosr-surface.json mirrors the trainer's tables.
 
-A failure means a registry or table changed (the five registries, OPTIMIZERS, SCHEDULERS, config.SCHEMA, the
-gan types or convert.py's export tables): run `python scripts/studio_surface.py`, commit the JSON and
+A failure means a registry or table changed (the five registries, an arch constructor, OPTIMIZERS, SCHEDULERS,
+config.SCHEMA, the gan types or convert.py's export tables): run `python scripts/studio_surface.py`, commit the JSON and
 update the Studio catalog its own contract test (`studio/src/app/core/catalog-contract.spec.ts`) names.
 """
 
 import importlib.util
+import inspect
 import json
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from neosr.models.base import OPTIMIZERS, SCHEDULERS
 from neosr.utils.registry import ARCH_REGISTRY, LOSS_REGISTRY, METRIC_REGISTRY
@@ -54,3 +57,31 @@ def test_shipped_templates_pass_the_validator(capsys):
     templates = sorted(str(p) for p in (ROOT / "options").glob("train_*.toml"))
     assert templates
     assert surface.validate(templates) == 0, capsys.readouterr().out
+
+
+def _jsonable(value):
+    return [_jsonable(v) for v in value] if isinstance(value, tuple | list) else value
+
+
+def test_arch_signatures_match_the_imported_constructors():
+    """The ast read of each arch constructor (`arch_params`) against inspect on the real object;
+    a preset's fixed keys raise TypeError (bound twice) before anything is built."""
+    built = surface.build()["arch_params"]
+    assert set(built) == set(ARCH_REGISTRY)
+    for name in ARCH_REGISTRY:
+        sig, obj = built[name], ARCH_REGISTRY.load(name)
+        params = inspect.signature(obj).parameters
+        if inspect.isclass(obj):
+            named = {k: p for k, p in params.items() if p.kind is not p.VAR_KEYWORD}
+            assert list(sig["params"]) == list(named), name
+            assert sig.get("var_kwargs", False) == any(
+                p.kind is p.VAR_KEYWORD for p in params.values()
+            ), name
+            for key, p in named.items():
+                if key in sig.get("required", ()):
+                    assert p.default is p.empty, (name, key)
+                elif key not in sig.get("nonliteral", ()):
+                    assert sig["params"][key] == _jsonable(p.default), (name, key)
+        for key in sig.get("fixed", ()):
+            with pytest.raises(TypeError, match="multiple values"):
+                obj(**{key: None})

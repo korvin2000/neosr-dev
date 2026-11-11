@@ -17,21 +17,21 @@ import { parseScalar } from '../field-widget';
     }
     <div class="grid">
       @for (p of params(); track p.key) {
-        <label class="param" [class.param--set]="isSet(p.key)" [attr.title]="p.help ?? ''">
+        <label class="param" [class.param--set]="isSet(p.key)" [attr.title]="p.fixed ? 'Set by this preset: the trainer rejects another value' : (p.help ?? '')">
           <span class="param__k mono">{{ p.key }}</span>
           @if (p.options?.length) {
-            <select class="select" [value]="shown(p)" (change)="set(p, $any($event.target).value)">
+            <select class="select" [value]="shown(p)" [disabled]="!!p.fixed" (change)="set(p, $any($event.target).value)">
               @for (o of p.options; track o) {
                 <option [value]="o" [selected]="o === shown(p)">{{ o }}</option>
               }
             </select>
           } @else if (p.type === 'bool') {
-            <select class="select" [value]="shown(p)" (change)="set(p, $any($event.target).value)">
+            <select class="select" [value]="shown(p)" [disabled]="!!p.fixed" (change)="set(p, $any($event.target).value)">
               <option value="true" [selected]="shown(p) === 'true'">true</option>
               <option value="false" [selected]="shown(p) === 'false'">false</option>
             </select>
           } @else {
-            <input class="input mono" type="text" [value]="shown(p)" [placeholder]="'' + (p.default ?? '')" (change)="set(p, $any($event.target).value)" />
+            <input class="input mono" type="text" [value]="shown(p)" [disabled]="!!p.fixed" [placeholder]="'' + (p.default ?? '')" (change)="set(p, $any($event.target).value)" />
           }
           @if (isSet(p.key)) {
             <button type="button" class="reset" (click)="reset(p.key)" title="Reset to default"><app-icon name="undo" [size]="11" /></button>

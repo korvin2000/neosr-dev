@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'smol-toml';
 import surface from '@shared/catalog/neosr-surface.json';
 import { ARCHS } from '@shared/catalog/archs';
+import type { ParamInfo } from '@shared/catalog/data-types';
 import { DISCRIMINATORS } from '@shared/catalog/discriminators';
 import { LOSS_SCHEDULE_PARAMS, LOSSES } from '@shared/catalog/losses';
 import { METRIC_TYPES } from '@shared/catalog/metrics';
@@ -31,6 +32,46 @@ function expectSameSet(what: string, catalog: readonly string[], trainer: readon
 }
 
 const schema: Readonly<Record<string, Readonly<Record<string, unknown>>>> = surface.schema;
+
+/** A constructor read by `ast`: literal defaults (null when `nonliteral`, `required` or None), `fixed` = bound by a preset. */
+interface ArchSignature {
+  readonly params: Readonly<Record<string, unknown>>;
+  readonly fixed?: readonly string[];
+  readonly nonliteral?: readonly string[];
+  readonly required?: readonly string[];
+  readonly var_kwargs?: boolean;
+}
+const archSignatures: Readonly<Record<string, ArchSignature>> = surface.arch_params;
+
+/** What a catalog entry's parameters (and window size) get wrong about the constructor. */
+function signatureProblems(type: string, params: readonly ParamInfo[], windowSize?: number): string[] {
+  const sig = archSignatures[type];
+  if (!sig) {
+    return [`${type}: no constructor in the surface`];
+  }
+  const literal = (key: string) => key in sig.params && !sig.nonliteral?.includes(key) && !sig.required?.includes(key);
+  const bad: string[] = [];
+  for (const p of params) {
+    if (!(p.key in sig.params)) {
+      if (!sig.var_kwargs) {
+        bad.push(`${type}.${p.key}: not a constructor parameter`);
+      }
+    } else {
+      const fixed = sig.fixed?.includes(p.key) ?? false;
+      if (fixed !== (p.fixed === true)) {
+        bad.push(`${type}.${p.key}: ${fixed ? 'bound by the preset (a value raises TypeError) but not marked fixed' : 'marked fixed, but the constructor takes it'}`);
+      }
+      if (literal(p.key) && JSON.stringify(p.default) !== JSON.stringify(sig.params[p.key])) {
+        bad.push(`${type}.${p.key}: default ${JSON.stringify(p.default)}, constructor ${JSON.stringify(sig.params[p.key])}`);
+      }
+    }
+  }
+  // a None default is computed in the constructor (grformer): nothing literal to compare
+  if (windowSize !== undefined && literal('window_size') && typeof sig.params['window_size'] === 'number' && sig.params['window_size'] !== windowSize) {
+    bad.push(`${type}: windowSize ${windowSize}, constructor window_size ${JSON.stringify(sig.params['window_size'])}`);
+  }
+  return bad;
+}
 const opaque = surface.opaque.map((p) => new RegExp(`^${p.replace(/[.]/g, '\\.').replace(/\*/g, '.*')}$`));
 
 /** Dotted TOML paths under schema-validated sections that the trainer does not know. */
@@ -103,6 +144,22 @@ describe('catalog contract with the trainer (neosr-surface.json)', () => {
     for (const m of METRIC_TYPES) {
       const catalog = Object.fromEntries(m.params.filter((p) => p.options).map((p) => [p.key, [...(p.options ?? [])]]));
       expect(catalog, `${m.type} keyword choices`).toEqual(choices[m.type] ?? {});
+    }
+  });
+
+  it('lists constructor parameters with their defaults, and window sizes, as the trainer has them', () => {
+    const bad = [...ARCHS.flatMap((a) => signatureProblems(a.type, a.params, a.windowSize)), ...DISCRIMINATORS.flatMap((d) => signatureProblems(d.type, d.params))];
+    expect(bad, 'catalog params vs the constructors (surface.arch_params)').toEqual([]);
+    for (const info of TEMPLATE_INFOS) {
+      for (const phase of compileRecipe(buildTemplate(info.id)).phases) {
+        const doc = parse(phase.text);
+        for (const section of ['network_g', 'network_d']) {
+          const { type, ...kwargs } = (doc[section] ?? {}) as Record<string, unknown>;
+          const sig = archSignatures[String(type)];
+          const rejected = Object.keys(kwargs).filter((k) => sig?.fixed?.includes(k) || (sig && !(k in sig.params) && !sig.var_kwargs));
+          expect(rejected, `${phase.fileName} [${section}]: keys the constructor rejects`).toEqual([]);
+        }
+      }
     }
   });
 

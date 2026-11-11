@@ -204,6 +204,2947 @@
     "swinir_small": "upscale",
     "swinirdense": "upscale"
   },
+  "arch_params": {
+    "VGGFeatureExtractor": {
+      "params": {
+        "layer_name_list": null,
+        "vgg_type": "vgg19",
+        "use_input_norm": true,
+        "range_norm": false,
+        "requires_grad": false,
+        "remove_pooling": false,
+        "pooling_stride": 2
+      },
+      "required": [
+        "layer_name_list"
+      ]
+    },
+    "aether": {
+      "params": {
+        "in_chans": 3,
+        "embed_dim": 96,
+        "depths": [
+          4,
+          4,
+          4,
+          4
+        ],
+        "mlp_ratio": 2.0,
+        "drop": 0.0,
+        "drop_path_rate": 0.1,
+        "lk_kernel": 11,
+        "sk_kernel": 3,
+        "scale": 4,
+        "img_range": 1.0,
+        "fused_init": false,
+        "quantize_residual": true,
+        "use_channel_attn": true,
+        "use_spatial_attn": true
+      }
+    },
+    "aether_large": {
+      "params": {
+        "in_chans": 3,
+        "embed_dim": 180,
+        "depths": [
+          8,
+          8,
+          8,
+          8,
+          8
+        ],
+        "mlp_ratio": 2.0,
+        "drop": 0.0,
+        "drop_path_rate": 0.1,
+        "lk_kernel": 11,
+        "sk_kernel": 3,
+        "scale": 4,
+        "img_range": 1.0,
+        "fused_init": false,
+        "quantize_residual": true,
+        "use_channel_attn": true,
+        "use_spatial_attn": true
+      },
+      "fixed": [
+        "depths",
+        "embed_dim",
+        "use_channel_attn",
+        "use_spatial_attn"
+      ]
+    },
+    "aether_medium": {
+      "params": {
+        "in_chans": 3,
+        "embed_dim": 128,
+        "depths": [
+          6,
+          6,
+          6,
+          6
+        ],
+        "mlp_ratio": 2.0,
+        "drop": 0.0,
+        "drop_path_rate": 0.1,
+        "lk_kernel": 11,
+        "sk_kernel": 3,
+        "scale": 4,
+        "img_range": 1.0,
+        "fused_init": false,
+        "quantize_residual": true,
+        "use_channel_attn": true,
+        "use_spatial_attn": true
+      },
+      "fixed": [
+        "depths",
+        "embed_dim",
+        "use_channel_attn",
+        "use_spatial_attn"
+      ]
+    },
+    "aether_small": {
+      "params": {
+        "in_chans": 3,
+        "embed_dim": 96,
+        "depths": [
+          4,
+          4,
+          4,
+          4
+        ],
+        "mlp_ratio": 2.0,
+        "drop": 0.0,
+        "drop_path_rate": 0.1,
+        "lk_kernel": 11,
+        "sk_kernel": 3,
+        "scale": 4,
+        "img_range": 1.0,
+        "fused_init": false,
+        "quantize_residual": true,
+        "use_channel_attn": false,
+        "use_spatial_attn": false
+      },
+      "fixed": [
+        "depths",
+        "embed_dim",
+        "use_channel_attn",
+        "use_spatial_attn"
+      ]
+    },
+    "asid": {
+      "params": {
+        "num_in_ch": 3,
+        "num_out_ch": 3,
+        "num_feat": 48,
+        "res_num": 3,
+        "block_num": 1,
+        "window_size": 8,
+        "scale": 4,
+        "flash_attn": true,
+        "d8": false,
+        "pe": false,
+        "bias": true,
+        "drop": 0.0
+      }
+    },
+    "asid_d8": {
+      "params": {
+        "num_in_ch": 3,
+        "num_out_ch": 3,
+        "num_feat": 48,
+        "res_num": 8,
+        "block_num": 1,
+        "window_size": 8,
+        "scale": 4,
+        "flash_attn": true,
+        "d8": true,
+        "pe": false,
+        "bias": true,
+        "drop": 0.0
+      },
+      "fixed": [
+        "d8",
+        "res_num"
+      ]
+    },
+    "atd": {
+      "params": {
+        "img_size": 96,
+        "patch_size": 1,
+        "in_chans": 3,
+        "embed_dim": 210,
+        "depths": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "window_size": 16,
+        "category_size": 256,
+        "num_tokens": 128,
+        "reducted_dim": 20,
+        "convffn_kernel_size": 5,
+        "mlp_ratio": 2.0,
+        "qkv_bias": true,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffle",
+        "resi_connection": "1conv",
+        "norm": false,
+        "flash_attn": true,
+        "use_checkpoint": false
+      },
+      "nonliteral": [
+        "norm_layer"
+      ]
+    },
+    "atd_light": {
+      "params": {
+        "img_size": 64,
+        "patch_size": 1,
+        "in_chans": 3,
+        "embed_dim": 48,
+        "depths": [
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          4,
+          4,
+          4,
+          4
+        ],
+        "window_size": 16,
+        "category_size": 128,
+        "num_tokens": 64,
+        "reducted_dim": 8,
+        "convffn_kernel_size": 7,
+        "mlp_ratio": 1.0,
+        "qkv_bias": true,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffledirect",
+        "resi_connection": "1conv",
+        "norm": false,
+        "flash_attn": true,
+        "use_checkpoint": false
+      },
+      "nonliteral": [
+        "norm_layer"
+      ],
+      "fixed": [
+        "category_size",
+        "convffn_kernel_size",
+        "depths",
+        "embed_dim",
+        "img_size",
+        "mlp_ratio",
+        "num_heads",
+        "num_tokens",
+        "reducted_dim",
+        "upsampler"
+      ]
+    },
+    "catanet": {
+      "params": {
+        "in_chans": 3,
+        "dim": 40,
+        "block_num": 8,
+        "qk_dim": 36,
+        "mlp_dim": 96,
+        "heads": 4,
+        "patch_size": null,
+        "n_iters": null,
+        "num_tokens": null,
+        "group_size": null,
+        "upscale": 4
+      }
+    },
+    "cfsr": {
+      "params": {
+        "in_chans": 3,
+        "embed_dim": 48,
+        "depths": [
+          6,
+          6
+        ],
+        "dw_size": 9,
+        "mlp_ratio": 2.0,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffledirect",
+        "mean_norm": false
+      }
+    },
+    "compact": {
+      "params": {
+        "num_in_ch": 3,
+        "num_out_ch": 3,
+        "num_feat": 64,
+        "num_conv": 16,
+        "upscale": 4,
+        "act_type": "prelu"
+      }
+    },
+    "craft": {
+      "params": {
+        "in_chans": 3,
+        "img_size": 64,
+        "window_size": 16,
+        "embed_dim": 48,
+        "depths": [
+          2,
+          2,
+          2,
+          2
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6
+        ],
+        "split_size_0": 4,
+        "split_size_1": 16,
+        "mlp_ratio": 2.0,
+        "flash_attn": true,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "norm_layer": null,
+        "upscale": 4,
+        "img_range": 1.0,
+        "resi_connection": "1conv",
+        "pad_extra_window": true
+      },
+      "nonliteral": [
+        "norm_layer"
+      ]
+    },
+    "cugan": {
+      "params": {
+        "in_channels": 3,
+        "out_channels": 3,
+        "scale": 4,
+        "pro": true
+      }
+    },
+    "dat_2": {
+      "params": {
+        "img_size": 64,
+        "in_chans": 3,
+        "embed_dim": 180,
+        "split_size": [
+          8,
+          32
+        ],
+        "depth": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "expansion_factor": 2,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "act_layer": null,
+        "norm_layer": null,
+        "use_chk": false,
+        "upscale": 4,
+        "img_range": 1.0,
+        "resi_connection": "1conv",
+        "upsampler": "pixelshuffle",
+        "flash_attn": true
+      },
+      "nonliteral": [
+        "act_layer",
+        "norm_layer"
+      ],
+      "fixed": [
+        "depth",
+        "embed_dim",
+        "expansion_factor",
+        "img_range",
+        "in_chans",
+        "num_heads",
+        "resi_connection",
+        "split_size"
+      ]
+    },
+    "dat_m": {
+      "params": {
+        "img_size": 64,
+        "in_chans": 3,
+        "embed_dim": 180,
+        "split_size": [
+          8,
+          32
+        ],
+        "depth": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "expansion_factor": 4,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "act_layer": null,
+        "norm_layer": null,
+        "use_chk": false,
+        "upscale": 4,
+        "img_range": 1.0,
+        "resi_connection": "1conv",
+        "upsampler": "pixelshuffle",
+        "flash_attn": true
+      },
+      "nonliteral": [
+        "act_layer",
+        "norm_layer"
+      ],
+      "fixed": [
+        "depth",
+        "embed_dim",
+        "expansion_factor",
+        "img_range",
+        "in_chans",
+        "num_heads",
+        "resi_connection",
+        "split_size"
+      ]
+    },
+    "dat_s": {
+      "params": {
+        "img_size": 64,
+        "in_chans": 3,
+        "embed_dim": 180,
+        "split_size": [
+          8,
+          16
+        ],
+        "depth": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "expansion_factor": 2,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "act_layer": null,
+        "norm_layer": null,
+        "use_chk": false,
+        "upscale": 4,
+        "img_range": 1.0,
+        "resi_connection": "1conv",
+        "upsampler": "pixelshuffle",
+        "flash_attn": true
+      },
+      "nonliteral": [
+        "act_layer",
+        "norm_layer"
+      ],
+      "fixed": [
+        "depth",
+        "embed_dim",
+        "expansion_factor",
+        "img_range",
+        "in_chans",
+        "num_heads",
+        "resi_connection",
+        "split_size"
+      ]
+    },
+    "dct": {
+      "params": {
+        "img_size": 64,
+        "in_chans": 3,
+        "embed_dim": 80,
+        "split_size": null,
+        "depth": [
+          20
+        ],
+        "num_heads": [
+          8
+        ],
+        "expansion_factor": 4.0,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "act_layer": null,
+        "norm_layer": null,
+        "upscale": 4,
+        "img_range": 1.0,
+        "resi_connection": "3conv",
+        "upsampler": "pixelshuffledirect"
+      },
+      "nonliteral": [
+        "act_layer",
+        "norm_layer"
+      ]
+    },
+    "dctlsa": {
+      "params": {
+        "in_nc": 3,
+        "nf": 55,
+        "num_modules": 6,
+        "out_nc": 3,
+        "upscale": 4,
+        "num_head": 5
+      }
+    },
+    "desrgan": {
+      "params": {
+        "num_in_ch": 3,
+        "num_out_ch": 3,
+        "scale": 4,
+        "num_feat": 64,
+        "num_block": 23,
+        "num_grow_ch": 32
+      }
+    },
+    "ditn": {
+      "params": {
+        "inp_channels": 3,
+        "dim": 60,
+        "ITL_blocks": 4,
+        "SAL_blocks": 4,
+        "UFONE_blocks": 1,
+        "ffn_expansion_factor": 2,
+        "bias": false,
+        "LayerNorm_type": "WithBias",
+        "patch_size": 8,
+        "upscale": 4
+      }
+    },
+    "drct": {
+      "params": {
+        "img_size": 64,
+        "patch_size": 1,
+        "in_chans": 3,
+        "embed_dim": 180,
+        "depths": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "window_size": 16,
+        "compress_ratio": 3,
+        "squeeze_factor": 30,
+        "conv_scale": 0.01,
+        "overlap_ratio": 0.5,
+        "mlp_ratio": 2,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffle",
+        "resi_connection": "1conv",
+        "gc": 32,
+        "use_checkpoint": false,
+        "flash_attn": true
+      },
+      "nonliteral": [
+        "norm_layer"
+      ]
+    },
+    "drct_l": {
+      "params": {
+        "img_size": 64,
+        "patch_size": 1,
+        "in_chans": 3,
+        "embed_dim": 180,
+        "depths": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "window_size": 16,
+        "compress_ratio": 3,
+        "squeeze_factor": 30,
+        "conv_scale": 0.01,
+        "overlap_ratio": 0.5,
+        "mlp_ratio": 2,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffle",
+        "resi_connection": "1conv",
+        "gc": 32,
+        "use_checkpoint": false,
+        "flash_attn": true
+      },
+      "nonliteral": [
+        "norm_layer"
+      ],
+      "fixed": [
+        "depths",
+        "num_heads"
+      ]
+    },
+    "drct_s": {
+      "params": {
+        "img_size": 64,
+        "patch_size": 1,
+        "in_chans": 3,
+        "embed_dim": 48,
+        "depths": [
+          2,
+          2,
+          2,
+          2
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6
+        ],
+        "window_size": 16,
+        "compress_ratio": 3,
+        "squeeze_factor": 30,
+        "conv_scale": 0.01,
+        "overlap_ratio": 0.5,
+        "mlp_ratio": 2,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffle",
+        "resi_connection": "1conv",
+        "gc": 32,
+        "use_checkpoint": false,
+        "flash_attn": true
+      },
+      "nonliteral": [
+        "norm_layer"
+      ],
+      "fixed": [
+        "depths",
+        "embed_dim",
+        "num_heads"
+      ]
+    },
+    "drct_xl": {
+      "params": {
+        "img_size": 64,
+        "patch_size": 1,
+        "in_chans": 3,
+        "embed_dim": 180,
+        "depths": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "window_size": 16,
+        "compress_ratio": 3,
+        "squeeze_factor": 30,
+        "conv_scale": 0.01,
+        "overlap_ratio": 0.5,
+        "mlp_ratio": 2,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffle",
+        "resi_connection": "1conv",
+        "gc": 32,
+        "use_checkpoint": false,
+        "flash_attn": true
+      },
+      "nonliteral": [
+        "norm_layer"
+      ],
+      "fixed": [
+        "depths",
+        "num_heads"
+      ]
+    },
+    "dunet": {
+      "params": {
+        "in_ch": 3,
+        "dim": 64
+      }
+    },
+    "ea2fpn": {
+      "params": {
+        "class_num": 6,
+        "encoder_channels": [
+          512,
+          256,
+          128,
+          64
+        ],
+        "pyramid_channels": 64,
+        "segmentation_channels": 64,
+        "dropout": 0.0
+      }
+    },
+    "eimn": {
+      "params": {
+        "embed_dims": 64,
+        "scale": 4,
+        "depths": 1,
+        "mlp_ratios": 2.66,
+        "drop_rate": 0.0,
+        "drop_path_rate": 0.0,
+        "num_stages": 16,
+        "freeze_param": false,
+        "norm": null
+      },
+      "nonliteral": [
+        "norm"
+      ]
+    },
+    "eimn_a": {
+      "params": {
+        "embed_dims": 64,
+        "scale": 4,
+        "depths": 1,
+        "mlp_ratios": 2.66,
+        "drop_rate": 0.0,
+        "drop_path_rate": 0.0,
+        "num_stages": 14,
+        "freeze_param": false,
+        "norm": null
+      },
+      "nonliteral": [
+        "norm"
+      ],
+      "fixed": [
+        "embed_dims",
+        "num_stages"
+      ]
+    },
+    "eimn_l": {
+      "params": {
+        "embed_dims": 64,
+        "scale": 4,
+        "depths": 1,
+        "mlp_ratios": 2.66,
+        "drop_rate": 0.0,
+        "drop_path_rate": 0.0,
+        "num_stages": 16,
+        "freeze_param": false,
+        "norm": null
+      },
+      "nonliteral": [
+        "norm"
+      ],
+      "fixed": [
+        "embed_dims",
+        "num_stages"
+      ]
+    },
+    "esc": {
+      "params": {
+        "dim": 64,
+        "pdim": 16,
+        "kernel_size": 13,
+        "n_blocks": 5,
+        "conv_blocks": 5,
+        "window_size": 32,
+        "num_heads": 4,
+        "upscaling_factor": 4,
+        "exp_ratio": 1.25,
+        "attn_type": "sdpa",
+        "is_fp": false,
+        "use_dysample": true,
+        "realsr": true
+      }
+    },
+    "esc_fp": {
+      "params": {
+        "dim": 48,
+        "pdim": 16,
+        "kernel_size": 13,
+        "n_blocks": 5,
+        "conv_blocks": 5,
+        "window_size": 32,
+        "num_heads": 3,
+        "upscaling_factor": 4,
+        "exp_ratio": 1.25,
+        "attn_type": "sdpa",
+        "is_fp": true,
+        "use_dysample": false,
+        "realsr": false
+      },
+      "fixed": [
+        "dim",
+        "is_fp",
+        "num_heads",
+        "realsr"
+      ]
+    },
+    "esc_large": {
+      "params": {
+        "dim": 64,
+        "pdim": 16,
+        "kernel_size": 13,
+        "n_blocks": 10,
+        "conv_blocks": 5,
+        "window_size": 32,
+        "num_heads": 4,
+        "upscaling_factor": 4,
+        "exp_ratio": 2.0,
+        "attn_type": "sdpa",
+        "is_fp": false,
+        "use_dysample": true,
+        "realsr": true
+      },
+      "fixed": [
+        "exp_ratio",
+        "n_blocks"
+      ]
+    },
+    "esc_light": {
+      "params": {
+        "dim": 64,
+        "pdim": 16,
+        "kernel_size": 13,
+        "n_blocks": 3,
+        "conv_blocks": 5,
+        "window_size": 32,
+        "num_heads": 4,
+        "upscaling_factor": 4,
+        "exp_ratio": 1.25,
+        "attn_type": "sdpa",
+        "is_fp": false,
+        "use_dysample": true,
+        "realsr": true
+      },
+      "fixed": [
+        "n_blocks"
+      ]
+    },
+    "esrgan": {
+      "params": {
+        "num_in_ch": 3,
+        "num_out_ch": 3,
+        "scale": 4,
+        "num_feat": 64,
+        "num_block": 23,
+        "num_grow_ch": 32
+      }
+    },
+    "flexnet": {
+      "params": {
+        "inp_channels": 3,
+        "out_channels": 3,
+        "scale": 4,
+        "dim": 64,
+        "num_blocks": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "window_size": 8,
+        "hidden_rate": 4,
+        "channel_norm": false,
+        "attn_drop": 0.0,
+        "proj_drop": 0.0,
+        "pipeline_type": "linear",
+        "upsampler": "ps",
+        "flash_attn": true
+      }
+    },
+    "grformer": {
+      "params": {
+        "img_size": 64,
+        "in_chans": 3,
+        "embed_dim": 60,
+        "depths": [
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          3,
+          3,
+          3,
+          3
+        ],
+        "window_size": null,
+        "mlp_ratio": 2,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "upscale": 4,
+        "img_range": 1.0
+      },
+      "nonliteral": [
+        "norm_layer"
+      ]
+    },
+    "grformer_large": {
+      "params": {
+        "img_size": 64,
+        "in_chans": 3,
+        "embed_dim": 180,
+        "depths": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "window_size": null,
+        "mlp_ratio": 2,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "upscale": 4,
+        "img_range": 1.0
+      },
+      "nonliteral": [
+        "norm_layer"
+      ],
+      "fixed": [
+        "depths",
+        "embed_dim",
+        "img_size",
+        "num_heads"
+      ]
+    },
+    "grformer_medium": {
+      "params": {
+        "img_size": 64,
+        "in_chans": 3,
+        "embed_dim": 180,
+        "depths": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "window_size": null,
+        "mlp_ratio": 2,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "upscale": 4,
+        "img_range": 1.0
+      },
+      "nonliteral": [
+        "norm_layer"
+      ],
+      "fixed": [
+        "depths",
+        "embed_dim",
+        "img_size",
+        "num_heads"
+      ]
+    },
+    "hasn": {
+      "params": {
+        "in_channels": 3,
+        "out_channels": 3,
+        "feature_channels": 52,
+        "upscale": 4
+      }
+    },
+    "hat_l": {
+      "params": {
+        "img_size": 64,
+        "patch_size": 1,
+        "in_chans": 3,
+        "embed_dim": 180,
+        "depths": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "window_size": 16,
+        "compress_ratio": 3,
+        "squeeze_factor": 30,
+        "conv_scale": 0.01,
+        "overlap_ratio": 0.5,
+        "mlp_ratio": 2,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffle",
+        "resi_connection": "1conv",
+        "use_checkpoint": false,
+        "flash_attn": true
+      },
+      "nonliteral": [
+        "norm_layer"
+      ],
+      "fixed": [
+        "compress_ratio",
+        "conv_scale",
+        "depths",
+        "embed_dim",
+        "img_range",
+        "in_chans",
+        "mlp_ratio",
+        "num_heads",
+        "overlap_ratio",
+        "resi_connection",
+        "squeeze_factor",
+        "upsampler",
+        "window_size"
+      ]
+    },
+    "hat_m": {
+      "params": {
+        "img_size": 64,
+        "patch_size": 1,
+        "in_chans": 3,
+        "embed_dim": 180,
+        "depths": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "window_size": 16,
+        "compress_ratio": 3,
+        "squeeze_factor": 30,
+        "conv_scale": 0.01,
+        "overlap_ratio": 0.5,
+        "mlp_ratio": 2,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffle",
+        "resi_connection": "1conv",
+        "use_checkpoint": false,
+        "flash_attn": true
+      },
+      "nonliteral": [
+        "norm_layer"
+      ],
+      "fixed": [
+        "compress_ratio",
+        "conv_scale",
+        "depths",
+        "embed_dim",
+        "img_range",
+        "in_chans",
+        "mlp_ratio",
+        "num_heads",
+        "overlap_ratio",
+        "resi_connection",
+        "squeeze_factor",
+        "upsampler",
+        "window_size"
+      ]
+    },
+    "hat_s": {
+      "params": {
+        "img_size": 64,
+        "patch_size": 1,
+        "in_chans": 3,
+        "embed_dim": 144,
+        "depths": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "window_size": 16,
+        "compress_ratio": 24,
+        "squeeze_factor": 24,
+        "conv_scale": 0.01,
+        "overlap_ratio": 0.5,
+        "mlp_ratio": 2,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffle",
+        "resi_connection": "1conv",
+        "use_checkpoint": false,
+        "flash_attn": true
+      },
+      "nonliteral": [
+        "norm_layer"
+      ],
+      "fixed": [
+        "compress_ratio",
+        "conv_scale",
+        "depths",
+        "embed_dim",
+        "img_range",
+        "in_chans",
+        "mlp_ratio",
+        "num_heads",
+        "overlap_ratio",
+        "resi_connection",
+        "squeeze_factor",
+        "upsampler",
+        "window_size"
+      ]
+    },
+    "hit_srf": {
+      "params": {
+        "img_size": 64,
+        "patch_size": 1,
+        "in_chans": 3,
+        "embed_dim": 60,
+        "depths": [
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6
+        ],
+        "base_win_size": [
+          8,
+          8
+        ],
+        "mlp_ratio": 2.0,
+        "drop_rate": 0.0,
+        "value_drop_rate": 0.0,
+        "drop_path_rate": 0.0,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "use_checkpoint": false,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffledirect",
+        "resi_connection": "1conv",
+        "hier_win_ratios": [
+          0.5,
+          1,
+          2,
+          4,
+          6,
+          8
+        ]
+      },
+      "nonliteral": [
+        "norm_layer"
+      ]
+    },
+    "hit_srf_large": {
+      "params": {
+        "img_size": 48,
+        "patch_size": 1,
+        "in_chans": 3,
+        "embed_dim": 180,
+        "depths": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "base_win_size": [
+          24,
+          24
+        ],
+        "mlp_ratio": 2.0,
+        "drop_rate": 0.0,
+        "value_drop_rate": 0.0,
+        "drop_path_rate": 0.0,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "use_checkpoint": false,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffle",
+        "resi_connection": "1conv",
+        "hier_win_ratios": [
+          0.5,
+          1,
+          2,
+          4,
+          6,
+          8
+        ]
+      },
+      "nonliteral": [
+        "norm_layer"
+      ],
+      "fixed": [
+        "base_win_size",
+        "depths",
+        "embed_dim",
+        "img_size",
+        "num_heads",
+        "upsampler"
+      ]
+    },
+    "hit_srf_medium": {
+      "params": {
+        "img_size": 48,
+        "patch_size": 1,
+        "in_chans": 3,
+        "embed_dim": 180,
+        "depths": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "base_win_size": [
+          16,
+          16
+        ],
+        "mlp_ratio": 2.0,
+        "drop_rate": 0.0,
+        "value_drop_rate": 0.0,
+        "drop_path_rate": 0.0,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "use_checkpoint": false,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffle",
+        "resi_connection": "1conv",
+        "hier_win_ratios": [
+          0.5,
+          1,
+          2,
+          4,
+          6,
+          8
+        ]
+      },
+      "nonliteral": [
+        "norm_layer"
+      ],
+      "fixed": [
+        "base_win_size",
+        "depths",
+        "embed_dim",
+        "img_size",
+        "num_heads",
+        "upsampler"
+      ]
+    },
+    "hma": {
+      "params": {
+        "img_size": 64,
+        "patch_size": 1,
+        "in_chans": 3,
+        "embed_dim": 60,
+        "depths": [
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6
+        ],
+        "window_size": 8,
+        "interval_size": 4,
+        "mlp_ratio": 2.0,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "use_checkpoint": false,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffle",
+        "resi_connection": "1conv"
+      },
+      "nonliteral": [
+        "norm_layer"
+      ]
+    },
+    "hma_large": {
+      "params": {
+        "img_size": 48,
+        "patch_size": 1,
+        "in_chans": 3,
+        "embed_dim": 180,
+        "depths": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "window_size": 16,
+        "interval_size": 4,
+        "mlp_ratio": 2.0,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "use_checkpoint": false,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffle",
+        "resi_connection": "1conv"
+      },
+      "nonliteral": [
+        "norm_layer"
+      ],
+      "fixed": [
+        "depths",
+        "embed_dim",
+        "img_size",
+        "num_heads",
+        "window_size"
+      ]
+    },
+    "hma_medium": {
+      "params": {
+        "img_size": 64,
+        "patch_size": 1,
+        "in_chans": 3,
+        "embed_dim": 180,
+        "depths": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "window_size": 16,
+        "interval_size": 4,
+        "mlp_ratio": 2.0,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "use_checkpoint": false,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffle",
+        "resi_connection": "1conv"
+      },
+      "nonliteral": [
+        "norm_layer"
+      ],
+      "fixed": [
+        "depths",
+        "embed_dim",
+        "img_size",
+        "num_heads",
+        "window_size"
+      ]
+    },
+    "krgn": {
+      "params": {
+        "n_colors": 3,
+        "n_feats": 64,
+        "n_resgroups": 9,
+        "act": "lrelu",
+        "scale": 4,
+        "rgb_range": 1.0,
+        "dilation": 3
+      }
+    },
+    "light_safmnpp": {
+      "params": {
+        "dim": 32,
+        "n_blocks": 2,
+        "ffn_scale": 1.5,
+        "upscaling_factor": 4
+      }
+    },
+    "lmlt": {
+      "params": {
+        "dim": 60,
+        "n_blocks": 8,
+        "ffn_scale": 2.0,
+        "upscaling_factor": 4,
+        "window_size": 8,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.0
+      }
+    },
+    "lmlt_large": {
+      "params": {
+        "dim": 84,
+        "n_blocks": 8,
+        "ffn_scale": 2.0,
+        "upscaling_factor": 4,
+        "window_size": 8,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.0
+      },
+      "fixed": [
+        "dim"
+      ]
+    },
+    "lmlt_tiny": {
+      "params": {
+        "dim": 36,
+        "n_blocks": 8,
+        "ffn_scale": 2.0,
+        "upscaling_factor": 4,
+        "window_size": 8,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.0
+      },
+      "fixed": [
+        "dim"
+      ]
+    },
+    "man": {
+      "params": {
+        "n_resblocks": 36,
+        "n_resgroups": 1,
+        "n_colors": 3,
+        "n_feats": 180,
+        "scale": 4,
+        "res_scale": 1.0
+      }
+    },
+    "man_light": {
+      "params": {
+        "n_resblocks": 24,
+        "n_resgroups": 1,
+        "n_colors": 3,
+        "n_feats": 60,
+        "scale": 4,
+        "res_scale": 1.0
+      },
+      "fixed": [
+        "n_feats",
+        "n_resblocks"
+      ]
+    },
+    "man_tiny": {
+      "params": {
+        "n_resblocks": 5,
+        "n_resgroups": 1,
+        "n_colors": 3,
+        "n_feats": 48,
+        "scale": 4,
+        "res_scale": 1.0
+      },
+      "fixed": [
+        "n_feats",
+        "n_resblocks"
+      ]
+    },
+    "metaflexnet": {
+      "params": {
+        "inp_channels": 3,
+        "out_channels": 3,
+        "scale": 4,
+        "dim": 48,
+        "num_blocks": [
+          4,
+          6,
+          6,
+          8
+        ],
+        "window_size": 8,
+        "hidden_rate": 4,
+        "channel_norm": false,
+        "attn_drop": 0.0,
+        "proj_drop": 0.0,
+        "pipeline_type": "meta",
+        "upsampler": "ps",
+        "flash_attn": true
+      },
+      "fixed": [
+        "dim",
+        "num_blocks",
+        "pipeline_type"
+      ]
+    },
+    "metagan": {
+      "params": {
+        "in_ch": 3,
+        "n_class": 1,
+        "dims": [
+          48,
+          96,
+          192,
+          288
+        ],
+        "blocks": [
+          3,
+          3,
+          9,
+          3
+        ],
+        "downs": [
+          4,
+          4,
+          2,
+          2
+        ],
+        "drop_path": 0.02,
+        "end_drop": 0.2
+      }
+    },
+    "mfghmoe": {
+      "params": {
+        "img_size": 64,
+        "patch_size": 1,
+        "in_chans": 3,
+        "embed_dim": 180,
+        "depths": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "window_size": 16,
+        "compress_ratio": 3,
+        "squeeze_factor": 30,
+        "conv_scale": 0.01,
+        "overlap_ratio": 0.5,
+        "mlp_ratio": 2.0,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "use_checkpoint": false,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffle",
+        "resi_connection": "1conv"
+      },
+      "nonliteral": [
+        "norm_layer"
+      ]
+    },
+    "microsr": {
+      "params": {
+        "img_size": 64,
+        "patch_size": 32,
+        "in_chans": 3,
+        "embed_dim": 180,
+        "depths": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "window_size": 16,
+        "overlap_ratio": 0.5,
+        "mlp_ratio": 2.0,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffle",
+        "resi_connection": "1conv",
+        "gc": 32,
+        "rgb_norm": false
+      },
+      "nonliteral": [
+        "norm_layer"
+      ]
+    },
+    "microsr_light": {
+      "params": {
+        "img_size": 64,
+        "patch_size": 32,
+        "in_chans": 3,
+        "embed_dim": 48,
+        "depths": [
+          2,
+          2,
+          2,
+          2
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6
+        ],
+        "window_size": 8,
+        "overlap_ratio": 0.5,
+        "mlp_ratio": 2.0,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffle",
+        "resi_connection": "1conv",
+        "gc": 32,
+        "rgb_norm": false
+      },
+      "nonliteral": [
+        "norm_layer"
+      ],
+      "fixed": [
+        "depths",
+        "embed_dim",
+        "num_heads",
+        "window_size"
+      ]
+    },
+    "moesr": {
+      "params": {
+        "in_ch": 3,
+        "out_ch": 3,
+        "scale": 4,
+        "dim": 64,
+        "n_blocks": 9,
+        "n_block": 4,
+        "expansion_factor": null,
+        "expansion_msg": 1.5,
+        "upsampler": "pixelshuffledirect",
+        "upsample_dim": 64
+      },
+      "nonliteral": [
+        "expansion_factor"
+      ]
+    },
+    "mosrv2": {
+      "params": {
+        "in_ch": 3,
+        "scale": 4,
+        "n_block": 24,
+        "dim": 64,
+        "upsampler": "pixelshuffledirect",
+        "expansion_ratio": 1.5,
+        "mid_dim": 32,
+        "unshuffle_mod": true
+      }
+    },
+    "msdan": {
+      "params": {
+        "channels": 48,
+        "num_DFEB": 8,
+        "upscale_factor": 4
+      }
+    },
+    "nafnet": {
+      "params": {
+        "img_channel": 3,
+        "width": 32,
+        "middle_blk_num": 12,
+        "enc_blk_nums": [
+          2,
+          2,
+          4,
+          8
+        ],
+        "dec_blk_nums": [
+          2,
+          2,
+          2,
+          2
+        ],
+        "drop_out_rate": 0.0,
+        "scale": 1
+      }
+    },
+    "nafnet_l": {
+      "params": {
+        "img_channel": 3,
+        "width": 64,
+        "middle_blk_num": 12,
+        "enc_blk_nums": [
+          2,
+          2,
+          4,
+          8
+        ],
+        "dec_blk_nums": [
+          2,
+          2,
+          2,
+          2
+        ],
+        "drop_out_rate": 0.0,
+        "scale": 1
+      },
+      "fixed": [
+        "width"
+      ]
+    },
+    "ninasr": {
+      "params": {
+        "n_resblocks": 26,
+        "n_feats": 32,
+        "n_colors": 3,
+        "scale": 4,
+        "expansion": 2.0
+      }
+    },
+    "ninasr_b0": {
+      "params": {
+        "n_resblocks": 10,
+        "n_feats": 16,
+        "n_colors": 3,
+        "scale": 4,
+        "expansion": 2.0
+      },
+      "fixed": [
+        "n_feats",
+        "n_resblocks"
+      ]
+    },
+    "ninasr_b2": {
+      "params": {
+        "n_resblocks": 84,
+        "n_feats": 56,
+        "n_colors": 3,
+        "scale": 4,
+        "expansion": 2.0
+      },
+      "fixed": [
+        "n_feats",
+        "n_resblocks"
+      ]
+    },
+    "omnisr": {
+      "params": {
+        "num_in_ch": 3,
+        "num_out_ch": 3,
+        "num_feat": 64,
+        "res_num": 5,
+        "block_num": 1,
+        "bias": true,
+        "pe": true,
+        "ffn_bias": true,
+        "upsampling": 4,
+        "window_size": 8
+      },
+      "fixed": [
+        "bias",
+        "block_num",
+        "ffn_bias",
+        "pe",
+        "res_num"
+      ],
+      "var_kwargs": true
+    },
+    "patchgan": {
+      "params": {
+        "num_in_ch": 3,
+        "num_feat": 64,
+        "num_layers": 3,
+        "max_nf_mult": 8,
+        "norm_type": "none",
+        "use_sigmoid": false,
+        "use_sn": true
+      }
+    },
+    "plainusr": {
+      "params": {
+        "n_feat": 64,
+        "im_feat": [
+          64,
+          48,
+          32
+        ],
+        "attn_feat": 16,
+        "scale": 4
+      }
+    },
+    "plainusr_large": {
+      "params": {
+        "n_feat": 80,
+        "im_feat": [
+          80,
+          64,
+          48
+        ],
+        "attn_feat": 16,
+        "scale": 4
+      },
+      "fixed": [
+        "attn_feat",
+        "im_feat",
+        "n_feat"
+      ]
+    },
+    "plainusr_ultra": {
+      "params": {
+        "n_feat": 32,
+        "im_feat": [
+          32,
+          16
+        ],
+        "attn_feat": 4,
+        "scale": 4
+      },
+      "fixed": [
+        "attn_feat",
+        "im_feat",
+        "n_feat"
+      ]
+    },
+    "plksr": {
+      "params": {
+        "num_in_ch": 3,
+        "num_out_ch": 3,
+        "dim": 64,
+        "n_blocks": 28,
+        "upscaling_factor": 4,
+        "ccm_type": "DCCM",
+        "kernel_size": 17,
+        "split_ratio": 0.25,
+        "lk_type": "PLK",
+        "use_max_kernel": false,
+        "sparse_kernels": [
+          5,
+          5,
+          5,
+          5
+        ],
+        "sparse_dilations": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "with_idt": false,
+        "use_ea": true,
+        "is_coreml": false
+      }
+    },
+    "plksr_tiny": {
+      "params": {
+        "num_in_ch": 3,
+        "num_out_ch": 3,
+        "dim": 64,
+        "n_blocks": 12,
+        "upscaling_factor": 4,
+        "ccm_type": "DCCM",
+        "kernel_size": 13,
+        "split_ratio": 0.25,
+        "lk_type": "PLK",
+        "use_max_kernel": false,
+        "sparse_kernels": [
+          5,
+          5,
+          5,
+          5
+        ],
+        "sparse_dilations": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "with_idt": false,
+        "use_ea": false,
+        "is_coreml": false
+      },
+      "fixed": [
+        "kernel_size",
+        "n_blocks",
+        "use_ea"
+      ]
+    },
+    "r3gan": {
+      "params": {
+        "in_ch": 3,
+        "widths": [
+          32,
+          64,
+          128,
+          256,
+          256
+        ],
+        "group_width": 16,
+        "expansion": 2,
+        "blocks": 1,
+        "head": "patch"
+      }
+    },
+    "r3gan_scalar128": {
+      "params": {
+        "in_ch": 3,
+        "widths": [
+          32,
+          64,
+          128,
+          256,
+          256,
+          256
+        ],
+        "group_width": 16,
+        "expansion": 2,
+        "blocks": 1,
+        "head": "scalar"
+      },
+      "fixed": [
+        "head",
+        "widths"
+      ]
+    },
+    "r3gan_scalar256": {
+      "params": {
+        "in_ch": 3,
+        "widths": [
+          32,
+          64,
+          128,
+          256,
+          256,
+          256,
+          256
+        ],
+        "group_width": 16,
+        "expansion": 2,
+        "blocks": 1,
+        "head": "scalar"
+      },
+      "fixed": [
+        "head",
+        "widths"
+      ]
+    },
+    "rcan": {
+      "params": {
+        "n_resgroups": 10,
+        "n_resblocks": 20,
+        "n_feats": 64,
+        "kernel_size": 3,
+        "reduction": 16,
+        "n_colors": 3,
+        "scale": 4,
+        "act": null,
+        "norm": false
+      }
+    },
+    "realplksr": {
+      "params": {
+        "in_ch": 3,
+        "out_ch": 3,
+        "dim": 64,
+        "n_blocks": 28,
+        "upscaling_factor": 4,
+        "kernel_size": 17,
+        "split_ratio": 0.25,
+        "use_ea": true,
+        "norm_groups": 4,
+        "dropout": 0,
+        "dysample": false,
+        "layer_norm": false,
+        "icnr": false
+      }
+    },
+    "realplksr_l": {
+      "params": {
+        "in_ch": 3,
+        "out_ch": 3,
+        "dim": 96,
+        "n_blocks": 28,
+        "upscaling_factor": 4,
+        "kernel_size": 17,
+        "split_ratio": 0.25,
+        "use_ea": true,
+        "norm_groups": 4,
+        "dropout": 0,
+        "dysample": false,
+        "layer_norm": false,
+        "icnr": false
+      },
+      "fixed": [
+        "dim"
+      ]
+    },
+    "realplksr_s": {
+      "params": {
+        "in_ch": 3,
+        "out_ch": 3,
+        "dim": 64,
+        "n_blocks": 12,
+        "upscaling_factor": 4,
+        "kernel_size": 13,
+        "split_ratio": 0.25,
+        "use_ea": false,
+        "norm_groups": 4,
+        "dropout": 0,
+        "dysample": false,
+        "layer_norm": false,
+        "icnr": false
+      },
+      "fixed": [
+        "kernel_size",
+        "n_blocks",
+        "use_ea"
+      ]
+    },
+    "resgan": {
+      "params": {
+        "num_in_ch": 3,
+        "num_feat": 64,
+        "skip_connection": true,
+        "upscale": true,
+        "attention": false
+      }
+    },
+    "rgt": {
+      "params": {
+        "img_size": 64,
+        "in_chans": 3,
+        "embed_dim": 180,
+        "depth": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "mlp_ratio": 2,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "act_layer": null,
+        "norm_layer": null,
+        "use_chk": false,
+        "upscale": 4,
+        "img_range": 1.0,
+        "resi_connection": "1conv",
+        "split_size": [
+          8,
+          32
+        ],
+        "c_ratio": 0.5,
+        "flash_attn": true
+      },
+      "nonliteral": [
+        "act_layer",
+        "norm_layer"
+      ]
+    },
+    "rgt_s": {
+      "params": {
+        "img_size": 64,
+        "in_chans": 3,
+        "embed_dim": 180,
+        "depth": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "mlp_ratio": 2,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "act_layer": null,
+        "norm_layer": null,
+        "use_chk": false,
+        "upscale": 4,
+        "img_range": 1.0,
+        "resi_connection": "1conv",
+        "split_size": [
+          8,
+          32
+        ],
+        "c_ratio": 0.5,
+        "flash_attn": true
+      },
+      "nonliteral": [
+        "act_layer",
+        "norm_layer"
+      ],
+      "fixed": [
+        "depth",
+        "num_heads"
+      ]
+    },
+    "safmn": {
+      "params": {
+        "dim": 36,
+        "num_layers": 6,
+        "n_blocks": 8,
+        "ffn_scale": 2.0,
+        "upscaling_factor": 4,
+        "bcie": false
+      }
+    },
+    "safmn_l": {
+      "params": {
+        "dim": 128,
+        "num_layers": 6,
+        "n_blocks": 16,
+        "ffn_scale": 2.0,
+        "upscaling_factor": 4,
+        "bcie": false
+      },
+      "fixed": [
+        "dim",
+        "n_blocks"
+      ]
+    },
+    "sebica": {
+      "params": {
+        "sr_rate": 4,
+        "N": 16,
+        "mini": false,
+        "dropout": 0.0
+      }
+    },
+    "sebica_mini": {
+      "params": {
+        "sr_rate": 4,
+        "N": 8,
+        "mini": true,
+        "dropout": 0.0
+      },
+      "fixed": [
+        "N",
+        "mini"
+      ]
+    },
+    "span": {
+      "params": {
+        "num_in_ch": 3,
+        "num_out_ch": 3,
+        "feature_channels": 48,
+        "upscale": 4,
+        "bias": true,
+        "norm": false,
+        "fast": false,
+        "img_range": 1.0,
+        "rgb_mean": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "fan_in_init": false
+      }
+    },
+    "span_fast": {
+      "params": {
+        "num_in_ch": 3,
+        "num_out_ch": 3,
+        "feature_channels": 32,
+        "upscale": 4,
+        "bias": false,
+        "norm": false,
+        "fast": true,
+        "img_range": 1.0,
+        "rgb_mean": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "fan_in_init": false
+      },
+      "fixed": [
+        "bias",
+        "fast",
+        "feature_channels"
+      ]
+    },
+    "spanplus": {
+      "params": {
+        "num_in_ch": 3,
+        "num_out_ch": 3,
+        "blocks": [
+          4
+        ],
+        "feature_channels": 48,
+        "upscale": 4,
+        "drop_rate": 0.0,
+        "upsampler": "dys"
+      }
+    },
+    "spanplus_s": {
+      "params": {
+        "num_in_ch": 3,
+        "num_out_ch": 3,
+        "blocks": [
+          2
+        ],
+        "feature_channels": 32,
+        "upscale": 4,
+        "drop_rate": 0.0,
+        "upsampler": "dys"
+      },
+      "fixed": [
+        "blocks",
+        "feature_channels"
+      ]
+    },
+    "spanplus_st": {
+      "params": {
+        "num_in_ch": 3,
+        "num_out_ch": 3,
+        "blocks": [
+          4
+        ],
+        "feature_channels": 48,
+        "upscale": 4,
+        "drop_rate": 0.0,
+        "upsampler": "ps"
+      },
+      "fixed": [
+        "upsampler"
+      ]
+    },
+    "spanplus_sts": {
+      "params": {
+        "num_in_ch": 3,
+        "num_out_ch": 3,
+        "blocks": [
+          2
+        ],
+        "feature_channels": 32,
+        "upscale": 4,
+        "drop_rate": 0.0,
+        "upsampler": "ps"
+      },
+      "fixed": [
+        "blocks",
+        "feature_channels",
+        "upsampler"
+      ]
+    },
+    "srformer": {
+      "params": {
+        "img_size": 64,
+        "patch_size": 1,
+        "in_chans": 3,
+        "out_chans": 3,
+        "embed_dim": 60,
+        "depths": [
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6
+        ],
+        "window_size": 16,
+        "mlp_ratio": 2.0,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "use_checkpoint": false,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffledirect",
+        "resi_connection": "1conv",
+        "flash_attn": true
+      },
+      "nonliteral": [
+        "norm_layer"
+      ]
+    },
+    "srformer_light": {
+      "params": {
+        "img_size": 64,
+        "patch_size": 1,
+        "in_chans": 3,
+        "out_chans": 3,
+        "embed_dim": 60,
+        "depths": [
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6
+        ],
+        "window_size": 16,
+        "mlp_ratio": 2,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "use_checkpoint": false,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffledirect",
+        "resi_connection": "1conv",
+        "flash_attn": true
+      },
+      "nonliteral": [
+        "norm_layer"
+      ],
+      "fixed": [
+        "depths",
+        "embed_dim",
+        "img_range",
+        "img_size",
+        "in_chans",
+        "mlp_ratio",
+        "num_heads",
+        "resi_connection",
+        "upsampler",
+        "window_size"
+      ]
+    },
+    "srformer_medium": {
+      "params": {
+        "img_size": 48,
+        "patch_size": 1,
+        "in_chans": 3,
+        "out_chans": 3,
+        "embed_dim": 180,
+        "depths": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "window_size": 24,
+        "mlp_ratio": 2,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "use_checkpoint": false,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffle",
+        "resi_connection": "1conv",
+        "flash_attn": true
+      },
+      "nonliteral": [
+        "norm_layer"
+      ],
+      "fixed": [
+        "depths",
+        "embed_dim",
+        "img_range",
+        "img_size",
+        "in_chans",
+        "mlp_ratio",
+        "num_heads",
+        "resi_connection",
+        "upsampler",
+        "window_size"
+      ]
+    },
+    "swinir_large": {
+      "params": {
+        "img_size": 64,
+        "patch_size": 1,
+        "in_chans": 3,
+        "embed_dim": 240,
+        "depths": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          8,
+          8,
+          8,
+          8,
+          8,
+          8,
+          8,
+          8,
+          8
+        ],
+        "flash_attn": true,
+        "window_size": 8,
+        "mlp_ratio": 2.0,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "use_checkpoint": false,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "nearest+conv",
+        "resi_connection": "3conv"
+      },
+      "nonliteral": [
+        "norm_layer"
+      ],
+      "fixed": [
+        "depths",
+        "embed_dim",
+        "img_size",
+        "num_heads",
+        "resi_connection",
+        "upsampler"
+      ]
+    },
+    "swinir_medium": {
+      "params": {
+        "img_size": 48,
+        "patch_size": 1,
+        "in_chans": 3,
+        "embed_dim": 180,
+        "depths": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ],
+        "flash_attn": true,
+        "window_size": 8,
+        "mlp_ratio": 2.0,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "use_checkpoint": false,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffle",
+        "resi_connection": "1conv"
+      },
+      "nonliteral": [
+        "norm_layer"
+      ],
+      "fixed": [
+        "depths",
+        "embed_dim",
+        "img_size",
+        "num_heads",
+        "resi_connection",
+        "upsampler"
+      ]
+    },
+    "swinir_small": {
+      "params": {
+        "img_size": 64,
+        "patch_size": 1,
+        "in_chans": 3,
+        "embed_dim": 60,
+        "depths": [
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6
+        ],
+        "flash_attn": true,
+        "window_size": 8,
+        "mlp_ratio": 2.0,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "use_checkpoint": false,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffledirect",
+        "resi_connection": "1conv"
+      },
+      "nonliteral": [
+        "norm_layer"
+      ],
+      "fixed": [
+        "depths",
+        "embed_dim",
+        "img_size",
+        "num_heads",
+        "resi_connection",
+        "upsampler"
+      ]
+    },
+    "swinirdense": {
+      "params": {
+        "img_size": 32,
+        "patch_size": 1,
+        "in_chans": 3,
+        "out_chans": 3,
+        "embed_dim": 60,
+        "depths": [
+          6,
+          6,
+          6,
+          6
+        ],
+        "num_heads": [
+          6,
+          6,
+          6,
+          6
+        ],
+        "flash_attn": true,
+        "window_size": 8,
+        "mlp_ratio": 2.0,
+        "qkv_bias": true,
+        "qk_scale": null,
+        "drop_rate": 0.0,
+        "attn_drop_rate": 0.0,
+        "drop_path_rate": 0.1,
+        "norm_layer": null,
+        "ape": false,
+        "patch_norm": true,
+        "use_checkpoint": false,
+        "upscale": 4,
+        "img_range": 1.0,
+        "upsampler": "pixelshuffle",
+        "resi_connection": "1conv"
+      },
+      "nonliteral": [
+        "norm_layer"
+      ]
+    },
+    "unet": {
+      "params": {
+        "num_in_ch": 3,
+        "num_feat": 64,
+        "skip_connection": true
+      }
+    }
+  },
   "losses": [
     "HuberLoss",
     "L1Loss",

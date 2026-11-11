@@ -12,6 +12,8 @@ export interface ParamInfo {
   readonly help?: string;
   /** Enumerable values, when known. */
   readonly options?: readonly string[];
+  /** Bound by a preset (`def preset(**kw): return base(key=value, **kw)`): shown, never written; the trainer rejects a value. */
+  readonly fixed?: boolean;
 }
 
 export type SizeClass = 'ultra-light' | 'light' | 'medium' | 'medium-heavy' | 'heavy' | 'ultra-heavy';

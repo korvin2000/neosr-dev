@@ -64,7 +64,7 @@ Phases are sequential runs: an objective change, a new discriminator or a separa
 |---|---|
 | Regenerate the surface after a trainer change | `npm run surface` |
 | Fail when the surface is stale | `npm run surface:check` |
-| Catalog vs surface (types, losses, metrics, `gan_type`, schema keys) | `npx ng test --watch=false` (`src/app/core/catalog-contract.spec.ts`) |
+| Catalog vs surface (types, arch constructor parameters and defaults, losses, metrics, `gan_type`, schema keys) | `npx ng test --watch=false` (`src/app/core/catalog-contract.spec.ts`) |
 | Compile every template, an all-options recipe and the shipped realplksr recipes, then run the trainer's `load_config` + `validate_train` on them | `npm run contract` |
 
-`--validate` covers the schema and the cross-key rules; constructor kwargs (`network_*`, `train.*_opt`, optimizers, scheduler, metrics) are opaque to it and come from reading the Python code.
+`--validate` covers the schema and the cross-key rules; constructor kwargs (`network_*`, `train.*_opt`, optimizers, scheduler, metrics) are opaque to it. The arch constructors are read with `ast` into the surface (`arch_params`: names, literal defaults, preset-bound `fixed` keys); the other constructors still come from reading the Python code.
