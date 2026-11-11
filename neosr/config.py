@@ -394,6 +394,19 @@ def _plain(val: Any) -> bool:
     return isinstance(val, str | int | float | bool)
 
 
+NO_DOUBLE_BACKWARD = "has no double backward (DySample's grid_sample)"
+
+
+def no_penalty_msg(slot: str, d: str, why: str) -> str:
+    """The one refusal of R1/R2 for a D that cannot take them, raised by two layers: validate_train
+    by name (torch-free, so Studio's validator sees it) and the trainer at build by module
+    (gan_loss.no_penalty: any D with DySample or BatchNorm, whatever its name)."""
+    return (
+        f"train.{slot}.r1_gamma/r2_gamma need a D that takes R1/R2: network_d {d} {why}; "
+        "set both to 0 or use another network_d (r3gan)"
+    )
+
+
 def validate_train(cfg: dict[str, Any]) -> None:
     """Structural cross-key rules of a training config; raises ConfigError naming the dotted key."""
     if cfg["scale"] not in SCALES:
@@ -429,11 +442,7 @@ def validate_train(cfg: dict[str, Any]) -> None:
             and spec.get("type") == "gan_loss"
             and any(spec.get(k) for k in ("r1_gamma", "r2_gamma"))
         ):
-            msg = (
-                f"train.{key}.r1_gamma/r2_gamma need a D with a double backward; dunet has "
-                "none (DySample's grid_sample): set both to 0 or use another network_d (r3gan)"
-            )
-            raise ConfigError(msg)
+            raise ConfigError(no_penalty_msg(key, "dunet", NO_DOUBLE_BACKWARD))
     if train.get("max_skip_streak", 1) < 1:
         msg = "train.max_skip_streak must be >= 1"
         raise ConfigError(msg)

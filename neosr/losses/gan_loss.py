@@ -7,7 +7,8 @@ from torch.nn import functional as F
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.nn.modules import batchnorm
 
-from neosr.config import ConfigError
+from neosr.archs.arch_util import DySample
+from neosr.config import NO_DOUBLE_BACKWARD, ConfigError, no_penalty_msg
 from neosr.losses.base import Context, Loss
 from neosr.losses.wavelet_guided import AdvView
 from neosr.utils.registry import LOSS_REGISTRY
@@ -16,6 +17,15 @@ from neosr.utils.registry import LOSS_REGISTRY
 def batch_coupled(net: nn.Module) -> bool:
     """D normalises with batch statistics: real and fake then need separate forwards."""
     return any(isinstance(m, batchnorm._BatchNorm) for m in net.modules())
+
+
+def no_penalty(net: nn.Module) -> str:
+    """Why D cannot take R1/R2, "" if it can: they need a per-sample score and its second derivative."""
+    if batch_coupled(net):
+        return "normalises with batch statistics (BatchNorm): it does not score every sample on its own"
+    if any(isinstance(m, DySample) for m in net.modules()):
+        return NO_DOUBLE_BACKWARD
+    return ""
 
 
 def eager(net: nn.Module) -> nn.Module:
@@ -173,17 +183,17 @@ class gan_d_loss(Loss):
     def active(self, it: int) -> bool:
         return self.g.active(it)  # D trains exactly while G's adversarial term is on
 
+    def check(self, net: nn.Module) -> None:
+        """Refuse R1/R2 for the bare D when it cannot take them (the trainer, at build)."""
+        if any(self.g.gammas) and (why := no_penalty(net)):
+            slot = f"{self.g.log_key.removeprefix('l_g_') or 'gan'}_opt"  # l_g_<slot>
+            raise ConfigError(no_penalty_msg(slot, type(net).__name__, why))
+
     def scores(
         self, net: nn.Module, real: Tensor, fake: Tensor
     ) -> tuple[Tensor, Tensor]:
         if self.split is None:
             self.split = batch_coupled(net)
-            if self.split and any(self.g.gammas):
-                msg = (
-                    "[train.gan_opt] r1_gamma/r2_gamma need a D that scores every sample on "
-                    "its own; network_d normalises with batch statistics (BatchNorm)"
-                )
-                raise ConfigError(msg)
         if self.split:
             return net(real), net(fake)
         return net(torch.cat([real, fake])).chunk(2)  # type: ignore[return-value]

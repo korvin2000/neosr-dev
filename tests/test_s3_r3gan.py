@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import torch
 import torch.distributed as dist
+import torchvision
 from torch import nn
 from torch.nn import functional as F
 
@@ -19,6 +20,7 @@ from neosr.losses import RESERVED
 from neosr.losses import gan_loss as glm
 from neosr.losses.gan_loss import gan_loss
 from neosr.runtime import Runtime
+from neosr.utils.registry import ARCH_REGISTRY
 from tests.test_gan import Forbidden, images
 from tests.test_gan import ctx as gan_ctx
 from tests.test_model import batches as model_batches
@@ -696,9 +698,10 @@ def test_r1_r2_double_backward_through_r3gan(name, size, dev):
 def test_dunet_has_no_double_backward_and_is_refused_by_name():
     torch.manual_seed(0)
     net = build_network({"type": "dunet", "dim": 4}, section="network_d")
-    c = _ctx(net)
+    x = torch.rand(1, 3, 32, 32, requires_grad=True)
+    (gx,) = torch.autograd.grad(net(x).sum(), x, create_graph=True)
     with pytest.raises(RuntimeError, match="grid_sampler_2d_backward"):
-        _d_term(r1_gamma=1.0, reg_every=1).compute(c).backward()
+        gx.square().sum().backward()  # the trainer refuses it at build (the sweep below)
     cfg = {
         "scale": 4,
         "datasets": {"train": {"patch_size": 16, "batch_size": 2}},
@@ -723,13 +726,57 @@ def test_dunet_has_no_double_backward_and_is_refused_by_name():
     validate_train(cfg)
 
 
-def test_batch_coupled_d_with_a_penalty_is_refused_at_the_first_call():
+DS = sorted(
+    n
+    for n, row in ARCH_REGISTRY.items()
+    if row.scale is None and n != "VGGFeatureExtractor"
+)
+
+
+def _offline(monkeypatch):
+    """ea2fpn's encoder without the ImageNet download (the weights do not matter here)."""
+    resnet18 = torchvision.models.resnet18
+    monkeypatch.setattr(torchvision.models, "resnet18", lambda **_: resnet18())
+
+
+@pytest.mark.parametrize("name", DS)
+def test_every_d_takes_the_penalty_or_is_refused_by_the_build_check(monkeypatch, name):
+    """No registered D reaches a crash in the double backward: R1/R2 either run (finite D grads)
+    or gan_d_loss.check (the trainer's build) raises a ConfigError naming the D and the fix
+    (dunet: DySample; ea2fpn: BatchNorm, and DySample). A new D without a second derivative fails
+    here, not mid-run."""
+    _offline(monkeypatch)
+    torch.manual_seed(0)
+    net = build_network({"type": name}, section="network_d")
+    size = getattr(net, "gt", 64)
+    c = _ctx(net, shape=(2, 3, size, size))
+    d_term = _d_term(r1_gamma=1.0, r2_gamma=1.0, reg_every=1)
+    if name in {"dunet", "ea2fpn"}:
+        with pytest.raises(ConfigError, match=rf"network_d {name} .*set both to 0"):
+            d_term.check(net)
+        _d_term().check(net)  # no penalty: any D
+        return
+    d_term.check(net)
+    d_term.compute(c).backward()
+    assert all(p.grad.isfinite().all() for p in net.parameters() if p.grad is not None)
+    assert c.logs["l_d_reg"] > 0
+
+
+def test_batch_coupled_d_with_a_penalty_is_refused_at_build(monkeypatch, tmp_path):
     torch.manual_seed(0)
     net = nn.Sequential(
         nn.Conv2d(3, 4, 3, padding=1), nn.BatchNorm2d(4), nn.Conv2d(4, 1, 1)
     )
     with pytest.raises(ConfigError, match="batch statistics"):
-        _d_term(r1_gamma=1.0).compute(_ctx(net))  # update 1 is not even regularised
+        _d_term(r1_gamma=1.0).check(net)
+    _offline(monkeypatch)  # the trainer: at build, also when the GAN starts late
+    opt = model_make_opt(tmp_path, d=True)
+    opt["network_d"] = {"type": "ea2fpn"}
+    opt["train"]["gan_opt"] |= {"r1_gamma": 1.0, "start_iter": 1000}
+    with pytest.raises(ConfigError, match=r"train\.gan_opt\..*network_d ea2fpn"):
+        model_build(opt)
+    opt["network_d"] = {"type": "unet", "num_feat": 4}
+    assert model_build(opt).net_d is not None
     assert (
         _d_term().compute(_ctx(net)).isfinite()
     )  # no penalty: two forwards, as before

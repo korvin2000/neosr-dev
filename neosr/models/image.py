@@ -21,6 +21,7 @@ from neosr.data.augmentations import apply_augment
 from neosr.data.data_util import image_id
 from neosr.losses import build_losses
 from neosr.losses.base import Context, restoring_clamp
+from neosr.losses.gan_loss import gan_d_loss
 from neosr.models.base import base, build_optimizer, build_schedulers
 from neosr.models.checkpoint import cpu_copy, load_weights, read_weights
 from neosr.models.phase import (
@@ -127,6 +128,9 @@ class image(base):
         g_terms, d_terms = build_losses(
             tr, scale=self.scale, device=self.device, has_d=self.net_d is not None
         )
+        for t in d_terms:  # R1/R2 on a D that cannot take them: refused now, not at the GAN start
+            if isinstance(t, gan_d_loss):
+                t.check(self.net_d)
         self.accumulate = ds.get("accumulate", 1)
         # true: the legacy max-norm 1.0; a positive float; "spike"
         clip = tr.get("grad_clip", True)
