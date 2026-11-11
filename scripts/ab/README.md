@@ -5,7 +5,7 @@ Every 8k/20k A/B of a training change uses these three tools. Runs, configs and 
 | file | does |
 |---|---|
 | `run_ab.py` | trains one arm (a TOML) through train.py's own machinery and writes `train.jsonl`, `metrics.jsonl`, `per_image.jsonl` and, after the final validation, `done.json` into the arm's run folder |
-| `queue.sh` | runs arms from a queue file (`A,B` = a pair side by side, `A` = alone), one line at a time; a line starts only if it can end by `DEADLINE`; an optional `LOCK` (flock) makes it the GPU's only owner |
+| `queue.sh` | runs arms from a queue file (`A,B` = a pair side by side, `A` = alone), one line at a time (blank and `#` lines skipped; it ends when the file is empty); a line starts only if it can end by `DEADLINE` (`HH:MM`: its next occurrence); an optional `LOCK` (flock) makes it the GPU's only owner |
 | `analyze.py` | dataset means, paired per-image differences against a reference with a 95 % CI over source groups, the gate's verdict per arm, training diagnostics (D margin, R1/R2, grad norms, clip share, skips) |
 
 ## Protocol (stage 3, `docs/refactor/stage3/r3gan/RESULTS.md` sections 0-1)
@@ -26,19 +26,19 @@ Gate, per metric against the reference:
 
 ## Running it (Linux workstation)
 1. Write one TOML per arm into a session folder `experiments/<session>/cfg/`, each a text edit of the template. `name`, `total_iter` and `save_checkpoint_freq` set the run. `experiments/s9_ab/mkcfg.py` is an example. To freeze the code an arm trains with, put the checkout path in `cfg/<arm>.code`.
-2. Queue the arms (two 8k arms side by side take ~29 min on the RTX 4090; one ~18 min):
+2. Queue the arms. The deadline guard uses estimates, not measurements: `PAIR_MIN` 29 for two 8k arms side by side on the RTX 4090, `SINGLE_MIN` 18 for one.
    ```sh
    printf 'B0,B0s2\nB1,B2\n' > experiments/<session>/queue.txt
    CFG=experiments/<session>/cfg RUNS=experiments/<session>/runs QUEUE=experiments/<session>/queue.txt \
      DEADLINE=16:30 LOCK=<gpu.lock> MEMORY_MAX=12G nohup scripts/ab/queue.sh > experiments/<session>/queue.log 2>&1 &
    ```
-   One arm by hand: `python scripts/ab/run_ab.py <repo> <cfg>/<arm>.toml <runs>/<arm>`. Add `--resume` to continue the arm's last state.
+   One arm by hand: `python scripts/ab/run_ab.py <repo> <cfg>/<arm>.toml <runs>/<arm>`. A fresh run empties the arm's logs. `--resume` continues from the last state and keeps the log events up to it; a final state whose validation was cut off is validated again. `done.json` is deleted at the start and written atomically at the end.
 3. Verdicts:
    ```sh
    python scripts/ab/analyze.py --runs experiments/<session>/runs --data <data> --seed-ref B0s2 --iter 8000 B0 B1 B2
    ```
    `--data` takes either a folder in the standard layout or a JSON file
-   `{"sources": ..., "groups": ..., "exclude": ..., "manifest": {"dev": "<gt dir>"}}`, with paths relative to the file. The standard layout is `sources.json`, optional `groups_eval.json` and `exclude.txt`, and one `<dataset>_gt/` per dataset. The manifest guard stops on an arm that scored a missing or duplicate image.
+   `{"sources": ..., "groups": ..., "exclude": ..., "manifest": {"dev": "<gt dir>"}}`, with paths relative to the file. The standard layout is `sources.json`, optional `groups_eval.json` and `exclude.txt`, and one `<dataset>_gt/` per dataset. Image ids are the paths below `<dataset>_gt/` without suffix, as the trainer names them. The tool exits rather than weaken the gate when an input is missing: a seed reference without rows, a metric, the sources file, the manifest, or a second source group. `--independent` treats every image as its own group; use it only for unrelated images, e.g. `--dataset val8`. The manifest guard also stops on an arm that scored a missing or duplicate image.
 
 ## Where things live on the Linux machine (gitignored)
 | what | path |

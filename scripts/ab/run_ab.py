@@ -9,8 +9,10 @@ setup_runtime, prepare_run, train) and log, beside the run, what scripts/ab/anal
     python scripts/ab/run_ab.py <repo> <config.toml> <out_dir> [--resume]
 
 <repo> is the checkout whose code trains (a frozen copy keeps a running arm independent of later
-edits); its train.py and neosr/ are imported from there. Seeded init and data order, fast kernels
-(cudnn.benchmark, no strict determinism): arms differ by run-to-run noise, measured by a seed pair.
+edits); its train.py and neosr/ are imported from there. A fresh run empties the logs and done.json;
+--resume keeps the events up to the resumed state and validates a final state whose validation was
+cut off. Kernels follow the config (`deterministic`); arms differ by run-to-run noise, measured by a
+seed pair.
 """
 
 import argparse
@@ -21,16 +23,15 @@ import sys
 import time
 from pathlib import Path
 
+LOGS = ("train", "metrics", "per_image")
+
 
 class Recorder:
     """The JSONL files and the per-image values of the validation event in progress."""
 
     def __init__(self, out: Path) -> None:
         self.t0 = time.time()
-        self.files = {
-            k: (out / f"{k}.jsonl").open("a", encoding="utf-8")
-            for k in ("train", "metrics", "per_image")
-        }
+        self.files = {k: (out / f"{k}.jsonl").open("a", encoding="utf-8") for k in LOGS}
         self.ids: list[str] = []
         self.vals: list = []
 
@@ -102,6 +103,28 @@ def install_hooks(rec: Recorder) -> None:
     image.image_id = image_id_hook
 
 
+def keep_until(out: Path, update: int | None, *, final: bool = False) -> None:
+    """A fresh run (None) empties the logs; a resume keeps the events up to its state's update:
+    later ones are re-logged by the resumed run (a validation at an update precedes its state).
+    The final state is saved before its validation: `final` also drops that update's rows."""
+    for key in LOGS:
+        path = out / f"{key}.jsonl"
+        if update is None or not path.exists():
+            path.write_text("", encoding="utf-8")
+            continue
+        last = update - 1 if final and key != "train" else update
+        with path.open(encoding="utf-8") as f:
+            rows = [
+                line for line in f if line.strip() and json.loads(line)["iter"] <= last
+            ]
+        path.write_text("".join(rows), encoding="utf-8")
+
+
+def final_datasets(out: Path, total: int) -> set[str]:
+    with (out / "metrics.jsonl").open(encoding="utf-8") as f:
+        return {r["dataset"] for r in map(json.loads, f) if r["iter"] == total}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="train one A/B arm with per-image logging")
     ap.add_argument("repo", type=Path, help="checkout whose code trains")
@@ -116,33 +139,42 @@ def main(argv=None) -> int:
     repo, cfg_path, out = (p.resolve() for p in (a.repo, a.config, a.out))
     sys.path.insert(0, str(repo))
     out.mkdir(parents=True, exist_ok=True)
+    (out / "done.json").unlink(missing_ok=True)  # written again only by a complete run
     os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
     import torch  # ruff: ignore[import-outside-top-level]
 
     config = importlib.import_module("neosr.config")
     runtime = importlib.import_module("neosr.runtime")
+    models = importlib.import_module("neosr.models")
     train = importlib.import_module("train")
-    rec = Recorder(out)
-    install_hooks(rec)
     cfg = config.load_config(
         str(cfg_path), is_train=True, root=out, debug=False, auto_resume=a.resume
     )
     config.validate_train(cfg)
-    rt = runtime.setup_runtime(cfg)
-    # seeded init and data order, fast kernels (manual_seed implies strict determinism in neosr)
-    torch.backends.cudnn.deterministic = False
-    torch.backends.cudnn.benchmark = True
-    torch.use_deterministic_algorithms(mode=False)
-    torch.utils.deterministic.fill_uninitialized_memory = False
+    rt = runtime.setup_runtime(cfg)  # the config's `deterministic` decides the kernels
     train.prepare_run(cfg, ["run_ab.py", str(cfg_path)])
-    train.train(cfg, rt)
-
-    total = cfg["logger"]["total_iter"]
-    with (out / "metrics.jsonl").open(encoding="utf-8") as f:
-        final = {r["dataset"] for r in map(json.loads, f) if r["iter"] == total}
+    state = cfg["path"]["resume_state"]  # <update>.state, or None for a fresh run
+    resumed = None if state is None else int(Path(state).stem)
+    total = config.total_iter(cfg)
     wanted = {d["name"] for k, d in cfg["datasets"].items() if k != "train"}
-    if final != wanted:  # no done.json: analyze.py and the queue see an incomplete arm
+    if resumed == total and final_datasets(out, total) == wanted:
+        print(f"complete: update {total} is validated", file=sys.stderr)
+    else:
+        # a final state whose validation was cut off: drop its partial rows, validate below
+        keep_until(out, resumed, final=resumed == total)
+    rec = Recorder(out)
+    install_hooks(rec)
+    train.train(cfg, rt)  # nothing to do when resumed at total_iter
+    if resumed == total and final_datasets(out, total) != wanted:
+        model = models.build_model(cfg, rt)  # the restored final weights
+        save_img = (cfg.get("val") or {}).get("save_img", True)
+        for vl in train.build_loaders(cfg, rt)[2]:
+            model.validation(vl, total, None, save_img)
+
+    if (
+        final := final_datasets(out, total)
+    ) != wanted:  # no done.json: an incomplete arm
         print(
             f"incomplete: no final validation at {total} ({sorted(final)})",
             file=sys.stderr,
@@ -153,7 +185,9 @@ def main(argv=None) -> int:
         "update": total,
         "peak_mem_gib": torch.cuda.max_memory_allocated() / 2**30,
     }
-    (out / "done.json").write_text(json.dumps(done), encoding="utf-8")
+    tmp = out / "done.json.tmp"
+    tmp.write_text(json.dumps(done), encoding="utf-8")
+    tmp.replace(out / "done.json")  # atomic: a reader sees no or a whole file
     return 0
 
 

@@ -3,14 +3,16 @@ reference arm with a 95 % bootstrap CI over source groups, the gate (README.md) 
 diagnostics.
 
     python scripts/ab/analyze.py --runs RUNS --data DATA REF ARM [ARM ...]
-        [--seed-ref REF2] [--iter 8000] [--dataset dev]
+        [--seed-ref REF2] [--iter 8000] [--dataset dev] [--independent]
 
 RUNS holds one folder per arm (<arm>/per_image.jsonl, metrics.jsonl, train.jsonl, done.json).
 DATA is a folder (sources.json, optional groups_eval.json and exclude.txt, <dataset>_gt/) or a
 JSON file {"sources": ..., "groups": ..., "exclude": ..., "manifest": {"dev": "<gt dir>", ...}}
-with paths relative to it. sources.json: a list of groups of GT file names (one group = one source);
-groups_eval.json: {image id: group} links added on top; exclude.txt: ids left out of every
-comparison; the manifest: the GT folder whose stems every arm must have scored, exactly once.
+with paths relative to it. sources.json: a list of groups of GT file names (one group = one source),
+required unless --independent (every image its own group); groups_eval.json: {image id: group}
+links added on top; exclude.txt: ids left out of every comparison; the manifest: the GT folder
+whose images every arm must have scored exactly once (ids as the trainer's: the path below the
+folder without suffix). Every missing input the gate needs exits instead of weakening it.
 """
 
 import argparse
@@ -44,14 +46,22 @@ DIAG = (
 
 @dataclass
 class Data:
-    group: dict[
-        str, int | str
-    ]  # image id -> source group; an id without one is its own group
+    # image id -> source group; None: independent images
+    group: dict[str, int | str] | None
     manifest: dict[str, set[str]]  # dataset -> the ids every arm must have scored
     exclude: set[str]
 
 
-def load_data(path: Path) -> Data:
+def _ids(folder: Path) -> set[str]:
+    """The trainer's image ids (data_util.image_id): the path below the folder without suffix."""
+    return {
+        str(p.relative_to(folder).with_suffix(""))
+        for p in folder.rglob("*")
+        if p.is_file() and not p.name.startswith(".")
+    }
+
+
+def load_data(path: Path, *, independent: bool = False) -> Data:
     if path.is_dir():
         spec = {
             "sources": "sources.json",
@@ -64,22 +74,32 @@ def load_data(path: Path) -> Data:
         spec, root = json.loads(path.read_text(encoding="utf-8")), path.parent
 
     def opt(key: str) -> Path | None:
-        p = root / spec[key] if spec.get(key) else None
-        return p if p is not None and p.exists() else None
+        """The file a key names; None if unnamed. A JSON spec's named file must exist."""
+        if not spec.get(key):
+            return None
+        p = root / spec[key]
+        if not p.exists():
+            if path.is_dir():
+                return None
+            sys.exit(f"{path}: {key} file {p} is missing")
+        return p
 
-    group: dict[str, int | str] = {}
-    if src := opt("sources"):
+    group: dict[str, int | str] | None = None
+    if not independent:
+        if (src := opt("sources")) is None:
+            sys.exit(
+                f"{path}: no sources file (source groups); --independent goes without"
+            )
         groups = json.loads(src.read_text(encoding="utf-8"))
-        group = {Path(n).stem: i for i, g in enumerate(groups) for n in g}
-    if links := opt("groups"):
-        group |= json.loads(links.read_text(encoding="utf-8"))
+        group = {
+            str(Path(n).with_suffix("")): i for i, g in enumerate(groups) for n in g
+        }
+        if links := opt("groups"):
+            group |= json.loads(links.read_text(encoding="utf-8"))
     exclude = (
         set(ex.read_text(encoding="utf-8").split()) if (ex := opt("exclude")) else set()
     )
-    manifest = {
-        ds: {p.stem for p in (root / d).iterdir() if p.is_file()}
-        for ds, d in spec.get("manifest", {}).items()
-    }
+    manifest = {ds: _ids(root / d) for ds, d in spec.get("manifest", {}).items()}
     return Data(group, manifest, exclude)
 
 
@@ -101,12 +121,14 @@ def per_image(runs: Path, data: Data, arm: str, it: int, ds: str) -> dict[str, d
     if not rows:
         return {}
     ids = [r["id"] for r in rows]
-    want = data.manifest.get(ds)
-    if len(ids) != len(set(ids)) or (want is not None and set(ids) != want):
-        n_want = "none" if want is None else len(want)
+    if (want := data.manifest.get(ds)) is None:
+        sys.exit(f"{ds}: no manifest (<dataset>_gt folder) to check the arms against")
+    if len(ids) != len(set(ids)) or set(ids) != want:
         sys.exit(
-            f"{arm} {ds} @{it}: {len(ids)} rows, {len(set(ids))} unique, manifest {n_want}"
+            f"{arm} {ds} @{it}: {len(ids)} rows, {len(set(ids))} unique, manifest {len(want)}"
         )
+    if missing := [m for m in SIGN if m not in rows[0]]:
+        sys.exit(f"{arm} {ds} @{it}: gate incomplete, no {', '.join(missing)}")
     if not all(math.isfinite(r[m]) for r in rows for m in SIGN if m in r):
         sys.exit(f"{arm} {ds} @{it}: non-finite metric")
     return {r["id"]: r for r in rows if r["id"] not in data.exclude}
@@ -130,11 +152,19 @@ def paired(a: dict, b: dict, data: Data, metrics=tuple(SIGN)) -> dict:
     if set(a) != set(b):
         sys.exit("paired: the arms scored different image sets")
     ids = sorted(a)
-    groups = np.array([str(data.group.get(i, f"own:{i}")) for i in ids])
+    if data.group is None:
+        groups = np.array(ids)
+    elif missing := [i for i in ids if i not in data.group]:
+        sys.exit(
+            f"paired: {len(missing)} images without a source group, e.g. {missing[0]}"
+        )
+    else:
+        groups = np.array([str(data.group[i]) for i in ids])
+    if len(set(groups)) < 2:
+        sys.exit(f"paired: {len(set(groups))} source group(s), a CI needs at least 2")
     out: dict = {"n": len(ids), "groups": len(set(groups))}
     for m in metrics:
-        if m in a[ids[0]]:
-            out[m] = bootstrap(np.array([a[i][m] - b[i][m] for i in ids]), groups)
+        out[m] = bootstrap(np.array([a[i][m] - b[i][m] for i in ids]), groups)
     return out
 
 
@@ -206,8 +236,13 @@ def main(argv=None) -> int:
         "--iter", type=int, default=8000, help="update compared (default 8000)"
     )
     ap.add_argument("--dataset", default="dev", help="validation dataset (default dev)")
+    ap.add_argument(
+        "--independent",
+        action="store_true",
+        help="no source groups: every image its own group (only for unrelated images)",
+    )
     a = ap.parse_args(argv)
-    data = load_data(a.data)
+    data = load_data(a.data, independent=a.independent)
 
     def rows(arm: str) -> dict:
         return per_image(a.runs, data, arm, a.iter, a.dataset)
@@ -215,7 +250,10 @@ def main(argv=None) -> int:
     ref = rows(a.ref)
     if not ref:
         sys.exit(f"{a.ref}: no {a.dataset} rows at {a.iter}")
-    floor = floors(ref, rows(a.seed_ref) if a.seed_ref else None)
+    seed = rows(a.seed_ref) if a.seed_ref else None
+    if a.seed_ref and not seed:
+        sys.exit(f"{a.seed_ref}: no {a.dataset} rows at {a.iter} for the seed spread")
+    floor = floors(ref, seed)
     print(f"## {a.dataset} at {a.iter}: means over the {len(ref)} compared images")
     for arm in dict.fromkeys([a.ref, *([a.seed_ref] if a.seed_ref else []), *a.arms]):
         if not (r := rows(arm)):
