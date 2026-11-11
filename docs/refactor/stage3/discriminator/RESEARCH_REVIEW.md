@@ -8,9 +8,9 @@ Date 2026-11-11, code at `master` b622affe. Read-only review: no code changed, n
 |---|---|
 | DR-01 | done another way (94c36bde): every r3gan conv takes its input gradient as a `conv_transpose2d`. The reshape of the FIR alone would have kept its wasted weight gradient and an NHWC copy, and left the grouped 3x3 and the 1x1 convs slow. One regularised D update 647 -> 35 ms; the R3GAN recipe 732 -> 122.5 ms/update |
 | DR-02 | done (59a6fbc4): GAN health keys on log updates, hooks inside the one real backward |
-| DR-03 | 8k screen ran (U_unet01, M_metagan003 vs B0 and A1) <<PENDING: verdicts>> |
-| DR-04 | 8k screen ran (R3_patch_g1 vs A1 vs B0) <<PENDING: verdicts>> |
-| DR-05 | <<PENDING: W_wavelet0 verdict, or "not run (dropped by the deadline)">> |
+| DR-03 | 8k screen: unet@0.1 TIE vs B0 (LPIPS -0.0080, 4x the floor, TOPIQ/DISTS inside; WIN vs A1), but its D is clipped in 100 % of the updates (grad_norm_d ~45) with 31 late G-gradient spike windows: an LPIPS lead confounded by the D type and weight changing together; metagan@0.03 LOSS vs B0 (LPIPS +0.0027, 1.4x the floor), WIN vs A1. Second unet seed: WIN vs its seed-matched B0s2 (LPIPS -0.0079, DISTS -0.0030), its D again clipped 100 % |
+| DR-04 | 8k screen: R3_patch_g1 LOSS vs B0 on DISTS +0.0017 (1.1x the floor, marginal; PSNR -0.81 is not a gate metric), TIE vs A1 (LPIPS better); 6 late G-gradient spike windows (max 2.9), the fewest of the changed-D arms (B0: 0); not a verdict on R6 (`../r3gan/RESULTS.md`) |
+| DR-05 | 8k screen: `wavelet_init = 0` LOSS vs B0 (PSNR -0.11, LPIPS +0.0032, DISTS +0.0032); the template's 80000 stays |
 | DR-07 | done (cd3b0adb): refused at model build. Correction: the run did not crash before; `config.py` already refused dunet by name and ea2fpn has BatchNorm (refused at the first D call) |
 | DR-06, DR-08 to DR-11 | deferred |
 

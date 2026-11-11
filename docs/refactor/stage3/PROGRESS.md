@@ -450,9 +450,15 @@ and 14:41 (the queue tail, the LDL flip held). Source log: `experiments/s9_ab/NO
   computed by hooks inside the one real backward (the first design crashed with a compiled D); bitwise parity of
   training with the log on/off. 2-rank gloo DDP tests: r3gan + R1/R2 + the log (c10b89c5), `save_best` (1951d9f3).
 - **A/B harness** in the repository (`scripts/ab/`, c03c44f0; 16 review findings fixed in f2f7d917).
-- **8k screens** (R5 protocol, gate in `../stage2/DECISIONS.md` 14-16): pair 1 B0/B0s2 gave the floors; B1
-  (`"spike"` clip) TIE, default unchanged; B2 (no LDL) TIE, flip held until B2s2. <<PENDING: R3_patch_g1, A1_nogan,
-  U_unet01, M_metagan003, W_wavelet0, B2s2 verdicts; the LDL flip decision>>
-- **Not done / pending:** <<PENDING: the session-9 full suite>>; the CI workflow has not run; compile parity on
-  the A/B data (B0 compiled) moved to a later session.
+- **8k screens** (R5 protocol, gate in `../stage2/DECISIONS.md` 14-16): pair 1 B0/B0s2 gave the floors; B1 (`"spike"`
+  clip) TIE, default unchanged; B2 (no LDL) TIE, but its seed replicate B2s2 is a LOSS vs B0s2 (LPIPS +0.0029, 1.5x
+  the floor) with a `grad_norm_g` spike of 248: the flip is not merged (branch `held/ldl-flip`). Phase 2 vs B0:
+  R3_patch_g1 LOSS (DISTS +0.0017, marginal; PSNR -0.81; TIE vs A1), A1_nogan LOSS (the template D helps), U_unet01
+  TIE (LPIPS -0.0080; its D clipped 100 %), M_metagan003 LOSS, W_wavelet0 LOSS (`../stage2/DECISIONS.md` 15, 17). Last
+  slot (Fable consult 16:15): B0_compile and U_unet01s2 concurrently: B0_compile TIE vs B0 (all four deltas inside the
+  floors: no detectable quality difference at 8k), U_unet01s2 WIN vs its seed-matched B0s2 (LPIPS -0.0079, DISTS
+  -0.0030), so unet@0.1's LPIPS lead replicates (`../stage2/DECISIONS.md` 17-18).
+- **Full suite** at 100a5881 (CPU + CUDA, 10 min 23 s): 2647 passed, 0 failed, 199 skipped, 5 xfailed.
+- **Not done / pending:** the CI workflow has not run; `compile = true` in the CNN templates waits for the owner
+  (`../stage2/DECISIONS.md` 18).
 

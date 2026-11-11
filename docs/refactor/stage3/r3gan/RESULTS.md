@@ -115,6 +115,23 @@ R1/R2 gamma 1 every update, w 0.3), `A1_nogan` (no D), B0 (template; run earlier
 clipped in 95-100 % of the updates (max-norm 1.0), D in 4-75 %, `out_d_acc` 0.53-1.00, `grad_sr_ratio` ~0.01-0.03
 (the adversarial gradient on sr is 1-3 % of the other terms'), raw r1/r2 ~0.01-0.02; dev at 2k
 29.22/0.651/0.174/0.163 (PSNR/TOPIQ/LPIPS/DISTS).
-<<PENDING: 8k dev means and paired verdicts R3 vs B0, R3 vs A1, A1 vs B0 (scripts/ab/analyze.py, floors from
-B0/B0s2); clip and health summary over 8k; what it means for R6>>
+Result at 8k, dev means PSNR/TOPIQ/LPIPS/DISTS over 219 tiles: B0 30.407/0.6548/0.1577/0.1493, A1
+30.799/0.6460/0.1654/0.1511, R3 29.595/0.6522/0.1586/0.1510. Paired, 95 % CI over 211 source groups
+(`scripts/ab/analyze.py`; floors PSNR 0.05, TOPIQ 0.0065, LPIPS 0.0019, DISTS 0.0015 from B0/B0s2):
+
+| pair | verdict | PSNR | TOPIQ | LPIPS | DISTS |
+|---|---|---|---|---|---|
+| R3 vs B0 | LOSS | -0.81 [-0.87, -0.76] | -0.0026 (inside) | +0.0009 (inside) | +0.0017 [+0.0004, +0.0030], 1.1x the floor |
+| R3 vs A1 | TIE | -1.20 | +0.0062 (inside) | -0.0067 [-0.0109, -0.0027] better | -0.0001 (inside) |
+| A1 vs B0 | LOSS | +0.39 | -0.0088 worse | +0.0077 worse | +0.0018 worse |
+
+R3 vs A1 uses floors of 1 % of A1 (no seed pair for A1). Health over updates 2k-8k (6k-8k): G clipped in 8.0 % (3.8 %)
+of the updates, D in 19 % (20 %), `out_d_acc` 0.87 (0.90), `grad_sr_ratio` 0.030 (0.030); `grad_norm_g` windows above
+1.2 after 2k: 6, max 2.9 (B0 0, max 0.68; B0s2, B2_noldl, B2s2 4-6, max 3.9-248; the D-variant screens U, M, W 11-31,
+max 18-23). The arms ran two at a time, so their wall times are no cost measurement (section 4 has the bench).
+
+Reading for R6: from the L1 pretrain, 8k updates of the R3GAN recipe lose 0.8 dB PSNR without a perceptual gain
+over the template; its D wins clearly (`out_d_acc` ~0.9) yet adds only LPIPS over no D. One seed, a short
+horizon: this neither cancels nor promotes R6. Round 1 keeps A0 and A1 and should read the PSNR drift and
+`out_d_acc` over 20k.
 

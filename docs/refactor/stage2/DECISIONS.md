@@ -65,7 +65,7 @@ a WIN on a GAN default needs a second seed and a >= 20k run before it flips (Fab
 
 14. `grad_clip = true` stays the template default (B1, `grad_clip = "spike"`): TIE at 6k and 8k (8k paired: PSNR
     +0.0008, TOPIQ -0.0007, LPIPS +0.0015 [+0.0011, +0.0020] under its 0.0019 floor, DISTS 0.0000). The fixed clip
-    is near idle in this regime (clipped_g ~2 %, clipped_d 0 % after 300 updates), so the screen cannot separate
+    is near idle in this regime (clipped_g ~2 %, clipped_d ~2-4 % after 300 updates), so the screen cannot separate
     the two; per the pre-agreed rule no clip arm flips today, a WIN would have gone to a second seed and the
     >= 20k list. Where clipping is active (R3GAN: G clipped in 95-100 % of the first 2k updates) the question stays
     open (`../STATUS.md`, "Needs the Linux machine" item 7).
@@ -76,10 +76,33 @@ a WIN on a GAN default needs a second seed and a >= 20k run before it flips (Fab
     B0 0, B0s2 4 (max 3.87), B2 6 (max 10.61)). Criterion fixed before the run: the seed replicate B2s2 is clean
     with at most 4 such windows and a max <= 7.7, then the flip (prepared as bd54d64b: 85 templates, Studio
     presets, training guide) merges as provisional; else LDL stays and the >= 20k list records "metrics TIE, more
-    late G-gradient spikes without LDL". <<PENDING: B2s2 windows / max, verdict, the decision and its commit>>
+    late G-gradient spikes without LDL". Result: B2s2 had 4 windows but a max of 248.2 (update 4400; 15.3 at
+    4600), and against its seed-matched B0s2 it is a LOSS (PSNR +0.26, TOPIQ -0.0040, LPIPS +0.0029 [+0.0018,
+    +0.0042], DISTS +0.0005). The criterion fails: LDL stays in the templates, the flip is not merged (kept as
+    branch `held/ldl-flip`, bd54d64b), and L-07 goes to the >= 20k list with "seed 7 TIE, seed 2 LOSS on LPIPS,
+    G-gradient spikes up to 248 without LDL".
 16. B3 (`fdl_opt.fp32_backbone = false`) was not screened: it is not faster on this setup (116.5 vs 109.9
     ms/update; it saves ~160 MiB), so a quality tie could not flip the default. The docs that promised "~2x faster
     FDL" now give the measurement.
+17. GAN screens at 8k (A-04, research DR-03/04/05), paired vs B0 with B0/B0s2 floors: A1 (no D) LOSS (TOPIQ -0.0088,
+    LPIPS +0.0077, DISTS +0.0018; PSNR +0.39), so the template D helps; metagan@0.03 LOSS (LPIPS +0.0027; WIN vs A1);
+    unet@0.1 TIE (LPIPS -0.0080, 4x the floor; TOPIQ -0.0049 and DISTS -0.0010 inside; WIN vs A1) with its D clipped
+    in 100 % of the updates (grad_norm_d ~45) and 31 late G-gradient spike windows (max 20.7); R3GAN (`R3_patch_g1`)
+    LOSS on DISTS +0.0017 alone (PSNR -0.81 is not a gate metric; TIE vs A1); `wavelet_init = 0` LOSS (PSNR -0.11,
+    LPIPS +0.0032, DISTS +0.0032). No default changes. One seed each (unet two, below), 8k from the L1 pretrain.
+    unet@0.1's LPIPS lead is confounded (D type and weight changed together; its D lives on the clip, which the
+    evidence rules do not count as stability): a second seed ran in the session's last slot: U_unet01s2 is a WIN vs
+    its seed-matched B0s2 (LPIPS -0.0079, DISTS -0.0030, TOPIQ inside, PSNR -0.05), so the lead replicates; its D was
+    again clipped in 100 % of the updates (grad_norm_d ~31), while its late G spikes were few (5 windows, max 3.1:
+    seed 7's 31 windows are no trait of the arm). It is the leading candidate for the >= 20k round (A-04), after its D
+    gradient scale is understood; no default changes before that A/B. With one seed pair behind the floors, deltas
+    under 2x the floor are marginal: R3 DISTS 1.1x, metagan@0.03 LPIPS 1.4x, B2s2 LPIPS 1.5x, `wavelet_init = 0` LPIPS
+    1.7x. The vs-A1 gate has no seed pair (floors 1 % of A1) and both its WINs lean on a marginal second metric:
+    metagan@0.03 (LPIPS 2.9x, TOPIQ 1.06x, DISTS 1.13x), unet@0.1 (LPIPS 9x, DISTS 1.9x).
+18. `compile = true` on the template (realplksr + metagan; B0_compile vs B0, same seed, 8k): TIE with all four deltas
+    inside the floors (PSNR -0.029, TOPIQ -0.0008, LPIPS +0.0012, DISTS +0.0002): no detectable quality difference at
+    8k. That is not parity: the compile parity tests stay the gate. Turning it on in the CNN templates (86.7 vs
+    109.9 ms/update, -21 %; the first update compiles for ~162 s) is the owner's call.
 
 ## Kept opt-in pending an A/B
 `tight_canvas` (OTF), `aug_antialias`, CRAFT `pad_extra_window = false`, span_fast `fan_in_init`, `"spike"`
