@@ -21,7 +21,7 @@ from neosr.data.augmentations import apply_augment
 from neosr.data.data_util import image_id
 from neosr.losses import build_losses
 from neosr.losses.base import Context, restoring_clamp
-from neosr.losses.gan_loss import gan_d_loss
+from neosr.losses.gan_loss import gan_d_loss, gan_loss
 from neosr.models.base import base, build_optimizer, build_schedulers
 from neosr.models.checkpoint import cpu_copy, load_weights, read_weights
 from neosr.models.phase import (
@@ -53,6 +53,49 @@ def step_lr(group: dict[str, Any]) -> float:
     `k` count their applied steps); a trainer LinearLR warmup is already in `lr`."""
     w, n = group.get("warmup_steps") or 0, group.get("step", group.get("k", 0))
     return group["lr"] * min(1.0, n / w) if w else group["lr"]
+
+
+HEALTH = frozenset({"grad_sr_gan", "grad_sr_ratio", "out_d_acc", "out_d_abs"})
+
+
+class GanHealth:
+    """GAN health of one log update (DR-02), read inside the update's own backward: no extra
+    forward, backward or graph, no RNG draw, no host sync. gan_loss runs its term on `adv(sr)`, an
+    alias of sr whose hook sees the adversarial gradient; sr's own hook sees the total. Both carry
+    the loss scale and 1/accumulate, divided out on the device. grad_sr_gan = ||d(w * l_g_gan)/d sr||
+    (weight and ramp as applied; norm over the micro-batch); grad_sr_ratio = grad_sr_gan /
+    ||total - adv|| (the other G terms; resolution of sr's dtype; absent without another active
+    term). gan_d_loss adds out_d_acc / out_d_abs. All four are LossMeter diagnostics (`note`):
+    non-finite reads as nan/inf and never stops training."""
+
+    def __init__(self, sr: Tensor, logs: dict, phase: Phase, others: bool) -> None:
+        # holds the logs dict, not the Context: no reference cycle through sr's hooks
+        self.logs, self.phase, self.others = logs, phase, others
+        self.grad: Tensor | None = None
+        if sr.requires_grad:
+            sr.register_hook(self._total)
+
+    def adv(self, sr: Tensor) -> Tensor:
+        if not sr.requires_grad:
+            return sr
+        alias = sr.view_as(sr)
+        alias.register_hook(self._adv)
+        return alias
+
+    def _adv(self, grad: Tensor) -> None:  # one per gan_loss slot: summed, out of place
+        self.grad = grad if self.grad is None else self.grad + grad
+
+    def _total(self, grad: Tensor) -> None:
+        if (adv := self.grad) is None:
+            return
+        self.grad, p = None, self.phase
+        # the fp16 scale as a device tensor (get_scale() would sync); its unscale_ comes later
+        scale = p.scaler._scale if p.scaler.is_enabled() else 1.0
+        a = adv.detach().float()
+        n = a.norm()
+        self.logs["grad_sr_gan"] = n / (scale * p.inv_accum)
+        if self.others:
+            self.logs["grad_sr_ratio"] = n / (grad.detach().float() - a).norm()
 
 
 class Buffers:
@@ -148,6 +191,9 @@ class image(base):
             self.phases["net_d"] = self._phase("d", self.net_d, d_terms, amp)
         self.g, self.d = self.phases["net_g"], self.phases.get("net_d")
         self.meter = LossMeter()
+        # train.py's log cadence: GAN health is measured on the updates it logs (not a stop's)
+        self.log_every = (self.opt.get("logger") or {}).get("print_freq", 100)
+        self.total_iter = total_iter(self.opt)
         # "restore" (default, restoring_clamp); true: legacy hard [1/255, 1]; false: none
         self.clamp = tr.get("clamp", "restore")
         self.aug, self.aug_prob = ds.get("augmentation"), ds.get("aug_prob")
@@ -335,15 +381,29 @@ class image(base):
                     net_d=self.net_d_fwd,
                     net_d_adv=self.net_d_adv,
                 )
+                # GAN health on train.py's log updates: host ints, no sync, every rank agrees
+                log = self.d is not None and (
+                    it % self.log_every == 0 or it >= self.total_iter
+                )
+                others = any(
+                    t.active(it) and not isinstance(t, gan_loss) for t in self.g.terms
+                )
+                ctx.health = GanHealth(sr, ctx.logs, self.g, others) if log else None  # type: ignore[attr-defined]
                 self.g.backward(ctx)
-            g_logs = dict(ctx.logs)
+            g_logs = {k: v for k, v in ctx.logs.items() if k not in HEALTH}
             self.meter.add(g_logs, "g")
             if self.d is not None:
                 with no_sync(self.net_d_fwd, boundary):
                     self.d.backward(ctx)
                 self.meter.add(
-                    {k: v for k, v in ctx.logs.items() if k not in g_logs}, "d"
+                    {
+                        k: v
+                        for k, v in ctx.logs.items()
+                        if k not in g_logs and k not in HEALTH
+                    },
+                    "d",
                 )
+            self.meter.note({k: v for k, v in ctx.logs.items() if k in HEALTH})
         else:  # every phase idle: no forward (compute, RNG, buffer writes); the clocks still run
             for p in self.phases.values():
                 p.idle = True

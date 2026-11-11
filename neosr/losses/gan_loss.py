@@ -157,12 +157,15 @@ class gan_loss(Loss):
     def evaluate(self, ctx: Context) -> Tensor:
         # train-mode D without a DDP reducer; the trainer's backward(inputs=G params) keeps D's grads out
         d, it = ctx.net_d_adv, ctx.it
+        # log updates: an alias of sr whose hook sees this term's gradient (image.GanHealth)
+        h = getattr(ctx, "health", None)
+        sr = ctx.sr if h is None else h.adv(ctx.sr)
         if self.rp:
             with torch.no_grad():  # the pair's real side is a constant for G
                 real = d(self.adv(ctx.gt, it))  # type: ignore[reportOptionalCall]
-            fake = d(self.adv(ctx.sr, it))  # type: ignore[reportOptionalCall]
+            fake = d(self.adv(sr, it))  # type: ignore[reportOptionalCall]
             return F.softplus(real.float() - fake.float()).mean()
-        fake = d(self.adv(ctx.sr, it))  # type: ignore[reportOptionalCall]
+        fake = d(self.adv(sr, it))  # type: ignore[reportOptionalCall]
         return -fake.float().mean() if self.hinge else self.term(fake, real=True)
 
     def expand(self) -> list[Loss]:
@@ -265,6 +268,23 @@ class gan_d_loss(Loss):
                 )
             value, logs = l_real + l_fake, {"l_d_real": l_real, "l_d_fake": l_fake}
         logs |= {"out_d_real": real.mean(), "out_d_fake": fake.mean()}
+        # GAN health, D side, on log updates only (image.GanHealth): z is D's score signed so that
+        # z > 0 is a correct call. rpgan: the pair's real - fake; otherwise s * (real - t) and
+        # s * (t - fake) with t the decision threshold (0 for the logits of bce/hinge, the labels'
+        # midpoint for the regressed scores of mse/huber) and s = +-1 the labels' orientation
+        if getattr(ctx, "health", None) is not None:
+            if self.g.rp:
+                z = (real.float() - fake.float()).flatten()
+            else:
+                (lo, hi), s = self.g.labels, 1.0
+                if hi < lo:  # inverted labels: D learns real low, fake high
+                    s = -1.0
+                lsq = not isinstance(self.g.crit, nn.BCEWithLogitsLoss | None)
+                t = (lo + hi) / 2 if lsq else 0.0
+                r, f = real.float().flatten(), fake.float().flatten()
+                z = torch.cat([r - t, t - f]) * s
+            acc, mag = (z > 0).float().mean(), z.abs().mean()
+            logs |= {"out_d_acc": acc, "out_d_abs": mag}
         for key, v in logs.items():
             ctx.log(key, v)
         return value

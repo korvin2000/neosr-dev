@@ -180,6 +180,22 @@ target = "lq"         # reference: "gt" (default) or "lq" = bicubic-upscaled lq 
   `grad_norm_d` (before clipping, successful updates only), `clipped_g`/`clipped_d` (share of clipped updates),
   `skipped_g`/`skipped_d`, and `nonfinite_<key>` (count of left-out non-finite values) when there were any. The
   performance field also shows the share of the window spent waiting for training batches (`data 12%`).
+- **GAN health** (with a discriminator): measured only in the update that is logged (every `print_freq`-th and
+  the last; a stop request's final log has none), per micro-batch and rank-local, then averaged over that
+  update's micro-batches, a skipped update included; no extra host sync. Training stays bitwise the same with the
+  log on or off: verified on the tested configurations (CPU eager, a compiled D under CPU inductor, CUDA bf16 for
+  the no-sync check); DDP is unverified. `grad_sr_gan` =
+  `|d(w * l_g_gan)/d sr|` (the adversarial terms as applied, weight and ramp included, every `gan_loss` slot
+  summed; norm over the micro-batch),
+  `grad_sr_ratio` = `grad_sr_gan / |d(other G terms)/d sr|` (absent without another term; >> 1: the adversarial
+  term dominates what G is told to change), `out_d_acc` = D's share of correct calls in its own update (real
+  above, fake below the threshold, the other way round for inverted labels: 0 for bce/hinge logits, the labels'
+  midpoint for mse/huber; rpgan: real > fake per pair) and `out_d_abs` = the mean distance of D's scores from that
+  threshold (rpgan: mean `|real - fake|`). `out_d_acc` near 1 with a growing `out_d_abs` is a D winning outright;
+  near 0.5 with a small one, a D that has stopped separating. The gradients are read by hooks in the update's own
+  (loss-scaled) backward, so fp16 measures like fp32; the other terms' gradient is total minus adversarial, so a
+  ratio far above 1 is resolved only to sr's dtype. They are diagnostics: a non-finite value shows as nan/inf
+  and never stops training.
 - **Which term drives the generator?** `python scripts/term_grads.py -opt config.toml [--net_g net_g.pth]
   [--batches 4]` prints, for a few training batches of the config, each generator term's gradient norm, its share
   of the summed squared norms and its cosine with the total gradient. It runs offline (no optimizer step, nothing

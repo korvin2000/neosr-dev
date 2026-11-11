@@ -296,7 +296,7 @@ Typical combinations seen in the repo:
 | `options/aether/*.toml` (L1 pretrain, no GAN) | `L1Loss` 1.0, `reduction = "mean"` only |
 | Upscale-Hub example log (older) | L1 pixel + VGG perceptual + color + GAN |
 
-Log keys (window means): `l_g_<slot>`, `l_g_total`, `l_d_total`, `l_d_real`, `l_d_fake`, `out_d_real`, `out_d_fake`, `grad_norm_g/d`, `skipped_g/d`.
+Log keys (window means): `l_g_<slot>`, `l_g_total`, `l_d_total`, `l_d_real`, `l_d_fake`, `out_d_real`, `out_d_fake`, `grad_norm_g/d`, `skipped_g/d`; GAN health on the logged update only: `grad_sr_gan`, `grad_sr_ratio`, `out_d_acc`, `out_d_abs` (readme, "GAN health").
 
 ## 8. Model types and what the trainer reads
 

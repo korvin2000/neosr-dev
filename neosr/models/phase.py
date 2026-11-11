@@ -412,16 +412,23 @@ class LossMeter:
     (`commit`), tagged with the phase whose step decides about them. A non-finite value is left out
     of the mean and counted as `nonfinite_<key>`; in a skipped step that is all (ST-02: the step was
     already refused). In an applied step the gradients were finite, so the objective itself is
-    broken: read() raises (T1 D15)."""
+    broken: read() raises (T1 D15). Diagnostics (`note`) are plain means over their own adds:
+    nothing is masked, a non-finite value reads as nan/inf, and it never raises."""
 
     def __init__(self) -> None:
         self.pending: list[tuple[str | None, Mapping[str, Tensor]]] = []
         # (keys, applied) -> [device sums, device finite counts, host number of adds]
         self.groups: dict[tuple[tuple[str, ...], bool], list] = {}
+        self.diag: dict[str, list] = {}  # key -> [device sum, host number of adds]
 
     def add(self, logs: Mapping[str, Tensor], phase: str | None = None) -> None:
         if logs:
             self.pending.append((phase, logs))
+
+    def note(self, logs: Mapping[str, Tensor]) -> None:
+        for k, v in logs.items():
+            d = self.diag.get(k)
+            self.diag[k] = [v.float(), 1] if d is None else [d[0] + v.float(), d[1] + 1]
 
     def commit(self, applied: bool | Mapping[str | None, bool]) -> None:
         """At an update boundary: was the step of each value's phase applied (a bool: of all)?"""
@@ -441,9 +448,12 @@ class LossMeter:
 
     def read(self, reset: bool = True) -> dict[str, float]:
         self.commit(applied=True)  # direct use without commit: strict
-        if not self.groups:
+        if not (self.groups or self.diag):
             return {}
-        vec = torch.cat([t for g in self.groups.values() for t in g[:2]])
+        parts = [t for g in self.groups.values() for t in g[:2]]
+        if self.diag:
+            parts.append(torch.stack([d[0] for d in self.diag.values()]))
+        vec = torch.cat(parts)
         world = 1
         if dist.is_initialized():
             dist.all_reduce(vec)  # SUM; collective: call on all ranks
@@ -462,9 +472,14 @@ class LossMeter:
                 t[0], t[1], t[2] = t[0] + s, t[1] + c, t[2] + bad
                 t[3] += bad if applied else 0.0
             i += 2 * k
+        diag = {
+            k: s / (n * world)
+            for (k, (_, n)), s in zip(self.diag.items(), flat[i:], strict=True)
+        }
         if reset:
             self.groups.clear()
-        out = {k: s / c for k, (s, c, _, _) in tot.items() if c}
+            self.diag.clear()
+        out = {k: s / c for k, (s, c, _, _) in tot.items() if c} | diag
         out |= {f"nonfinite_{k}": b for k, (_, _, b, _) in tot.items() if b}
         if broken := [k for k, t in tot.items() if t[3]]:
             raise FloatingPointError(
