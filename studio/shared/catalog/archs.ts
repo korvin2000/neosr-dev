@@ -33,7 +33,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'qat'],
     speed: 'medium',
-    onnx: true,
     note: 'QAT-capable; scales 2, 3, 4, 8',
   },
   // (?) sizeClass estimated: not in architecture_categories.json
@@ -60,7 +59,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'qat'],
     speed: 'medium',
-    onnx: true,
     note: 'QAT-capable; scales 2, 3, 4, 8',
   },
   // (?) sizeClass estimated: not in architecture_categories.json
@@ -87,7 +85,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'qat'],
     speed: 'medium',
-    onnx: true,
     note: 'QAT-capable; scales 2, 3, 4, 8',
   },
   // (?) sizeClass estimated: not in architecture_categories.json
@@ -114,7 +111,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'qat'],
     speed: 'medium',
-    onnx: true,
     note: 'QAT-capable; scales 2, 3, 4, 8',
   },
   // (?) sizeClass estimated: not in architecture_categories.json
@@ -140,7 +136,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'medium',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -165,7 +160,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'medium',
-    onnx: true,
   },
   {
     type: 'atd',
@@ -189,7 +183,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer', 'attention'],
     speed: 'slow',
-    onnx: true,
     note: 'high VRAM',
   },
   {
@@ -214,7 +207,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer', 'attention'],
     speed: 'slow',
-    onnx: true,
     note: 'high VRAM',
   },
   // (?) sizeClass estimated: not in architecture_categories.json
@@ -236,7 +228,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer', 'attention'],
     speed: 'medium',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -257,7 +248,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv'],
     speed: 'medium',
-    onnx: true,
   },
   {
     type: 'compact',
@@ -275,7 +265,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv'],
     speed: 'fast',
-    onnx: true,
     note: 'beginner-friendly, fast, stable',
   },
   {
@@ -299,7 +288,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'medium',
-    onnx: false,
     note: 'not ONNX-exportable',
   },
   // sizeClass from the realcugan entry in architecture_categories.json
@@ -318,7 +306,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv'],
     speed: 'medium',
-    onnx: true,
     note: 'x1 not supported',
   },
   {
@@ -340,7 +327,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'slow',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -362,7 +348,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'slow',
-    onnx: true,
   },
   {
     type: 'dat_2',
@@ -383,7 +368,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'slow',
-    onnx: true,
   },
   // (?) windowSize 8 is the code default split_size [8, 8]; the reference lists no window value
   // (?) sizeClass estimated: not in architecture_categories.json
@@ -408,7 +392,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'slow',
-    onnx: true,
   },
   {
     type: 'dctlsa',
@@ -426,7 +409,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'attention'],
     speed: 'medium',
-    onnx: true,
   },
   // (?) sizeClass estimated from the esrgan entries; scales read from desrgan_arch.py (x1, x2 and x4 branches)
   {
@@ -445,7 +427,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'legacy'],
     speed: 'medium',
-    onnx: true,
     note: 'x1, x2, x4 only',
   },
   // sizeClass from the ditn_real entry
@@ -468,7 +449,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'medium',
-    onnx: false,
     note: 'not ONNX-exportable',
   },
   {
@@ -494,7 +474,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'slow',
-    onnx: true,
     note: 'high VRAM',
   },
   {
@@ -520,7 +499,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'slow',
-    onnx: true,
     note: 'high VRAM',
   },
   {
@@ -546,7 +524,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'slow',
-    onnx: true,
     note: 'high VRAM',
   },
   // (?) sizeClass estimated: not in architecture_categories.json
@@ -573,7 +550,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'medium',
-    onnx: true,
     note: 'high VRAM',
   },
   // sizeClass from the eimn_l entry (identical configuration)
@@ -595,7 +571,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'attention'],
     speed: 'medium',
-    onnx: true,
   },
   {
     type: 'eimn_l',
@@ -614,7 +589,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'attention'],
     speed: 'medium',
-    onnx: true,
   },
   {
     type: 'eimn_a',
@@ -633,7 +607,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'attention'],
     speed: 'medium',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -661,7 +634,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer', 'attention'],
     speed: 'medium',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -689,7 +661,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer', 'attention'],
     speed: 'medium',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -717,7 +688,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer', 'attention'],
     speed: 'medium',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -745,7 +715,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer', 'attention'],
     speed: 'medium',
-    onnx: true,
   },
   {
     type: 'esrgan',
@@ -763,7 +732,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'legacy'],
     speed: 'medium',
-    onnx: true,
     note: 'x1, x2, x4 only',
   },
   {
@@ -787,7 +755,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['attention'],
     speed: 'medium',
-    onnx: true,
   },
   {
     type: 'metaflexnet',
@@ -810,7 +777,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['attention'],
     speed: 'medium',
-    onnx: true,
   },
   // (?) windowSize 32 is the code default window_size [8, 32]; the reference lists no window value
   // (?) sizeClass estimated: not in architecture_categories.json
@@ -832,7 +798,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'medium',
-    onnx: true,
   },
   // (?) windowSize 32 is the code default window_size [8, 32]; the reference lists no window value
   // (?) sizeClass estimated: not in architecture_categories.json
@@ -854,7 +819,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'slow',
-    onnx: true,
   },
   // (?) windowSize 32 is the code default window_size [8, 32]; the reference lists no window value
   // (?) sizeClass estimated: not in architecture_categories.json
@@ -876,7 +840,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'slow',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -893,7 +856,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'attention'],
     speed: 'medium',
-    onnx: true,
   },
   {
     type: 'hat_s',
@@ -916,7 +878,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer', 'attention'],
     speed: 'slow',
-    onnx: true,
     note: 'high VRAM',
   },
   {
@@ -940,7 +901,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer', 'attention'],
     speed: 'slow',
-    onnx: true,
     note: 'high VRAM',
   },
   {
@@ -964,7 +924,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer', 'attention'],
     speed: 'slow',
-    onnx: true,
     note: 'high VRAM',
   },
   {
@@ -987,7 +946,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'medium',
-    onnx: true,
   },
   // (?) sizeClass conservative: the reference notes a train forward needs over 20 GiB
   {
@@ -1010,7 +968,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'slow',
-    onnx: true,
     note: 'very high VRAM',
   },
   // (?) sizeClass conservative: the reference notes a forward needs over 9.6 GiB
@@ -1034,7 +991,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'slow',
-    onnx: true,
     note: 'very high VRAM',
   },
   // (?) sizeClass estimated: not in architecture_categories.json
@@ -1058,7 +1014,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer', 'attention'],
     speed: 'slow',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -1081,7 +1036,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer', 'attention'],
     speed: 'slow',
-    onnx: true,
   },
   // (?) embed_dim 180 and window 16 for hma_large are read from hma_arch.py; the reference lists only img_size and groups
   // (?) sizeClass estimated: not in architecture_categories.json
@@ -1105,7 +1059,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer', 'attention'],
     speed: 'slow',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -1125,7 +1078,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv'],
     speed: 'medium',
-    onnx: true,
   },
   // sizeClass from the lmlt_base entry
   {
@@ -1146,7 +1098,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer', 'attention'],
     speed: 'medium',
-    onnx: true,
   },
   {
     type: 'lmlt_tiny',
@@ -1166,7 +1117,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer', 'attention'],
     speed: 'medium',
-    onnx: true,
   },
   {
     type: 'lmlt_large',
@@ -1186,7 +1136,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer', 'attention'],
     speed: 'medium',
-    onnx: true,
   },
   {
     type: 'man',
@@ -1204,7 +1153,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'attention'],
     speed: 'medium',
-    onnx: true,
   },
   {
     type: 'man_tiny',
@@ -1222,7 +1170,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'attention'],
     speed: 'medium',
-    onnx: true,
   },
   {
     type: 'man_light',
@@ -1240,7 +1187,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'attention'],
     speed: 'medium',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -1263,7 +1209,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer', 'testing'],
     speed: 'slow',
-    onnx: true,
     note: 'under testing, high VRAM',
   },
   // (?) sizeClass estimated: not in architecture_categories.json
@@ -1288,7 +1233,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer', 'testing'],
     speed: 'slow',
-    onnx: true,
     note: 'under testing',
   },
   // (?) sizeClass estimated: not in architecture_categories.json
@@ -1313,7 +1257,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer', 'testing'],
     speed: 'medium',
-    onnx: true,
     note: 'under testing',
   },
   // (?) sizeClass from the moesr2 entry; moesr itself is not listed
@@ -1336,7 +1279,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv'],
     speed: 'medium',
-    onnx: true,
   },
   // (?) sizeClass from the mosr entry; mosrv2 itself is not listed
   {
@@ -1357,7 +1299,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv'],
     speed: 'medium',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -1375,7 +1316,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'attention'],
     speed: 'medium',
-    onnx: true,
   },
   // sizeClass from readme.md; (?) speed estimated. No train template: templatePatch/templateLr follow train_realplksr.toml
   {
@@ -1396,7 +1336,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv'],
     speed: 'medium',
-    onnx: true,
     note: '×1 only',
   },
   // sizeClass from readme.md; (?) speed estimated
@@ -1418,7 +1357,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv'],
     speed: 'slow',
-    onnx: true,
     note: '×1 only',
   },
   // (?) sizeClass estimated: not in architecture_categories.json
@@ -1438,7 +1376,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv'],
     speed: 'medium',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -1457,7 +1394,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv'],
     speed: 'fast',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -1476,7 +1412,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv'],
     speed: 'medium',
-    onnx: true,
   },
   // (?) the scale kwarg is `upsampling` (a factory argument) and is never emitted
   {
@@ -1500,7 +1435,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer', 'attention'],
     speed: 'medium',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -1519,7 +1453,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv'],
     speed: 'medium',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -1538,7 +1471,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv'],
     speed: 'fast',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -1557,7 +1489,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv'],
     speed: 'medium',
-    onnx: true,
   },
   {
     type: 'plksr',
@@ -1579,7 +1510,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv'],
     speed: 'fast',
-    onnx: true,
   },
   {
     type: 'plksr_tiny',
@@ -1601,7 +1531,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv'],
     speed: 'fast',
-    onnx: true,
   },
   {
     type: 'rcan',
@@ -1620,7 +1549,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'attention', 'legacy'],
     speed: 'medium',
-    onnx: true,
   },
   // sizeClass from the realplksr entries, which span Light and Medium depending on options
   {
@@ -1646,7 +1574,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv'],
     speed: 'medium',
-    onnx: true,
   },
   // sizeClass from the realplksr_tiny entry
   {
@@ -1672,7 +1599,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv'],
     speed: 'fast',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -1698,7 +1624,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv'],
     speed: 'medium',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -1720,7 +1645,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'slow',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -1742,7 +1666,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'slow',
-    onnx: true,
   },
   {
     type: 'safmn',
@@ -1761,7 +1684,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'attention'],
     speed: 'fast',
-    onnx: true,
   },
   {
     type: 'safmn_l',
@@ -1780,7 +1702,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'attention'],
     speed: 'medium',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -1799,7 +1720,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'attention'],
     speed: 'fast',
-    onnx: true,
   },
   {
     type: 'sebica',
@@ -1817,7 +1737,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv'],
     speed: 'fast',
-    onnx: true,
   },
   {
     type: 'sebica_mini',
@@ -1835,7 +1754,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv'],
     speed: 'fast',
-    onnx: true,
   },
   {
     type: 'span',
@@ -1854,7 +1772,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'attention'],
     speed: 'medium',
-    onnx: true,
     note: 'fast inference, good for real-time',
   },
   // (?) sizeClass estimated: not in architecture_categories.json
@@ -1875,7 +1792,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'attention'],
     speed: 'medium',
-    onnx: true,
     note: 'fast inference, good for real-time',
   },
   {
@@ -1894,7 +1810,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'attention'],
     speed: 'medium',
-    onnx: true,
   },
   {
     type: 'spanplus_sts',
@@ -1912,7 +1827,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'attention'],
     speed: 'fast',
-    onnx: true,
   },
   {
     type: 'spanplus_s',
@@ -1930,7 +1844,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'attention'],
     speed: 'medium',
-    onnx: true,
   },
   {
     type: 'spanplus_st',
@@ -1948,7 +1861,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['conv', 'attention'],
     speed: 'fast',
-    onnx: true,
   },
   // sizeClass from the srformer entry; the code defaults match srformer_light, so this may be conservative
   {
@@ -1971,7 +1883,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'slow',
-    onnx: true,
   },
   {
     type: 'srformer_light',
@@ -1993,7 +1904,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'medium',
-    onnx: true,
   },
   // (?) sizeClass estimated: not in architecture_categories.json
   {
@@ -2016,7 +1926,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'slow',
-    onnx: true,
   },
   // sizeClass from the swinir_s entry
   {
@@ -2040,7 +1949,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'medium',
-    onnx: true,
   },
   // sizeClass from the swinir_m entry
   {
@@ -2064,7 +1972,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'medium',
-    onnx: true,
   },
   // sizeClass from the swinir_l entry
   {
@@ -2088,7 +1995,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'slow',
-    onnx: true,
     note: 'x4 only',
   },
   // (?) sizeClass estimated: not in architecture_categories.json
@@ -2113,7 +2019,6 @@ export const ARCHS: readonly ArchInfo[] = [
     ],
     tags: ['transformer'],
     speed: 'medium',
-    onnx: true,
   },
 ];
 

@@ -40,8 +40,6 @@ export interface ArchInfo {
   readonly tags: readonly ('conv' | 'transformer' | 'attention' | 'mamba' | 'qat' | 'testing' | 'legacy')[];
   /** Rough training-speed class for the architecture cards. */
   readonly speed: 'fast' | 'medium' | 'slow';
-  /** False when `convert.py` cannot export it (craft, ditn). */
-  readonly onnx: boolean;
   /** Short suitability note shown on the card, e.g. "beginner-friendly". */
   readonly note?: string;
 }
