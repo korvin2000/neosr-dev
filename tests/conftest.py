@@ -75,6 +75,7 @@ def _weight_files(name: str) -> list[Path]:
     import torch  # ruff: ignore[import-outside-top-level]
     from torchvision import models  # ruff: ignore[import-outside-top-level]
 
+    from neosr.archs import vgg_arch  # ruff: ignore[import-outside-top-level]
     from neosr.losses import dists_loss  # ruff: ignore[import-outside-top-level]
     from neosr.metrics import lpips, topiq  # ruff: ignore[import-outside-top-level]
 
@@ -87,6 +88,12 @@ def _weight_files(name: str) -> list[Path]:
         "alexnet": [cached(models.AlexNet_Weights.IMAGENET1K_V1.url)],
         "vgg16": [cached(models.VGG16_Weights.IMAGENET1K_V1.url)],
         "vgg19": [cached(models.VGG19_Weights.DEFAULT.url)],
+        # VGGFeatureExtractor reads its local copy (relative to the cwd, as the code does) before the hub's
+        "vgg19_features": [
+            local
+            if (local := Path(vgg_arch.VGG_PRETRAIN_PATH)).exists()
+            else cached(models.VGG19_Weights.DEFAULT.url)
+        ],
         "resnet18": [cached(models.ResNet18_Weights.DEFAULT.url)],
         "dists": [Path(dists_loss.__file__).with_name("dists_weights.pth")],
         "lpips_alex": [cached(lpips.URL.format(lpips.FILES["alex"]))],

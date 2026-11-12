@@ -426,14 +426,16 @@ def test_log_macs_uses_bare_nets_in_eval_and_restores_flags(
 
 def test_log_macs_with_the_real_tracer(caplog):
     """PLAN R1.1: torchprofile's own tracer through log_macs (the tests above stub it). Bias-free
-    convolutions count out_elements * in_channels * kernel_area MACs; D sees G's output."""
+    convolutions count out_elements * in_channels * kernel_area MACs. G changes the resolution
+    (stride 2), so D's count shows it sees G's output, not the input."""
     pytest.importorskip("torchprofile")
-    g, d = (torch.nn.Conv2d(3, c, 3, padding=1, bias=False) for c in (3, 1))
+    g = torch.nn.Conv2d(3, 3, 3, stride=2, padding=1, bias=False)
+    d = torch.nn.Conv2d(3, 1, 3, padding=1, bias=False)
     model = types.SimpleNamespace(net_g=g, net_d=d, device=torch.device("cpu"))
     with caplog.at_level(logging.INFO, logger="neosr"):
         train_py.log_macs(model, {"input_size": 8})
-    assert "Generator MACs: 5,184" in caplog.text  # 3*8*8 outputs * 3*3*3
-    assert "Discriminator MACs: 1,728" in caplog.text  # 1*8*8 * 3*3*3
+    assert "Generator MACs: 1,296" in caplog.text  # 3*4*4 outputs * 3*3*3
+    assert "Discriminator MACs: 432" in caplog.text  # 1*4*4 * 3*3*3 (on the 8x8 input: 1,728)
     assert g.training
     assert d.training
 

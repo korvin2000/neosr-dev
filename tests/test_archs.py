@@ -23,7 +23,7 @@ FIXTURE = Path(d) if (d := os.environ.get("NEOSR_ARCH_FIXTURE")) else None
 cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
 
 EXTRA = {"VGGFeatureExtractor": {"layer_name_list": ["relu1_1", "relu2_1", "relu3_1"]}}
-PRETRAINED = {"VGGFeatureExtractor": "vgg19", "ea2fpn": "resnet18"}  # ImageNet weights they load
+PRETRAINED = {"VGGFeatureExtractor": "vgg19_features", "ea2fpn": "resnet18"}  # ImageNet weights they load
 SIZE = {
     "lmlt": 64,
     "lmlt_tiny": 64,

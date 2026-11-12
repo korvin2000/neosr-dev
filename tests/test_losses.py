@@ -28,7 +28,7 @@ LOSSES = {
 }
 # pretrained files per loss (@pytest.mark.weights, tests/conftest.py: skipped when not cached)
 WEIGHTS = {
-    "vgg_perceptual_loss": ("vgg19",),
+    "vgg_perceptual_loss": ("vgg19_features",),
     "dists_loss": ("vgg16", "dists"),
     "fdl_loss": ("vgg19",),
 }

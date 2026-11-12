@@ -78,11 +78,16 @@ def test_lpips_is_lower_better_by_default(tmp_path):
     assert m.best_metric_results["valset"]["lpips"]["better"] == "lower"
 
 
-@pytest.mark.weights("topiq_kadid")
-def test_topiq_pipal_weights_are_strict_and_named(monkeypatch):
-    from neosr.metrics import topiq as tq  # noqa: PLC0415
+def test_topiq_pipal_checkpoint_is_named():
+    from neosr.metrics import topiq as tq  # ruff: ignore[import-outside-top-level]
 
     assert tq.WEIGHTS["pipal"][1].endswith("/cfanet_fr_pipal_res50-69bbe5ba.pth")
+
+
+@pytest.mark.weights("topiq_kadid")
+def test_topiq_pipal_weights_are_strict(monkeypatch):
+    from neosr.metrics import topiq as tq  # noqa: PLC0415
+
     urls = []
     real = torch.load(KADID, map_location="cpu", weights_only=True)
 
