@@ -189,8 +189,12 @@ def test_tensor_psnr_identical_is_inf_and_errors_match(device):
 
 
 def _vgg16_random(monkeypatch):
-    real = torchvision.models.vgg16
-    monkeypatch.setattr(torchvision.models, "vgg16", lambda weights=None: real())
+    """dists_loss's VGG16 stages without the ImageNet download (the weights do not matter here)."""
+    monkeypatch.setattr(
+        torchvision.models.VGG16_Weights,
+        "get_state_dict",
+        lambda *_a, **_k: torchvision.models.vgg16().state_dict(),
+    )
 
 
 @pytest.mark.parametrize("device", DEVICES)
@@ -239,12 +243,7 @@ def test_metric_nets_survive_events_and_move_back(monkeypatch):
     assert built == [1]
 
 
-TOPIQ_W = (
-    Path(torch.hub.get_dir()) / "checkpoints" / "cfanet_fr_kadid_res50-2c4cc61d.pth"
-)
-
-
-@pytest.mark.skipif(not TOPIQ_W.is_file(), reason="TOPIQ weights not available offline")
+@pytest.mark.weights("topiq_kadid")
 def test_topiq_need_weights_false_keeps_the_score(monkeypatch):
     """MT-12 (F22): the attention weights were computed and discarded."""
     monkeypatch.setattr(calculate, "_metric_nets", {})

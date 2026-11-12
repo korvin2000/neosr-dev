@@ -262,8 +262,7 @@ def test_ff_loss_does_not_sync():
 
 # ---- GP-03 / L-17 FDL(DINOv2): cached position embedding, opt-in recomputation ---------------------
 
-DINO = Path(torch.hub.get_dir(), "facebookresearch_dinov2_main").is_dir()
-dino = pytest.mark.skipif(not DINO, reason="DINOv2 hub repository not cached")
+dino = pytest.mark.weights("dinov2")
 
 
 def saved_bytes(fn):

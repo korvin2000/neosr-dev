@@ -241,6 +241,7 @@ def validate_and_export(model) -> None:
     model.save()  # state + exports; SF: eval_weights() swaps to x and back
 
 
+@pytest.mark.weights("vgg19")  # fdl_loss(model="vgg")
 def test_a_g_only_fdl_msswd_ema(tmp_path):
     a, r, sa, sr = continuation(tmp_path, lambda t: make_opt(t, "a"))
     assert a.update == r.update == 6

@@ -340,6 +340,7 @@ MIGRATED = all(
 @pytest.mark.xfail(
     not MIGRATED, reason="B1/A2: classes not yet Loss subclasses", strict=True
 )
+@pytest.mark.weights("dinov2")  # every shipped config: fdl_loss(model="dinov2")
 def test_shipped_configs_real_constructors():
     """G terms: finite scalar, non-zero sr.grad. D terms: finite scalar, sr untouched.
     Every loss parameter and buffer is frozen and on the run device."""

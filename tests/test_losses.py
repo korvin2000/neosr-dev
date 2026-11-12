@@ -26,6 +26,12 @@ LOSSES = {
     "dists_loss": ({}, 1e-3),
     "fdl_loss": ({"model": "vgg"}, 1e-3),
 }
+# pretrained files per loss (@pytest.mark.weights, tests/conftest.py: skipped when not cached)
+WEIGHTS = {
+    "vgg_perceptual_loss": ("vgg19",),
+    "dists_loss": ("vgg16", "dists"),
+    "fdl_loss": ("vgg19",),
+}
 # "offset": nonzero residual with zero variance (constant pred - target)
 CASES = ("random", "identical", "constant", "offset", "anticorrelated", "channels_last")
 
@@ -48,6 +54,14 @@ def make_pair(case: str, dev: str = DEV) -> tuple[torch.Tensor, torch.Tensor]:
     elif case == "channels_last":
         pred = pred.contiguous(memory_format=torch.channels_last)
     return pred, target
+
+
+def names(table) -> list:
+    """Loss names as parameters, each carrying the weights it needs."""
+    return [
+        pytest.param(n, marks=pytest.mark.weights(*WEIGHTS[n])) if n in WEIGHTS else n
+        for n in table
+    ]
 
 
 def build(name: str, dev: str = DEV) -> torch.nn.Module:
@@ -82,14 +96,14 @@ def check_forward_backward(loss_fn, pred, target, max_identical=None):
 
 
 @pytest.mark.parametrize("case", CASES)
-@pytest.mark.parametrize("name", LOSSES)
+@pytest.mark.parametrize("name", names(LOSSES))
 def test_loss_forward_backward(losses, name, case):
     pred, target = make_pair(case)
     max_identical = LOSSES[name][1] if case == "identical" else None
     check_forward_backward(losses(name), pred, target, max_identical)
 
 
-@pytest.mark.parametrize("name", LOSSES)
+@pytest.mark.parametrize("name", names(LOSSES))
 def test_loss_on_cpu(name):
     """No hidden dependency on CUDA or on torch.set_default_device."""
     check_forward_backward(build(name, "cpu"), *make_pair("random", "cpu"))
@@ -145,6 +159,7 @@ def test_compute_weights_kernel(name, target):
         torch.testing.assert_close(sr.grad, x.grad.to(sr.dtype), rtol=1e-6, atol=1e-6)
 
 
+@pytest.mark.weights(*WEIGHTS["dists_loss"])
 def test_dists_metric_path():
     metric = build_loss({"type": "dists_loss", "as_loss": False}).to("cpu")
     pred, target = make_pair("random", "cpu")
@@ -215,6 +230,7 @@ def test_consistency_l_star_low_branch():
     assert loss_fn.rgb_to_l_star(img).mean().item() == pytest.approx(expected, rel=1e-3)
 
 
+@pytest.mark.weights(*WEIGHTS["dists_loss"], *WEIGHTS["fdl_loss"])
 def test_frozen_weights_and_options():
     assert not any(p.requires_grad for p in build("dists_loss", "cpu").parameters())
     assert build_loss({"type": "fdl_loss", "model": "VGG"}).model_name == "vgg"
@@ -254,7 +270,7 @@ B1_W3 = {"fdl_loss": {"model": "vgg"}, "vgg_perceptual_loss": {}, "dists_loss": 
 
 
 @pytest.mark.parametrize("amp", [False, True, "bf16-sr"])
-@pytest.mark.parametrize("name", B1_W3)
+@pytest.mark.parametrize("name", names(B1_W3))
 def test_b1_matches_pre_b1(name, amp):
     """B1 is mechanical: compute(ctx) at weight w equals the old old(x, y) at loss_weight=w, values and grads.
 
@@ -332,6 +348,7 @@ def test_b1_w1_matches_pre_b1(case, amp):
     torch.testing.assert_close(x_new.grad, x_old.grad, rtol=1e-6, atol=1e-6)
 
 
+@pytest.mark.weights(*WEIGHTS["fdl_loss"])
 def test_fdl_projections_are_seeded():
     """D30: rand_* do not depend on the global RNG, are not checkpointed and follow .to()."""
     torch.manual_seed(1)

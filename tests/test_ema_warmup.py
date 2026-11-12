@@ -121,6 +121,7 @@ def test_ema_power_must_be_positive(power):
     validate_train(cfg())
 
 
+@pytest.mark.weights("vgg19")  # make_opt case "a": fdl_loss(model="vgg")
 def test_resume_with_warmup_is_exact(tmp_path):
     def make(t):
         opt = make_opt(t, "a")

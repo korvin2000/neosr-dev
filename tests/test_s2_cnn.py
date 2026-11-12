@@ -298,7 +298,13 @@ def test_channels_first_layer_norm(name: str, fmt) -> None:
 
 
 # ---------------------------------------------------------------- gradient census (A-03, A-05, A-06, A-10)
-@pytest.mark.parametrize("name", ROWS)
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param(n, marks=pytest.mark.weights("resnet18")) if n == "ea2fpn" else n
+        for n in ROWS
+    ],
+)
 def test_gradient_census(name: str) -> None:
     """Every trainable parameter gets a finite gradient from one train step (DDP with
     find_unused_parameters=False needs that); frozen ones are deploy copies or unused branches."""

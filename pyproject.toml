@@ -57,11 +57,12 @@ explicit = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]  # on purpose: the inference script test.py has a `test` function, not a test
-# Both are set in tests/conftest.py (pytest_collection_modifyitems), not in the test files.
+# cuda and slow are set in tests/conftest.py (pytest_collection_modifyitems), not in the test files.
 # Fast CPU subset: pytest -m "not slow and not cuda"
 markers = [
     "cuda: needs a CUDA device (derived from the tests' CUDA skip marks and device parameters)",
     "slow: per-arch sweeps, ONNX exports, subprocess and multi-step runs (the reviewed SLOW list)",
+    "weights(*names): needs these pretrained files cached (tests/conftest.py), else skipped; never downloaded",
 ]
 
 [tool.ruff]

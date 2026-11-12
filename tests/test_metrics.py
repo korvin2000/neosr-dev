@@ -17,14 +17,6 @@ from neosr.utils.img_util import img2tensor, tensor2img
 
 # Machine-specific fixture: the validation images REFERENCE was recorded on; skipped when absent.
 VAL_GT = Path(os.environ.get("NEOSR_VAL_GT") or "/home/korvin/apps/data/val/GT")
-HUB = Path(torch.hub.get_dir()) / "checkpoints"
-NET_WEIGHTS = {
-    "dists": [
-        Path(calculate.__file__).parents[1] / "losses" / "dists_weights.pth",
-        HUB / "vgg16-397923af.pth",
-    ],
-    "topiq": [HUB / "cfanet_fr_kadid_res50-2c4cc61d.pth"],
-}
 
 # Recorded with the implementation before the L4 changes on _synthetic_pair().
 SYNTHETIC_REFERENCE = {
@@ -262,10 +254,14 @@ def test_metric_nets_imported_lazily():
     assert r.returncode == 0, r.stderr
 
 
-@pytest.mark.parametrize("name", ["dists", "topiq"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("dists", marks=pytest.mark.weights("vgg16", "dists")),
+        pytest.param("topiq", marks=pytest.mark.weights("topiq_kadid")),
+    ],
+)
 def test_metric_net_real_weights(fresh_nets, name):
-    if not all(p.is_file() for p in NET_WEIGHTS[name]):
-        pytest.skip(f"{name} weights not available offline")
     rng = np.random.default_rng(0)
     img = rng.integers(0, 256, (64, 64, 3), dtype=np.uint8)
     img2 = rng.integers(0, 256, (64, 64, 3), dtype=np.uint8)

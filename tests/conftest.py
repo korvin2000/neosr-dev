@@ -1,6 +1,7 @@
 import logging
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 
@@ -16,6 +17,7 @@ if str(ROOT) not in sys.path:
 # - slow: the reviewed list SLOW below, from a measured CPU run (`--durations=0`, 2026-11-11): whole files
 #   for the per-arch sweeps, node-id prefixes for single heavy tests in core files (the rest of the file stays
 #   in the subset). `pytest -m "not slow and not cuda"` is the fast CPU subset (docs/refactor/STATUS.md).
+# The third marker, weights(*names), is declared by the tests themselves: see _weight_files below.
 SLOW = (
     # per-arch sweeps and arch lanes (CPU seconds measured on the Linux workstation)
     "tests/test_archs.py",
@@ -64,6 +66,48 @@ def _needs_cuda(item: pytest.Item) -> bool:
         return True
     params = getattr(getattr(item, "callspec", None), "params", {})
     return any(str(v).startswith("cuda") for v in params.values())
+
+
+def _weight_files(name: str) -> list[Path]:
+    """The pretrained files behind @pytest.mark.weights(name), where the code reads them: torch hub's
+    cache (torchvision weights, load_state_dict_from_url, torch.hub.load) and the DISTS file next to
+    its module. Imported here, not at collection: only a test that carries the marker pays."""
+    import torch  # ruff: ignore[import-outside-top-level]
+    from torchvision import models  # ruff: ignore[import-outside-top-level]
+
+    from neosr.losses import dists_loss  # ruff: ignore[import-outside-top-level]
+    from neosr.metrics import lpips, topiq  # ruff: ignore[import-outside-top-level]
+
+    hub = Path(torch.hub.get_dir())
+
+    def cached(url: str) -> Path:
+        return hub / "checkpoints" / Path(urlparse(url).path).name
+
+    files = {
+        "alexnet": [cached(models.AlexNet_Weights.IMAGENET1K_V1.url)],
+        "vgg16": [cached(models.VGG16_Weights.IMAGENET1K_V1.url)],
+        "vgg19": [cached(models.VGG19_Weights.DEFAULT.url)],
+        "resnet18": [cached(models.ResNet18_Weights.DEFAULT.url)],
+        "dists": [Path(dists_loss.__file__).with_name("dists_weights.pth")],
+        "lpips_alex": [cached(lpips.URL.format(lpips.FILES["alex"]))],
+        "lpips_vgg": [cached(lpips.URL.format(lpips.FILES["vgg"]))],
+        # the hub copy: topiq also reads a local file first, but the tests load the hub one
+        "topiq_kadid": [cached(topiq.WEIGHTS["kadid"][1])],
+        # fdl_loss(model="dinov2"): torch.hub.load of the repository, which loads its checkpoint
+        "dinov2": [
+            hub / "facebookresearch_dinov2_main",
+            hub / "checkpoints" / "dinov2_vitb14_pretrain.pth",
+        ],
+    }
+    return files[name]
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """@pytest.mark.weights(*names): skip unless every file is cached; tests never download."""
+    names = [n for m in item.iter_markers("weights") for n in m.args]
+    missing = [f"{n} ({p})" for n in names for p in _weight_files(n) if not p.exists()]
+    if missing:
+        pytest.skip(f"pretrained weights not cached: {', '.join(missing)}")
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:

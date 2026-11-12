@@ -2,7 +2,6 @@
 
 import copy
 import warnings
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -17,7 +16,6 @@ from neosr.losses.base import Context
 from tests.test_model import build, make_opt
 
 CUDA = torch.cuda.is_available()
-DINO = Path(torch.hub.get_dir(), "facebookresearch_dinov2_main").is_dir()
 
 
 def _levels(x):  # pre-C6: one torch.unique (a host sync on CUDA) per sample
@@ -105,6 +103,7 @@ def test_compile_wraps_g_and_a_one_forward_d(tmp_path):
     assert model.net_d_adv is model.net_d_fwd
 
 
+@pytest.mark.weights("vgg19")
 def test_fdl_precision_policy():
     assert build_loss({
         "type": "fdl_loss",
@@ -113,7 +112,7 @@ def test_fdl_precision_policy():
     assert build_loss({"type": "fdl_loss", "model": "vgg", "fp32_backbone": False}).fp32
 
 
-@pytest.mark.skipif(not DINO, reason="DINOv2 hub repository not cached")
+@pytest.mark.weights("dinov2")
 def test_fdl_dinov2_drops_unused_blocks_bitwise():
     assert build_loss({"type": "fdl_loss", "model": "dinov2"}).fp32  # fp32 by default
     loss = build_loss({"type": "fdl_loss", "model": "dinov2", "fp32_backbone": False})
@@ -160,9 +159,8 @@ def _strict_fp32():
     torch.backends.cuda.matmul.allow_tf32, torch.backends.cudnn.allow_tf32 = flags
 
 
-@pytest.mark.skipif(
-    not (CUDA and DINO), reason="needs CUDA autocast and the DINOv2 hub cache"
-)
+@pytest.mark.skipif(not CUDA, reason="needs CUDA autocast")
+@pytest.mark.weights("dinov2")
 @pytest.mark.usefixtures("_strict_fp32")
 @pytest.mark.parametrize("size", [64, 128, 256])
 def test_fdl_dinov2_amp_policy_within_tolerance(size):

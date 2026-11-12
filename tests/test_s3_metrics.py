@@ -1,18 +1,19 @@
 """Stage 3 A3: TOPIQ-FR `dataset` weights (kadid | pipal) and the LPIPS v0.1 metric. CPU; tests that
 need pretrained weights run only when the torch hub cache holds them (no download)."""
 
+import hashlib
 from pathlib import Path
 
 import pytest
 import torch
+import torch.nn.functional as F
+from torchvision.models import VGG16_Weights, vgg16
 
 from neosr.config import ConfigError
 from neosr.metrics import build_metric, calculate
 from neosr.utils.img_util import quantize
 
 HUB = Path(torch.hub.get_dir()) / "checkpoints"
-ALEX = HUB / "alexnet-owt-7be5be79.pth"
-LPIPS_ALEX = HUB / "LPIPS_v0.1_alex-df73285e.pth"
 KADID = HUB / "cfanet_fr_kadid_res50-2c4cc61d.pth"
 CPU = torch.device("cpu")
 
@@ -77,12 +78,11 @@ def test_lpips_is_lower_better_by_default(tmp_path):
     assert m.best_metric_results["valset"]["lpips"]["better"] == "lower"
 
 
+@pytest.mark.weights("topiq_kadid")
 def test_topiq_pipal_weights_are_strict_and_named(monkeypatch):
     from neosr.metrics import topiq as tq  # noqa: PLC0415
 
     assert tq.WEIGHTS["pipal"][1].endswith("/cfanet_fr_pipal_res50-69bbe5ba.pth")
-    if not KADID.is_file():
-        pytest.skip("TOPIQ weights not cached")
     urls = []
     real = torch.load(KADID, map_location="cpu", weights_only=True)
 
@@ -105,7 +105,7 @@ def _lin(**extra):
     } | extra
 
 
-@pytest.mark.skipif(not ALEX.is_file(), reason="AlexNet weights not cached")
+@pytest.mark.weights("alexnet")
 def test_lpips_loads_the_official_layout_strictly(monkeypatch):
     from neosr.metrics.lpips import lpips  # noqa: PLC0415
 
@@ -127,9 +127,7 @@ def test_lpips_loads_the_official_layout_strictly(monkeypatch):
         lpips("alex")
 
 
-@pytest.mark.skipif(
-    not (ALEX.is_file() and LPIPS_ALEX.is_file()), reason="LPIPS weights not cached"
-)
+@pytest.mark.weights("alexnet", "lpips_alex")
 def test_lpips_matches_the_reference_value():
     """0.10353731 is pyiqa's reference LPIPS (v0.1, alex) of this pair (probe in PROGRESS.md)."""
     g = torch.Generator().manual_seed(0)
@@ -143,6 +141,53 @@ def test_lpips_matches_the_reference_value():
     assert value.item() == pytest.approx(ref.item(), rel=1e-2)  # quantised to 8 bits
     assert abs(metric(q[0], q[0]).item()) <= 1e-9  # one batched pass: rounding only
     assert metric(q[1], q[0]).item() == pytest.approx(value.item(), rel=1e-6)
+
+
+# richzhang/PerceptualSimilarity lpips/weights/v0.1/vgg.pth (sha256 from the lpips 0.1.4 wheel RECORD);
+# pyiqa's mirror that neosr loads (LPIPS_v0.1_vgg-a78928a0.pth) is named after the same digest
+LPIPS_VGG_SHA256 = "a78928a0af1e5f0fcb1f3b9e8f8c3a2a5a3de244d830ad5c1feddc79b8432868"
+VGG16_RELUS = (3, 8, 15, 22, 29)  # relu1_2, relu2_2, relu3_3, relu4_3, relu5_3 in vgg16().features
+
+
+@pytest.mark.weights("vgg16", "lpips_vgg")
+def test_lpips_vgg_matches_the_official_forward():
+    """STATUS A1/A3: the lin file is the official v0.1 VGG file, and lpips("vgg") equals the
+    published method written out independently of neosr's slices: [0, 1] -> [-1, 1] -> ImageNet
+    scaling layer, torchvision VGG16 relu1_2..relu5_3, unit norm over channels, squared
+    difference, 1x1 lin, spatial mean, sum over the five layers; each image on its own."""
+    from neosr.metrics import lpips as lp  # ruff: ignore[import-outside-top-level]
+
+    path = HUB / Path(lp.URL.format(lp.FILES["vgg"])).name
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == LPIPS_VGG_SHA256
+    lins = torch.load(path, map_location="cpu", weights_only=True)
+    features = vgg16(weights=VGG16_Weights.IMAGENET1K_V1).features[:30].eval()
+    shift = torch.tensor([-0.030, -0.088, -0.188]).view(1, 3, 1, 1)
+    scale = torch.tensor([0.458, 0.448, 0.450]).view(1, 3, 1, 1)
+
+    def taps(img):
+        h, out = (img * 2 - 1 - shift) / scale, []
+        for i, layer in enumerate(features):
+            h = layer(h)
+            if i in VGG16_RELUS:
+                out.append(h.clone())
+        return out
+
+    def official(x, y):
+        d = 0
+        for k, (a, b) in enumerate(zip(taps(x), taps(y), strict=True)):
+            na = a / (a.square().sum(1, keepdim=True).sqrt() + 1e-10)
+            nb = b / (b.square().sum(1, keepdim=True).sqrt() + 1e-10)
+            d = d + F.conv2d((na - nb) ** 2, lins[f"lin{k}.model.1.weight"]).mean([2, 3])
+        return d.flatten()
+
+    net = lp.lpips("vgg").eval()
+    for k, lin in enumerate(net.lins):
+        assert torch.equal(lin.weight, lins[f"lin{k}.model.1.weight"])
+    g = torch.Generator().manual_seed(0)
+    x, y = torch.rand(2, 3, 64, 48, generator=g), torch.rand(2, 3, 64, 48, generator=g)
+    with torch.inference_mode():
+        ref = torch.stack([official(x[i : i + 1], y[i : i + 1]) for i in range(2)])
+        torch.testing.assert_close(net(x, y), ref.flatten(), rtol=1e-5, atol=1e-7)
 
 
 # ------------------------------------------------------------------ download-free LPIPS checks
