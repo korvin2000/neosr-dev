@@ -156,15 +156,28 @@ describe('TrainerLogParser on synthetic lines', () => {
     expect(parser.outcome).toBe('stopped');
   });
 
-  it('stamps a record line with the update it reports, not the previous one', () => {
-    const { events } = parse([
-      `${TS} INFO: [ epoch:   0 ] [ iter:     200 ] [ performance: 9.100 it/s ] [ lr: 2.00e-04 ] [ eta: 0:01:00 ] [ l_g_total: 1.0000e+00 ] `,
-      `${TS} INFO: [ epoch:   0 ] [ iter:     250 ] [ performance: 9.100 it/s ] [ lr: 2.00e-04 ] [ eta: 0:00:55 ] [ l_g_total: 1.0000e+00 ] `,
+  it('stamps a record line with the update it reports and emits it ahead of its events, after the blocks it closes', () => {
+    const record = (iter: number) =>
+      `${TS} INFO: [ epoch:   0 ] [ iter:     ${iter} ] [ performance: 9.100 it/s ] [ lr: 2.00e-04 ] [ eta: 0:01:00 ] [ l_g_total: 1.0000e+00 ] `;
+    const parser = new TrainerLogParser();
+    const pushes = [
+      record(200),
+      `${TS} INFO: saving update 200`,
+      `${TS} INFO: Validation dev`, // confirms the save: its checkpoint (at 200) comes before this line
+      '\t # psnr: 30.1000',
+      record(250), // closes the validation (at 200) before its own line
       `${TS} INFO: stop requested: saving update 305`,
       `${TS} INFO: Stopped at update 305. Time consumed: 0:01:17`,
+    ].map((line) => parser.push(line).map((e) => `${e.body.type}@${e.native}`));
+    expect(pushes).toEqual([
+      ['log@200', 'progress@200', 'scalar@200', 'scalar@200'],
+      ['log@200'],
+      ['checkpoint@200', 'log@200'],
+      ['log@200'],
+      ['validation@200', 'log@250', 'progress@250', 'scalar@250', 'scalar@250'],
+      ['log@305', 'status@305'],
+      ['log@305', 'checkpoint@305'],
     ]);
-    expect(ofType(events, 'log').map((e) => e.native)).toEqual([200, 250, 305, 305]);
-    expect(events.findIndex((e) => e.body.type === 'log')).toBe(0); // the line still comes before what it reports
   });
 
   it('treats "nothing to do" as completed and reports the restored update', () => {
