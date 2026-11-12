@@ -5,7 +5,7 @@ Every 8k/20k A/B of a training change uses these three tools. Runs, configs and 
 | file | does |
 |---|---|
 | `run_ab.py` | trains one arm (a TOML) through train.py's own machinery and writes `train.jsonl`, `metrics.jsonl`, `per_image.jsonl` and, after the final validation, `done.json` into the arm's run folder: `seconds`, `update`, `run_peak_gib` (the process's VRAM peak: the start-up transient, not the working set) and `steady_mem_gib` (the median window peak of `train.jsonl`; `null` without `mem_gib` rows). Runs finished before 2026-11-12 name the run peak `peak_mem_gib`; `analyze.py` reads it as `run_peak_gib` |
-| `queue.sh` | runs arms from a queue file (`A,B` = a pair side by side, `A` = alone), one line at a time (blank and `#` lines skipped; it ends when the file is empty); a line starts only if it can end by `DEADLINE` (`HH:MM`: its next occurrence); an optional `LOCK` (flock) makes it the GPU's only owner. A line leaves the file only after a check (one or two distinct arm names, each with a `<CFG>/<arm>.toml`): any other line stops the queue with an error and stays in the file. The queue flocks the queue file itself, so a second queue on it refuses to start: one queue file per runner |
+| `queue.sh` | runs arms from a queue file (`A,B` = a pair side by side, `A` = alone), one line at a time (blank and `#` lines skipped; it ends when the file is empty); a line starts only if it can end by `DEADLINE` (`HH:MM`: its next occurrence); an optional `LOCK` (flock) makes it the GPU's only owner. A line leaves the file only after a check (one or two distinct arm names, each with a `<CFG>/<arm>.toml`): any other line stops the queue with an error and stays in the file. The queue flocks the queue file itself, so a second queue on it refuses to start: one queue file per runner, edited in place (an editor that saves by replacing the file drops the lock) |
 | `analyze.py` | dataset means, paired per-image differences against a reference with a 95 % CI over source groups, the gate's verdict per arm, training diagnostics (D margin, R1/R2, grad norms, clip share, skips) |
 
 ## Protocol (stage 3, `docs/refactor/stage3/r3gan/RESULTS.md` sections 0-1)
@@ -30,7 +30,7 @@ Gate, per metric against the reference:
 8k runs are a screen. A default changes only by the owner's decision, and a WIN on a GAN default stays provisional until a longer run (`next_tasks.md`, `STATUS.md`).
 
 ## Compile parity (D2; `docs/refactor/DECISIONS.md` D10 rule 8)
-`scripts/compile_parity.py` runs one training update from a saved state, each mode in a fresh process on one fixed batch (drawn once, `restore_rng()` before the update, `deterministic = true`), and compares the G/D/EMA updates and the losses.
+`scripts/compile_parity.py` runs one training update from a saved state, each mode in a fresh process on one fixed batch (drawn once, `restore_rng()` before the update, `deterministic = true`; with `accumulate` > 1 every micro-batch of the window is that batch), and compares the G/D/EMA updates and the losses.
 
 | mode | role |
 |---|---|
@@ -40,12 +40,12 @@ Gate, per metric against the reference:
 | `eager_fp32` | `use_amp` off: the bf16 noise scale (vs `eager`) |
 | `compile_fp32` | compiled without bf16, compared with `eager_fp32` |
 
-**PASS** when, per net, rho = \|\|dp_compiled - dp_ref\|\| / \|\|dp_ref\|\| and every `l_*` loss's relative difference stay within `--tol` (default 2) times the bf16 noise scale (at least the floor), and every mode restored the same state bitwise. R1/R2, D outputs and grad norms are reported, not gated. A D with Dropout/DropPath (metagan) draws inductor's random stream when compiled: a different noise sample, not a numeric bug, but it fails the verdict; `--fallback-random` makes the compiled modes draw eager's stream and so tests the numerics alone. Checked against the session-10 results: realplksr + unet and + R3GAN pass, metagan fails without `--fallback-random` (its D losses) and passes with it.
+**PASS** when, per net, rho = \|\|dp_compiled - dp_ref\|\| / \|\|dp_ref\|\| and every `l_*` loss's relative difference stay within `--tol` (default 2) times the bf16 noise scale (at least the floor), and every mode restored the same state bitwise; a noise scale that is not finite fails. R1/R2, D outputs and grad norms are reported, not gated. A D with Dropout/DropPath (metagan) draws inductor's random stream when compiled: a different noise sample, not a numeric bug, but it fails the verdict; `--fallback-random` makes the compiled modes draw eager's stream and so tests the numerics alone. Checked against the session-10 results: realplksr + unet and + R3GAN pass, metagan fails without `--fallback-random` (its D losses) and passes with it.
 ```sh
 python scripts/compile_parity.py <cfg>/<arm>.toml <runs>/<arm>/experiments/<arm>/training_states/8000.state <scratch>/parity/<arm> \
   [--code <checkout>] [--modes eager,eager2,compile,eager_fp32,compile_fp32] [--fallback-random] [--tol 2]
 ```
-The state is only read; everything else goes below the output folder (`batch.pt`, `<mode>/result.pt`, `<mode>/child.log`, the run folders). A mode whose result exists is not run again; `args.json` refuses another setting in the same folder. Exit 0 = PASS, 1 = FAIL, no verdict or a failed mode. It is a GPU job: never next to a training run.
+The state is only read; everything else goes below the output folder (`batch.pt`, `<mode>/result.pt`, `<mode>/child.log`, the run folders). A mode whose result exists is not run again; `args.json` refuses another setting in the same folder: other arguments, or a config, state or checkout (HEAD and the diff of tracked files) changed since. Exit 0 = PASS, 1 = FAIL, no verdict or a failed mode. It is a GPU job: never next to a training run.
 
 ## Running it (Linux workstation)
 1. Write one TOML per arm into a session folder `experiments/<session>/cfg/`, each a text edit of the template. `name`, `total_iter` and `save_checkpoint_freq` set the run. `experiments/s9_ab/mkcfg.py` is an example. To freeze the code an arm trains with, put the checkout path in `cfg/<arm>.code`.

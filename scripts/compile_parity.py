@@ -7,7 +7,8 @@ compile = true, on one fixed batch, and a verdict.
 Each mode runs in a fresh process with the checkout --code (default: this repo) first on sys.path:
 load_config, validate_train, setup_runtime, prepare_run, build_model (it resumes <state>, which is
 only read), then one batch (drawn once by the first mode, saved as <out>/batch.pt), restore_rng(),
-feed_data, optimize_parameters. Every mode sets `deterministic = true`. Modes:
+feed_data, optimize_parameters (with accumulate > 1, once per micro-batch, each the fixed batch).
+Every mode sets `deterministic = true`. Modes:
 
     eager         the reference
     eager2        eager again: the run-to-run floor
@@ -28,12 +29,16 @@ torch._inductor.config.fallback_random in the compiled modes: they draw eager's 
 measures the numerics alone.
 
 Everything is written below <out>: <mode>/result.pt, <mode>/child.log and the mode's run folders. A mode
-whose result exists is not run again; <out>/args.json keeps one setting per <out>. Exit 0: PASS;
-1: FAIL, no verdict or a failed mode; 2: <out> holds another setting. CUDA, one GPU job at a time.
+whose result exists is not run again; <out>/args.json keeps one setting per <out>: the arguments, the
+config's sha256, the state's size and mtime, the checkout's HEAD and the sha256 of its diff (untracked
+files are not seen). A noise scale that is not finite fails. Exit 0: PASS; 1: FAIL, no verdict or a
+failed mode; 2: <out> holds another setting. CUDA, one GPU job at a time.
 """
 
 import argparse
+import hashlib
 import json
+import math
 import os
 import subprocess  # ruff: ignore[suspicious-subprocess-import]
 import sys
@@ -74,9 +79,9 @@ def child(mode: str, out: Path) -> None:
     if mode.endswith("fp32"):
         cfg["use_amp"] = cfg["bfloat16"] = False
     if cfg["compile"] and args["fallback_random"]:
-        import torch._inductor.config  # ruff: ignore[import-outside-top-level]
+        from torch._inductor import config as inductor  # ruff: ignore[import-outside-top-level, import-private-name]
 
-        torch._inductor.config.fallback_random = True
+        inductor.fallback_random = True
     config.validate_train(cfg)
     cfg["path"]["resume_state"] = args["state"]  # only read (torch.load)
     rt = runtime.setup_runtime(cfg)
@@ -88,22 +93,26 @@ def child(mode: str, out: Path) -> None:
     if batch_file.exists():
         batch = torch.load(batch_file, weights_only=True)
     else:
-        batch = {k: v for k, v in next(iter(loader)).items() if k in {"lq", "gt"}}
+        batch = {k: v for k, v in next(iter(loader)).items() if torch.is_tensor(v)}
         torch.save(batch, batch_file)
     model.restore_rng()  # the last call before the loop, as in train.train
 
     def snap() -> dict:
-        nets = {"G": model.net_g, "D": model.net_d}
-        if model.ema is not None:
-            nets["EMA"] = model.ema.module
+        ema = None if model.ema is None else model.ema.module
+        nets = {"G": model.net_g, "D": model.net_d, "EMA": ema}
         return {
             k: {n: p.detach().float().cpu().clone() for n, p in m.named_parameters()}
             for k, m in nets.items()
+            if m is not None
         }
 
     before = snap()
-    model.feed_data(batch)
-    assert model.optimize_parameters(), "the update window did not close"
+    for _ in range(
+        model.accumulate
+    ):  # every micro-batch of the window is the fixed batch
+        model.feed_data(batch)
+        closed = model.optimize_parameters()
+    assert closed, "the update window did not close"
     if rt.device.type == "cuda":
         torch.cuda.synchronize()
     after = snap()
@@ -159,11 +168,14 @@ def verdict(res: dict[str, dict], tol: float) -> tuple[bool | None, list[str]]:
     if not {"eager", "eager_fp32", "compile"} <= res.keys():
         return None, ["no verdict: needs eager, eager_fp32 and compile"]
     refs = [m for m in ("eager_fp32", "eager2") if m in res]
-    scale = {
-        net: max(param_diffs(res["eager"], res[m])[net]["rho"] for m in refs)
+    rhos = {
+        net: [param_diffs(res["eager"], res[m])[net]["rho"] for m in refs]
         for net in res["eager"]["before"]
     }
-    lscale = max(loss_scale(res["eager"], res[m]) for m in refs)
+    lrels = [loss_scale(res["eager"], res[m]) for m in refs]
+    if not all(map(math.isfinite, [*lrels, *(r for v in rhos.values() for r in v)])):
+        return False, [f"noise scale not finite: rho {rhos}, losses {lrels}"]
+    scale, lscale = {net: max(v) for net, v in rhos.items()}, max(lrels)
     fails = [
         f"{m}: {net} restored state differs from {r}"
         for m, r in PAIRS
@@ -212,6 +224,21 @@ def report(res: dict[str, dict], tol: float) -> tuple[bool | None, list[str]]:
     return ok, [*lines, f"== {head}", *(f"   {w}" for w in why)]
 
 
+def code_id(code: Path) -> list[str]:
+    """The checkout's HEAD and the sha256 of its diff of tracked files (empty HEAD outside git)."""
+
+    def git(*cmd: str) -> str:
+        argv = ["git", "-C", str(code), *cmd]
+        return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
+            argv, capture_output=True, text=True, check=False
+        ).stdout
+
+    return [
+        git("rev-parse", "HEAD").strip(),
+        hashlib.sha256(git("diff", "HEAD").encode()).hexdigest(),
+    ]
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["--child"]:
@@ -235,11 +262,17 @@ def main(argv: list[str] | None = None) -> int:
     modes = a.modes.split(",")
     if bad := set(modes) - set(MODES):
         ap.error(f"unknown modes {sorted(bad)}")
+    st = a.state.stat()
     args = {
         "config": str(a.config.resolve()),
         "state": str(a.state.resolve()),
         "code": str(a.code.resolve()),
         "fallback_random": a.fallback_random,
+        "inputs": {  # what the results were measured on: an edit in place is another setting
+            "config_sha256": hashlib.sha256(a.config.read_bytes()).hexdigest(),
+            "state_size_mtime": [st.st_size, st.st_mtime_ns],
+            "code": code_id(a.code),
+        },
     }
     a.out.mkdir(parents=True, exist_ok=True)
     out, args_file = a.out.resolve(), a.out / "args.json"

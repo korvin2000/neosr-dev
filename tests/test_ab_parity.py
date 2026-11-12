@@ -78,16 +78,31 @@ def test_verdict_floor_binds_and_missing_modes():
     assert verdict(res, tol=2.0)[0] is None
 
 
+def test_verdict_rejects_a_scale_that_is_not_finite():
+    """An infinite floor would make every bound infinite and pass anything."""
+    inf = _res(logs={"l_g_pix": float("inf")})
+    inf["after"]["G"]["w"][0] = float("inf")
+    ok, why = verdict(_set(eager2=inf, compile=_res(5.0, seed=2)), tol=2.0)
+    assert ok is False
+    assert why[0].startswith("noise scale not finite")
+
+
 def test_driver_reads_results_and_guards_settings(tmp_path, capsys):
     out = tmp_path / "out"
     for mode, r in _set().items():
         (out / mode).mkdir(parents=True)
         torch.save(r, out / mode / "result.pt")
-    argv = ["cfg.toml", "8000.state", str(out)]
+    cfg, state = tmp_path / "cfg.toml", tmp_path / "8000.state"
+    cfg.write_text("name = 'x'\n")
+    state.write_bytes(b"state")
+    argv = [str(cfg), str(state), str(out)]
     assert main(argv) == 0
     assert "== PASS" in capsys.readouterr().out
     assert json.loads((out / "args.json").read_text())["fallback_random"] is False
     assert main([*argv, "--fallback-random"]) == 2  # another setting: no mixing
+    cfg.write_text("name = 'y'\n")  # the config edited in place: the results are stale
+    assert main(argv) == 2
+    cfg.write_text("name = 'x'\n")
     torch.save(_res(0.5, seed=2), out / "compile" / "result.pt")
     assert main(argv) == 1
     assert "== FAIL" in capsys.readouterr().out

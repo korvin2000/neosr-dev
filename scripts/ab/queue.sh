@@ -35,6 +35,7 @@ if [ -n "${LOCK:-}" ] && [ -z "${AB_LOCKED:-}" ]; then
   export CFG RUNS QUEUE REPO PY DEADLINE="@$END" PAIR_MIN SINGLE_MIN MARGIN_MIN
   AB_LOCKED=1 exec flock -w "${LOCK_WAIT:-3600}" "$LOCK" "$0" "$@"
 fi
+unset AB_LOCKED  # only for the re-exec: a queue started by an arm takes both locks itself
 
 run_arm() {  # <arm>: train it; prints the end line (rc of the trainer; done = done.json written)
   local arm=$1 out="$RUNS/$1" code="$REPO" cap=() rc
@@ -47,11 +48,10 @@ run_arm() {  # <arm>: train it; prints the end line (rc of the trainer; done = d
 }
 
 check_line() {  # <line>: sets a and b (empty: a alone); a line the queue cannot run sets why and fails
-  local arm
-  IFS=, read -r a b <<< "$1"
-  read -r a <<< "$a"; read -r b <<< "$b"  # surrounding blanks
+  local arm re='^([^[:space:],/]+)([[:space:]]*,[[:space:]]*([^[:space:],/]+))?$'
+  [[ $1 =~ $re ]] || { why="a line is 'A' or 'A,B' (arm names without blanks, ',' or '/')"; return 1; }
+  a=${BASH_REMATCH[1]} b=${BASH_REMATCH[3]}
   for arm in "$a" ${b:+"$b"}; do
-    [[ $arm =~ ^[^[:space:],/]+$ ]] || { why="'$arm' is not one arm name (a line is 'A' or 'A,B')"; return 1; }
     [ -f "$CFG/$arm.toml" ] || { why="no $CFG/$arm.toml"; return 1; }
   done
   [ "$a" != "$b" ] || { why="a pair of one arm"; return 1; }

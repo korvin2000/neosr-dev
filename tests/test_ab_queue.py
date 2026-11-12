@@ -1,7 +1,6 @@
 """scripts/ab/queue.sh with a stub trainer: a line it cannot run stops the queue and stays in the
 file; the flock on the queue file keeps a second queue out. CPU, bash."""
 
-import fcntl
 import os
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import]
@@ -10,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+fcntl = pytest.importorskip("fcntl")  # Unix
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32" or shutil.which("flock") is None, reason="bash + flock"
 )
@@ -23,7 +23,7 @@ echo '{}' > "$out/done.json"
 """
 
 
-def _run(tmp: Path, lines: str) -> subprocess.CompletedProcess:
+def _run(tmp: Path, lines: str, **extra: str) -> subprocess.CompletedProcess:
     (tmp / "cfg").mkdir(exist_ok=True)
     for arm in ("a", "b", "c"):
         (tmp / "cfg" / f"{arm}.toml").touch()
@@ -44,6 +44,7 @@ def _run(tmp: Path, lines: str) -> subprocess.CompletedProcess:
     }
     env.pop("LOCK", None)
     env.pop("AB_LOCKED", None)
+    env |= extra
     return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
         [shutil.which("bash"), str(QUEUE)],
         cwd=tmp,
@@ -56,7 +57,8 @@ def _run(tmp: Path, lines: str) -> subprocess.CompletedProcess:
 
 
 @pytest.mark.parametrize(
-    "bad", ["B0 B0 resume", "a b", "x", "a,x", "a,b,c", "a,a", ",b", "../a"]
+    "bad",
+    ["B0 B0 resume", "a b", "x", "a,x", "a,b,c", "a,a", ",b", "../a", "a,b,", "a,,"],
 )
 def test_invalid_line_stops_and_stays(tmp_path, bad):
     r = _run(tmp_path, f"# note\nb\n{bad}\nc\n")
@@ -67,10 +69,13 @@ def test_invalid_line_stops_and_stays(tmp_path, bad):
     assert sorted(p.name for p in (tmp_path / "runs").iterdir()) == ["b"]
 
 
-def test_pair_and_blanks_run_and_a_second_queue_refuses(tmp_path):
+@pytest.mark.parametrize("lock", [False, True])
+def test_pair_and_blanks_run_and_a_second_queue_refuses(tmp_path, lock):
     """The lock survives the in-place line removal: arm a, started after its line left the file,
-    tries a second queue on the same file, which refuses and runs nothing."""
-    r = _run(tmp_path, " a , b \r\n\nc\n")
+    tries a second queue on the same file, which refuses and runs nothing; with LOCK too (the
+    re-exec's AB_LOCKED does not reach the arms)."""
+    extra = {"LOCK": str(tmp_path / "gpu.lock"), "LOCK_WAIT": "5"} if lock else {}
+    r = _run(tmp_path, " a , b \r\n\nc\n", **extra)
     assert r.returncode == 0, r.stderr
     assert "start a b" in r.stdout
     assert "end c rc=0 done=yes" in r.stdout
