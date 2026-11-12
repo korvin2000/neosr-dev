@@ -267,7 +267,11 @@ def train(cfg: dict[str, Any], rt: Runtime) -> None:
                 save_due = u % save_freq == 0
                 if val_due or save_due:
                     model.check_finite()  # all ranks
+                if save_due:  # before validation: a kill during it keeps update u (T-03)
+                    log.info(f"saving update {u}")
+                    model.save()
                 if val_due:
+                    best = copy.deepcopy(model.best_metric_results)
                     try:
                         for vl in val_loaders:
                             model.validation(vl, u, tb_logger, save_img)
@@ -277,9 +281,12 @@ def train(cfg: dict[str, Any], rt: Runtime) -> None:
                             log.error(f"validation failed: saving update {u} first")
                             model.save()
                         raise
-                if save_due:
-                    log.info(f"saving update {u}")
-                    model.save()
+                    if (
+                        save_due
+                        and val.get("save_best")
+                        and model.best_metric_results != best
+                    ):
+                        model.save()  # the state records what save_best wrote
                 timer.start()
             epoch += 1
     finally:

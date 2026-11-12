@@ -152,6 +152,14 @@ process, `accumulate`, `dataset_enlarge_ratio`, `use_hflip`/`use_rot` (default o
 Validation sets are `[datasets.val]`, `[datasets.val_1]`, ... (`name` defaults to the section key); inference
 sets are `[datasets.test_1]`, ....
 
+Loader throughput: `data N%` next to `it/s` in the log is the share of the window spent waiting for batches.
+Decode cost scales with image area, so pre-tile large images first (`python -m scripts.extract_subimages`, see
+its docstring); full-size large images gave only ~5 batches of 8 per second with 4 workers. Then raise
+`num_worker_per_gpu` (`"auto"`: every CPU this process may use, split over the ranks, minus one each) while
+`data` stays high. 16-bit PNGs decode ~1.65x slower and the loader truncates them to 8 bit anyway
+(`IMREAD_COLOR`): `extract_subimages --bits8` stores `img >> 8` once, the same decoded bytes (`--crop 0`
+converts without tiling).
+
 ## losses
 
 Every non-empty `[train.<slot>_opt]` table becomes one term of the objective. The slot name is free and names
@@ -288,8 +296,9 @@ Files under `experiments/<name>/`:
 
 - A save writes the state first, then the exports, each atomically. `logger.keep_states` (default 3; 0 keeps
   all) keeps the newest states; `logger.keep_exports` (default 0 = all) keeps the newest numbered exports per
-  network (`*_latest` stays). The first save logs the size of one export set. If a periodic validation fails, the
-  state of that update is saved before the run stops.
+  network (`*_latest` stays). The first save logs the size of one export set. A periodic save runs before the
+  validation of the same update, so a kill during validation keeps it; a new best under `val.save_best` saves
+  the state again. If a periodic validation fails, the state of that update is saved before the run stops.
 - **Resume**: an explicit `path.resume_state` wins; else `--auto_resume` takes the newest `<u>.state` in
   `training_states/` (none: a fresh start). A fresh run renames an existing run folder to
   `<name>_archived_<time>`; a resume never does. Resume is strict: a changed set of networks, optimizer type or
@@ -302,13 +311,14 @@ Files under `experiments/<name>/`:
   from the state; each one that differs from the config is reported (`restored lr 0.001 from the state (config
   0.0001)`). A resume continues stochastically, not order-exactly: nets, EMA, optimizers, schedulers,
   scalers and counters are exact; the model-side RNG (dropout, DropPath) is restored on rank 0 only (other DDP
-  ranks start fresh streams); data order, augmentations and the OTF pool restart.
+  ranks start fresh streams); data order, augmentations and the OTF pool restart. Pre-refactor (format 1)
+  `.state` files do not resume: a configuration error names the matching `pretrain_network_g` for a new run.
 - **Pretrained weights**: `path.pretrain_network_g`/`_d` (ignored while resuming), `param_key_g`/`_d` (default:
   `params_ema`, `params-ema`, `params`, or a bare state dict), `strict_load_g`/`_d` (default true; false skips
   shape mismatches and logs one summary: the loaded share and up to 10 skipped, missing and unexpected keys).
   `.safetensors` files load with the optional `safetensors` package; `esrgan` also loads the original community
-  `model.N` layout. Pre-refactor `net_g_*.pth` files load this way;
-  pre-refactor `.state` files cannot be resumed, and a `.state` is not accepted as a pretrain.
+  `model.N` layout. Pre-refactor `net_g_*.pth` files load this way; a `.state` is not accepted as a
+  pretrain.
 - **Ctrl-C**: the first one stops at the next update boundary, saves state, exports and `*_latest`, and exits 0
   without the final validation. A second one exits 130 at once. Under DDP all ranks stop together, one update
   after the signal.

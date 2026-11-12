@@ -890,6 +890,37 @@ def test_validation_failure_saves_the_update_first(tmp_path, data, monkeypatch):
     assert "validation failed: saving update 2 first" in logs(tmp_path)
 
 
+@pytest.mark.parametrize("save_best", [True, False])
+def test_periodic_save_precedes_validation(tmp_path, data, monkeypatch, save_best):  # noqa: F811
+    """T-03: a kill during validation keeps update u; a new best is saved into the state again."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    events = []
+    real_save, real_val = base.save, base.validation
+
+    def save(self, **k):
+        events.append(("save", self.update))
+        real_save(self, **k)
+
+    def validation(self, *a, **k):
+        events.append(("val", self.update, states(tmp_path)))
+        real_val(self, *a, **k)
+
+    monkeypatch.setattr(base, "save", save)
+    monkeypatch.setattr(base, "validation", validation)
+    f = toml(tmp_path, data, total=4, save=2, val_freq=2)
+    if save_best:
+        text = f.read_text(encoding="utf-8")
+        f.write_text(text.replace("pbar = false", 'pbar = false\nsave_best = "psnr"'))
+    assert train_py.main(["-opt", str(f)]) == 0
+    at2 = [e for e in events if e[1] == 2]
+    # the first validation always sets the best
+    assert at2 == [("save", 2), ("val", 2, [2])] + [("save", 2)] * save_best
+    state = torch.load(
+        run_dir(tmp_path) / "training_states" / "2.state", weights_only=True
+    )
+    assert ("valset" in state["best"]) == save_best
+
+
 def test_loaders_are_built_before_the_model(tmp_path, data, monkeypatch):  # noqa: F811
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     order = []
