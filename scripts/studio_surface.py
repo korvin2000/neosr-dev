@@ -355,6 +355,13 @@ def _opaque_tables(opt: dict[str, Any]) -> list[tuple[str, Any, str]]:
     ]
 
 
+@functools.cache
+def _linear_warmup() -> frozenset[str]:
+    """Optimizers whose `warmup_steps` the trainer pops before construction (image.py LINEAR_WARMUP)."""
+    node = _assigned("neosr/models/image.py", "LINEAR_WARMUP")
+    return frozenset(ast.literal_eval(node.args[0]))  # type: ignore[attr-defined]
+
+
 def kwarg_problems(opt: dict[str, Any], surface: dict[str, Any]) -> list[str]:
     """Unknown types, and keywords a constructor rejects (unknown without **kwargs, or preset-bound)."""
     own = {
@@ -369,15 +376,17 @@ def kwarg_problems(opt: dict[str, Any], surface: dict[str, Any]) -> list[str]:
         kind = table.get("type")
         if key in {"optimizer_params", "scheduler_params"}:
             kind = str(kind).lower()  # looked up lower-cased
-        sig = surface[key].get(kind)
+        sig = surface[key].get(kind) if isinstance(kind, str) else None
         if sig is None:
             bad.append(f"[{section}] unknown type {kind!r}")
             continue
-        if "external" in sig or sig.get("var_kwargs"):
+        if "external" in sig:
             continue
         fixed = set(sig.get("fixed", ()))
-        for k in table.keys() - {"type", *own.get(key, ())}:
-            if k in fixed or k not in sig["params"]:
+        warmup = key == "optimizer_params" and kind in _linear_warmup()
+        trainer = {"warmup_steps"} if warmup else set()
+        for k in table.keys() - {"type", *own.get(key, ()), *trainer}:
+            if k in fixed or (k not in sig["params"] and not sig.get("var_kwargs")):
                 why = (
                     "set by the preset" if k in fixed else "not a constructor parameter"
                 )

@@ -139,3 +139,21 @@ def test_preset_resolution(preset, expected):
     for key in expected.get("fixed", ()):
         with pytest.raises(TypeError, match="multiple values"):
             namespace[preset](**{key: 1})
+
+
+@pytest.mark.parametrize(
+    ("opt", "expected"),
+    [
+        # the trainer pops warmup_steps before building a LINEAR_WARMUP optimizer
+        ({"train": {"optim_g": {"type": "adan", "warmup_steps": 100}}}, []),
+        # a preset-bound key is rejected even when the preset takes **kwargs
+        (
+            {"network_g": {"type": "omnisr", "bias": True}},
+            ["[network_g] omnisr: 'bias' is set by the preset"],
+        ),
+        # a malformed type is a diagnostic, not a crash
+        ({"network_g": {"type": []}}, ["[network_g] unknown type []"]),
+    ],
+)
+def test_kwarg_problems(opt, expected):
+    assert surface.kwarg_problems(opt, surface.build()) == expected

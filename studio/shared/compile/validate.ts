@@ -328,7 +328,7 @@ export function validateRecipe(recipe: Recipe, ctx: PlanContext, options: Valida
     for (const m of METRIC_TYPES.filter((m) => Array.isArray(metrics) && metrics.includes(m.name))) {
       for (const p of m.params) {
         const key = metricFieldKey(m.name, p.key);
-        const want = vv[key] === undefined ? undefined : metricParamDomain(p, vv[key]);
+        const want = vv[key] === undefined || vv[key] === '' ? undefined : metricParamDomain(p, vv[key]); // '' compiles to the default
         if (want) {
           add('blocker', 'native', `val.metrics.${m.name}.${p.key} must be ${want} (got ${JSON.stringify(vv[key])}).`, { nodeId: ctx.val.id, fieldKey: key });
         }

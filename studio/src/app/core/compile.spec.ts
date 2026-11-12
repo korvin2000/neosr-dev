@@ -267,6 +267,7 @@ save_checkpoint_freq = 500
     expect(blockers(bad).map((p) => p.fieldKey)).toEqual(['psnr_crop_border', 'psnr_input_order']);
     const defaults = commands.setValues(val.id, { psnr_crop_border: 4, psnr_test_y_channel: false, psnr_input_order: '' }).apply(result.recipe);
     expect(compileRecipe(defaults).phases[0].text).toContain('[val.metrics.psnr]\ntype = "calculate_psnr"\nmystery = 1');
+    expect(blockers(defaults)).toEqual([]);
   });
 
   it('round-trips: compiled output keeps the imported values and the extras', () => {
