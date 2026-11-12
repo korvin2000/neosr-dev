@@ -1,10 +1,9 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, untracked } from '@angular/core';
-import { Router } from '@angular/router';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import { ActivatedRoute, Router } from '@angular/router';
 import { nodeSpec } from '@shared/catalog/node-catalog';
 import type { ImportResult } from '@shared/compile/import-toml';
 import type { Problem } from '@shared/compile/problems';
 import { formatValue, type TomlOrigin } from '@shared/compile/toml-writer';
-import { sectionForNodeType } from '@shared/sections';
 import * as commands from '../../core/commands';
 import { RecipeStore } from '../../core/recipe-store';
 import { SettingsService } from '../../core/settings.service';
@@ -36,7 +35,8 @@ const DIFF_ROWS = 200;
 /**
  * Build › TOML: the compiled config full width, phase tabs only when there are several, and a
  * small toolbar. Section headers carry an "Edit" link that opens the section editor in a drawer
- * over the code; everything else (import, diff, unmapped settings) lives behind ⋯.
+ * over the code, and so does an issue link, at the offending setting; everything else (import,
+ * diff, unmapped settings) lives behind ⋯.
  */
 @Component({
   selector: 'app-toml-page',
@@ -47,9 +47,14 @@ const DIFF_ROWS = 200;
 })
 export class TomlPage {
   private readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute);
   private readonly toasts = inject(ToastService);
   private readonly settings = inject(SettingsService);
   protected readonly store = inject(RecipeStore);
+
+  /** Query params bound by the router (`withComponentInputBinding`): an issue link from the Build header. */
+  readonly node = input<string>();
+  readonly field = input<string>();
 
   protected readonly phases = computed(() => this.store.compiled().phases);
   private readonly selected = signal(0);
@@ -59,6 +64,8 @@ export class TomlPage {
   // --- source map ------------------------------------------------------------------
   protected readonly hover = signal<TomlOrigin | null>(null);
   protected readonly editNode = signal<string | null>(null);
+  /** The setting the drawer scrolls to and flashes; set by an issue link. */
+  protected readonly editField = signal<string | null>(null);
   protected readonly highlight = computed(() => this.editNode() ?? this.hover()?.nodeId ?? null);
   /** Origins of header lines, by reference: only those open the drawer; pair lines just select text. */
   private readonly headerOrigins = computed(() => new Set((this.active()?.lines ?? []).filter((l) => l.kind === 'header' && l.origin).map((l) => l.origin)));
@@ -129,6 +136,23 @@ export class TomlPage {
         untracked(() => snapshot.set({ recipeId, at: new Date().toISOString(), source: 'saved', texts }));
       }
     });
+    effect(() => {
+      const nodeId = this.node();
+      const field = this.field();
+      if (!nodeId) {
+        return;
+      }
+      untracked(() => {
+        // The Build header has already chosen the phase to edit: show that phase's TOML under the drawer.
+        const tab = this.phases().findIndex((p) => p.phase.id === this.store.activePhaseId());
+        if (tab >= 0) {
+          this.selected.set(tab);
+        }
+        this.inspect(nodeId, field ?? null);
+        // Clear the params so the same problem can be focused again later.
+        void this.router.navigate([], { relativeTo: this.route, queryParams: {}, replaceUrl: true });
+      });
+    });
   }
 
   protected select(index: number): void {
@@ -139,22 +163,31 @@ export class TomlPage {
     if (this.headerOrigins().has(origin) && this.store.node(origin.nodeId)) {
       // The drawer must edit the phase whose TOML is on screen.
       this.store.activePhaseId.set(this.phases().length > 1 ? (this.active()?.phase.id ?? null) : null);
-      this.editNode.set(origin.nodeId);
+      this.inspect(origin.nodeId, null);
     }
   }
 
-  /** Same jump as the readiness pill: the List view, that section, that field. */
+  /** An issue opens the inspector over the code, on the node that owns it and at its setting. */
   protected focusProblem(problem: Problem): void {
     this.issuesOpen.set(false);
-    if (problem.phaseId) {
-      this.store.activePhaseId.set(problem.phaseId);
+    // A shared-value problem must be edited in the shared view, not in whatever phase was active.
+    this.store.activePhaseId.set(problem.phaseId ?? null);
+    if (problem.nodeId) {
+      this.inspect(problem.nodeId, problem.fieldKey ?? null);
     }
-    if (!problem.nodeId) {
-      return;
+  }
+
+  protected closeInspector(): void {
+    this.editNode.set(null);
+    // Reset, so the same issue focuses its setting again next time.
+    this.editField.set(null);
+  }
+
+  private inspect(nodeId: string, field: string | null): void {
+    if (this.store.node(nodeId)) {
+      this.editNode.set(nodeId);
+      this.editField.set(field);
     }
-    const node = this.store.node(problem.nodeId);
-    const section = node ? sectionForNodeType(node.type) : undefined;
-    void this.router.navigate(['/build/list'], { queryParams: { section: section?.id ?? null, node: problem.nodeId, field: problem.fieldKey ?? null } });
   }
 
   // --- toolbar -------------------------------------------------------------------------

@@ -46,8 +46,8 @@
   <p class="empty">Nothing to compile yet: the recipe has no enabled Training Plan. Add one in the Graph, or start from a template.</p>
 }
 
-<app-drawer [open]="editNode() !== null" [title]="editLabel()" [width]="420" (closed)="editNode.set(null)">
-  <app-section-editor [nodeId]="editNode()" />
+<app-drawer [open]="editNode() !== null" [title]="editLabel()" [width]="420" (closed)="closeInspector()">
+  <app-section-editor [nodeId]="editNode()" [focusField]="editField()" />
 </app-drawer>
 
 <app-drawer [open]="panel() === 'import'" title="Import TOML" [width]="440" (closed)="panel.set(null)">

@@ -204,6 +204,11 @@ export class BuildPage {
     if (!problem.nodeId) {
       return;
     }
+    // The TOML view edits in a drawer over the code: stay there.
+    if (this.view() === 'toml') {
+      void this.router.navigate(['/build/toml'], { queryParams: { node: problem.nodeId, field: problem.fieldKey ?? null } });
+      return;
+    }
     const node = this.store.node(problem.nodeId);
     const ctx = this.store.context();
     const wired = node && Object.values(ctx).some((n) => n?.id === node.id);
