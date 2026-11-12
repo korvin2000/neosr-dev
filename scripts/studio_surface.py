@@ -1,7 +1,7 @@
 """The trainer's configuration surface as JSON: the contract NeoSR Studio's catalog is tested against.
 
 Reads the registries through their own source scan and the remaining tables statically (ast),
-the arch constructor signatures included (`arch_params`);
+the constructor signatures of archs, losses, metrics, optimizers and schedulers included (`*_params`);
 `neosr/config.py` and `neosr/utils/registry.py` are loaded by path (both are torch-free), so it runs
 on any Python >= 3.12 without torch, CUDA or the project environment.
 
@@ -10,12 +10,15 @@ on any Python >= 3.12 without torch, CUDA or the project environment.
     python scripts/studio_surface.py --validate a.toml b.toml
         # load_config + validate_train on training configs (e.g. Studio output); an unknown key fails
 
-Opaque sections (network_*, train.*_opt, optimizers, scheduler, metrics) are checked by their
-constructors, which need torch: `--validate` covers the schema and the cross-key rules only.
+`--validate` also checks the opaque sections (network_*, train.*_opt, optimizers, scheduler,
+metrics) against the constructor signatures: an unknown type, a keyword the constructor does not
+take (unless it has **kwargs) or one a preset binds fails. Constructors outside the repository
+(torch.optim, torch.optim.lr_scheduler) are recorded as `external` and not checked.
 """
 
 import argparse
 import ast
+import functools
 import importlib.util
 import json
 import sys
@@ -26,6 +29,15 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 SURFACE = ROOT / "studio" / "shared" / "catalog" / "neosr-surface.json"
 INTERNAL_ARCHS = {"VGGFeatureExtractor"}  # scale-free but not a discriminator
+# a class without an __init__ of its own on these bases takes no keywords
+PARAMLESS_BASES = {"Loss", "nn.Module"}
+# keys a builder reads itself or passes on its own, besides `type` (neosr/losses/__init__.py
+# build_losses, neosr/models/base.py build_schedulers, neosr/metrics/__init__.py build_metric)
+BUILDER_KEYS = {
+    "loss_params": ("loss_weight", "perceptual_weight", "target"),
+    "scheduler_params": ("nets",),
+    "metric_params": ("better",),
+}
 TYPE_NAMES = {dict: "table", list: "array"}
 
 
@@ -37,8 +49,18 @@ def _load(rel: str) -> Any:
     return module
 
 
+@functools.cache
 def _tree(rel: str) -> ast.Module:
     return ast.parse((ROOT / rel).read_text("utf-8"), filename=rel)
+
+
+@functools.cache
+def _defs(rel: str) -> dict[str, ast.stmt]:
+    return {
+        n.name: n
+        for n in _tree(rel).body
+        if isinstance(n, ast.ClassDef | ast.FunctionDef)
+    }
 
 
 def _assigned(rel: str, name: str, *, nested: bool = False) -> ast.expr:
@@ -149,6 +171,10 @@ def _signature(defs: dict[str, ast.stmt], name: str, rel: str) -> Signature:
             None,
         )
         if init is None:
+            if node.bases and all(
+                ast.unparse(b) in PARAMLESS_BASES for b in node.bases
+            ):
+                return Signature(ast.parse("def f(): pass").body[0].args)  # type: ignore[attr-defined]
             msg = f"{rel}: {name} has no __init__ of its own"
             raise LookupError(msg)
         return Signature(init.args, skip_self=True)
@@ -190,19 +216,67 @@ def _signature(defs: dict[str, ast.stmt], name: str, rel: str) -> Signature:
     return sig
 
 
-def _arch_params(archs: Any) -> dict[str, Any]:
-    trees: dict[str, dict[str, ast.stmt]] = {}
+def _constructor(rel: str, name: str, drop: tuple[str, ...] = ()) -> dict[str, Any]:
+    """`name`'s signature without the arguments its builder passes itself (`drop`)."""
+    sig = _signature(_defs(rel), name, rel)
+    for key in drop:
+        sig.params.pop(key, None)
+    return sig.as_json()
+
+
+def _registry_params(
+    registry: Any, package: str, suffix: str = "", drop: tuple[str, ...] = ()
+) -> dict[str, Any]:
+    return {
+        name: _constructor(f"neosr/{package}/{row.module}.py", name + suffix, drop)
+        for name, row in sorted(registry.items())
+    }
+
+
+def _origin(rel: str, name: str) -> tuple[str, str]:
+    """(file, name) of the module-level class or def that `name` is in `rel`, through
+    `from neosr... import` re-exports; ("", dotted path) for one from outside the repository."""
+    head, _, rest = name.partition(".")
+    if not rest and head in _defs(rel):
+        return rel, head
+    for node in _tree(rel).body:
+        if not isinstance(node, ast.Import | ast.ImportFrom):
+            continue
+        for alias in node.names:
+            if (alias.asname or alias.name.partition(".")[0]) != head:
+                continue
+            if isinstance(node, ast.Import):  # `import a.b` binds `a`
+                full, module = alias.name if alias.asname else head, None
+            else:
+                full, module = f"{node.module}.{alias.name}", node.module
+            if not full.startswith("neosr."):
+                return "", ".".join(filter(None, (full, rest)))
+            if module is None or rest:
+                break  # an attribute of a neosr module: not a form the tables use
+            path = module.replace(".", "/")
+            sub = (
+                f"{path}.py"
+                if (ROOT / f"{path}.py").exists()
+                else f"{path}/__init__.py"
+            )
+            return _origin(sub, alias.name)
+    msg = f"{rel}: cannot resolve {name}"
+    raise LookupError(msg)
+
+
+def _table_params(rel: str, table: str, drop: tuple[str, ...]) -> dict[str, Any]:
+    """The constructors of a `{type: class}` table; one outside the repository is `external`."""
+    node = _assigned(rel, table)
+    if not isinstance(node, ast.Dict):
+        msg = f"{rel}: {table} is not a dict literal"
+        raise TypeError(msg)
     out = {}
-    for name, row in sorted(archs.items()):
-        rel = f"neosr/archs/{row.module}.py"
-        if rel not in trees:
-            trees[rel] = {
-                n.name: n
-                for n in _tree(rel).body
-                if isinstance(n, ast.ClassDef | ast.FunctionDef)
-            }
-        out[name] = _signature(trees[rel], name, rel).as_json()
-    return out
+    for key, value in zip(node.keys, node.values, strict=True):
+        where, name = _origin(rel, ast.unparse(value))
+        out[ast.literal_eval(key)] = (  # type: ignore[arg-type]
+            _constructor(where, name, drop) if where else {"external": name}
+        )
+    return dict(sorted(out.items()))
 
 
 def _types(expected: Any) -> str | list[str]:
@@ -219,8 +293,9 @@ def build() -> dict[str, Any]:
         "generators": sorted(archs.keys() - scale_free),
         "discriminators": sorted(scale_free - INTERNAL_ARCHS),
         "scale_kwarg": {k: row.scale for k, row in sorted(archs.items()) if row.scale},
-        "arch_params": _arch_params(archs),
+        "arch_params": _registry_params(archs, "archs"),
         "losses": sorted(reg.LOSS_REGISTRY),
+        "loss_params": _registry_params(reg.LOSS_REGISTRY, "losses"),
         "loss_schedule_keys": list(
             ast.literal_eval(_assigned("neosr/losses/__init__.py", "SCHEDULE_KEYS"))
         ),
@@ -231,9 +306,18 @@ def build() -> dict[str, Any]:
             for metric, row in reg.METRIC_REGISTRY.items()
             if "choices" in row.meta
         },
+        "metric_params": _registry_params(  # the bound twin `<type>_pt(img, img2, ...)`
+            reg.METRIC_REGISTRY, "metrics", "_pt", ("img", "img2", "device")
+        ),
         "metric_lower": sorted(cfg.METRIC_LOWER),
         "optimizers": sorted(_keys("neosr/models/base.py", "OPTIMIZERS")),
+        "optimizer_params": _table_params(
+            "neosr/models/base.py", "OPTIMIZERS", ("params",)
+        ),
         "schedulers": sorted(_keys("neosr/models/base.py", "SCHEDULERS")),
+        "scheduler_params": _table_params(
+            "neosr/models/base.py", "SCHEDULERS", ("optimizer",)
+        ),
         "models": sorted(reg.MODEL_REGISTRY),
         "datasets": sorted(reg.DATASET_REGISTRY),
         "scales": sorted(cfg.SCALES),
@@ -249,14 +333,74 @@ def build() -> dict[str, Any]:
     }
 
 
+def _opaque_tables(opt: dict[str, Any]) -> list[tuple[str, Any, str]]:
+    """(section, table, surface key) of every constructor-checked table in a loaded config."""
+    train, val = opt.get("train") or {}, opt.get("val") or {}
+    return [
+        *((key, opt.get(key), "arch_params") for key in ("network_g", "network_d")),
+        *(
+            (f"train.{k}", v, "loss_params")
+            for k, v in train.items()
+            if k.endswith("_opt")
+        ),
+        *(
+            (f"train.{k}", train.get(k), "optimizer_params")
+            for k in ("optim_g", "optim_d")
+        ),
+        ("train.scheduler", train.get("scheduler"), "scheduler_params"),
+        *(
+            (f"val.metrics.{k}", v, "metric_params")
+            for k, v in (val.get("metrics") or {}).items()
+        ),
+    ]
+
+
+def kwarg_problems(opt: dict[str, Any], surface: dict[str, Any]) -> list[str]:
+    """Unknown types, and keywords a constructor rejects (unknown without **kwargs, or preset-bound)."""
+    own = {
+        **BUILDER_KEYS,
+        "loss_params": BUILDER_KEYS["loss_params"]
+        + tuple(surface["loss_schedule_keys"]),
+    }
+    bad = []
+    for section, table, key in _opaque_tables(opt):
+        if not isinstance(table, dict) or not table:
+            continue  # absent, or an empty loss table the builder skips
+        kind = table.get("type")
+        if key in {"optimizer_params", "scheduler_params"}:
+            kind = str(kind).lower()  # looked up lower-cased
+        sig = surface[key].get(kind)
+        if sig is None:
+            bad.append(f"[{section}] unknown type {kind!r}")
+            continue
+        if "external" in sig or sig.get("var_kwargs"):
+            continue
+        fixed = set(sig.get("fixed", ()))
+        for k in table.keys() - {"type", *own.get(key, ())}:
+            if k in fixed or k not in sig["params"]:
+                why = (
+                    "set by the preset" if k in fixed else "not a constructor parameter"
+                )
+                bad.append(f"[{section}] {kind}: {k!r} is {why}")
+    return bad
+
+
+def _validate_one(cfg: Any, surface: dict[str, Any], path: str) -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", cfg.ConfigWarning)
+        opt = cfg.load_config(path, is_train=True, root=ROOT)
+        cfg.validate_train(opt)
+    if bad := kwarg_problems(opt, surface):
+        raise cfg.ConfigError("; ".join(bad))
+
+
 def validate(paths: list[str]) -> int:
-    """load_config + validate_train per file; a ConfigWarning (unknown key) counts as a failure."""
-    cfg, failed = _load("neosr/config.py"), 0
+    """load_config + validate_train + the constructor keywords per file; a ConfigWarning (unknown
+    key) counts as a failure."""
+    cfg, surface, failed = _load("neosr/config.py"), build(), 0
     for path in paths:
         try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("error", cfg.ConfigWarning)
-                cfg.validate_train(cfg.load_config(path, is_train=True, root=ROOT))
+            _validate_one(cfg, surface, path)
         except (cfg.ConfigError, cfg.ConfigWarning) as err:
             failed += 1
             print(f"FAIL {path}: {err}")

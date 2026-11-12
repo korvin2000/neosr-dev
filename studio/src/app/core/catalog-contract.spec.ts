@@ -34,20 +34,31 @@ function expectSameSet(what: string, catalog: readonly string[], trainer: readon
 const schema: Readonly<Record<string, Readonly<Record<string, unknown>>>> = surface.schema;
 
 /** A constructor read by `ast`: literal defaults (null when `nonliteral`, `required` or None), `fixed` = bound by a preset. */
-interface ArchSignature {
+interface Signature {
   readonly params: Readonly<Record<string, unknown>>;
   readonly fixed?: readonly string[];
   readonly nonliteral?: readonly string[];
   readonly required?: readonly string[];
   readonly var_kwargs?: boolean;
 }
-const archSignatures: Readonly<Record<string, ArchSignature>> = surface.arch_params;
+/** A constructor outside the repository (torch.optim): not readable without torch, so not checked. */
+type Signatures = Readonly<Record<string, Signature | { readonly external: string }>>;
+const archSignatures: Readonly<Record<string, Signature>> = surface.arch_params;
+
+/**
+ * Catalog defaults that differ from a None constructor default on purpose: the catalog shows the
+ * value the constructor resolves None to.
+ */
+const RESOLVED_DEFAULTS: readonly string[] = ['fdl_loss.vgg_weights', 'fdl_loss.dino_layers', 'fdl_loss.dino_weights', 'vgg_perceptual_loss.layer_weights'];
 
 /** What a catalog entry's parameters (and window size) get wrong about the constructor. */
-function signatureProblems(type: string, params: readonly ParamInfo[], windowSize?: number): string[] {
-  const sig = archSignatures[type];
+function signatureProblems(table: Signatures, type: string, params: readonly ParamInfo[], windowSize?: number): string[] {
+  const sig = table[type];
   if (!sig) {
     return [`${type}: no constructor in the surface`];
+  }
+  if ('external' in sig) {
+    return [];
   }
   const literal = (key: string) => key in sig.params && !sig.nonliteral?.includes(key) && !sig.required?.includes(key);
   const bad: string[] = [];
@@ -61,7 +72,8 @@ function signatureProblems(type: string, params: readonly ParamInfo[], windowSiz
       if (fixed !== (p.fixed === true)) {
         bad.push(`${type}.${p.key}: ${fixed ? 'bound by the preset (a value raises TypeError) but not marked fixed' : 'marked fixed, but the constructor takes it'}`);
       }
-      if (literal(p.key) && JSON.stringify(p.default) !== JSON.stringify(sig.params[p.key])) {
+      const resolved = sig.params[p.key] === null && RESOLVED_DEFAULTS.includes(`${type}.${p.key}`);
+      if (literal(p.key) && !resolved && JSON.stringify(p.default) !== JSON.stringify(sig.params[p.key])) {
         bad.push(`${type}.${p.key}: default ${JSON.stringify(p.default)}, constructor ${JSON.stringify(sig.params[p.key])}`);
       }
     }
@@ -89,7 +101,7 @@ const WINDOW_SOURCES: Readonly<Record<string, 'computed' | ((p: Readonly<Record<
   ...Object.fromEntries(['dct', 'grformer', 'grformer_medium', 'grformer_large'].map((t) => [t, 'computed' as const])),
 };
 
-function windowSource(type: string, sig: ArchSignature): number | 'computed' | undefined {
+function windowSource(type: string, sig: Signature): number | 'computed' | undefined {
   const own = sig.params['window_size'];
   if (typeof own === 'number' && !sig.nonliteral?.includes('window_size')) {
     return own;
@@ -173,7 +185,7 @@ describe('catalog contract with the trainer (neosr-surface.json)', () => {
   });
 
   it('lists constructor parameters with their defaults, and window sizes, as the trainer has them', () => {
-    const bad = [...ARCHS.flatMap((a) => signatureProblems(a.type, a.params, a.windowSize)), ...DISCRIMINATORS.flatMap((d) => signatureProblems(d.type, d.params))];
+    const bad = [...ARCHS.flatMap((a) => signatureProblems(archSignatures, a.type, a.params, a.windowSize)), ...DISCRIMINATORS.flatMap((d) => signatureProblems(archSignatures, d.type, d.params))];
     expect(bad, 'catalog params vs the constructors (surface.arch_params)').toEqual([]);
     for (const info of TEMPLATE_INFOS) {
       for (const phase of compileRecipe(buildTemplate(info.id)).phases) {
@@ -185,6 +197,29 @@ describe('catalog contract with the trainer (neosr-surface.json)', () => {
           expect(rejected, `${phase.fileName} [${section}]: keys the constructor rejects`).toEqual([]);
         }
       }
+    }
+  });
+
+  it('lists loss, optimizer, scheduler and metric parameters with their defaults as the trainer has them', () => {
+    const bad = [
+      ...LOSSES.flatMap((l) => signatureProblems(surface.loss_params, l.type, l.params)),
+      ...OPTIMIZERS.flatMap((o) => signatureProblems(surface.optimizer_params, o.type, o.params)),
+      ...SCHEDULERS.flatMap((s) => signatureProblems(surface.scheduler_params, s.type, s.params)),
+      ...METRIC_TYPES.flatMap((m) => signatureProblems(surface.metric_params, m.type, m.params)),
+    ];
+    expect(bad, 'catalog params vs the constructors (surface.*_params)').toEqual([]);
+    const lossParams: Signatures = surface.loss_params;
+    const stale = RESOLVED_DEFAULTS.filter((key) => {
+      const [type, param] = key.split('.');
+      const sig = lossParams[type];
+      return !(sig && 'params' in sig && sig.params[param] === null);
+    });
+    expect(stale, 'RESOLVED_DEFAULTS entries whose constructor default is not None').toEqual([]);
+    const metricParams: Signatures = surface.metric_params;
+    for (const m of METRIC_TYPES) {
+      const sig = metricParams[m.type];
+      const keys = sig && 'params' in sig ? Object.keys(sig.params) : [];
+      expectSameSet(`${m.type} parameters (the Validation node models each)`, m.params.map((p) => p.key), keys);
     }
   });
 

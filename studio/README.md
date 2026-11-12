@@ -64,7 +64,7 @@ Phases are sequential runs: an objective change, a new discriminator or a separa
 |---|---|
 | Regenerate the surface after a trainer change | `npm run surface` |
 | Fail when the surface is stale | `npm run surface:check` |
-| Catalog vs surface (types, arch constructor parameters and defaults, losses, metrics, `gan_type`, schema keys) | `npx ng test --watch=false` (`src/app/core/catalog-contract.spec.ts`) |
+| Catalog vs surface (types, constructor parameters and defaults of archs, losses, optimizers, schedulers and metrics, `gan_type`, schema keys) | `npx ng test --watch=false` (`src/app/core/catalog-contract.spec.ts`) |
 | Compile every template, an all-options recipe and the shipped realplksr recipes, then run the trainer's `load_config` + `validate_train` on them | `npm run contract` |
 
-`--validate` covers the schema and the cross-key rules; constructor kwargs (`network_*`, `train.*_opt`, optimizers, scheduler, metrics) are opaque to it. The arch constructors are read with `ast` into the surface (`arch_params`: names, literal defaults, preset-bound `fixed` keys); the other constructors still come from reading the Python code.
+`--validate` covers the schema, the cross-key rules and the constructor kwargs of `network_*`, `train.*_opt`, the optimizers, the scheduler and `val.metrics.*`: an unknown type, a key the constructor does not take (unless it has `**kwargs`) or a preset-bound key fails. The constructors are read with `ast` into the surface (`arch_params`, `loss_params`, `optimizer_params`, `scheduler_params`, `metric_params`: names, literal defaults, preset-bound `fixed` keys); the torch optimizers and schedulers (`adam`, `adamw`, `nadam`, `multisteplr`, `cosineannealing`) live outside the repository, are recorded as `external` and stay unchecked.

@@ -3163,6 +3163,134 @@
     "psnr_loss",
     "vgg_perceptual_loss"
   ],
+  "loss_params": {
+    "HuberLoss": {
+      "params": {
+        "reduction": "mean",
+        "delta": 1.0
+      }
+    },
+    "L1Loss": {
+      "params": {
+        "reduction": "mean"
+      }
+    },
+    "MSELoss": {
+      "params": {
+        "reduction": "mean"
+      }
+    },
+    "chc_loss": {
+      "params": {
+        "reduction": "mean",
+        "criterion": "huber",
+        "loss_lambda": 0,
+        "clip_min": 0.003921,
+        "clip_max": 0.996078
+      }
+    },
+    "consistency_loss": {
+      "params": {
+        "criterion": "chc",
+        "blur": true,
+        "cosim": true,
+        "saturation": 1.0,
+        "brightness": 1.0
+      }
+    },
+    "dists_loss": {
+      "params": {
+        "as_loss": true,
+        "load_weights": true
+      }
+    },
+    "fdl_loss": {
+      "params": {
+        "patch_size": 4,
+        "stride": 1,
+        "num_proj": 24,
+        "model": "dinov2",
+        "vgg_weights": null,
+        "dino_layers": null,
+        "dino_weights": null,
+        "dino_norm": false,
+        "phase_weight": 1.0,
+        "seed": 0,
+        "fp32_backbone": true,
+        "checkpoint": false
+      }
+    },
+    "ff_loss": {
+      "params": {
+        "alpha": 1.0,
+        "patch_factor": 1,
+        "ave_spectrum": true,
+        "log_matrix": false,
+        "batch_matrix": false
+      }
+    },
+    "gan_loss": {
+      "params": {
+        "gan_type": "bce",
+        "real_label_val": 1.0,
+        "fake_label_val": 0.0,
+        "wavelet_init": null,
+        "r1_gamma": 0.0,
+        "r2_gamma": 0.0,
+        "reg_every": 16,
+        "gamma_decay": 1.0,
+        "gamma_iters": 0,
+        "penalty_fp32": false
+      }
+    },
+    "kl_loss": {
+      "params": {}
+    },
+    "ldl_loss": {
+      "params": {
+        "criterion": "l1",
+        "ksize": 7
+      }
+    },
+    "mssim_loss": {
+      "params": {
+        "window_size": 11,
+        "in_channels": 3,
+        "sigma": 1.5,
+        "K1": 0.01,
+        "K2": 0.03,
+        "L": 1,
+        "padding": null
+      }
+    },
+    "msswd_loss": {
+      "params": {
+        "num_scale": 3,
+        "num_proj": 24,
+        "patch_size": 11,
+        "stride": 1,
+        "c": 3
+      }
+    },
+    "ncc_loss": {
+      "params": {}
+    },
+    "psnr_loss": {
+      "params": {
+        "reduction": "mean",
+        "eps": 1e-08
+      }
+    },
+    "vgg_perceptual_loss": {
+      "params": {
+        "layer_weights": null,
+        "vgg_type": "vgg19",
+        "use_input_norm": true,
+        "range_norm": false,
+        "criterion": "chc"
+      }
+    }
+  },
   "loss_schedule_keys": [
     "start_iter",
     "ramp_iters",
@@ -3196,6 +3324,35 @@
       ]
     }
   },
+  "metric_params": {
+    "calculate_dists": {
+      "params": {}
+    },
+    "calculate_lpips": {
+      "params": {
+        "net": "alex"
+      }
+    },
+    "calculate_psnr": {
+      "params": {
+        "crop_border": 4,
+        "input_order": "HWC",
+        "test_y_channel": false
+      }
+    },
+    "calculate_ssim": {
+      "params": {
+        "crop_border": 4,
+        "input_order": "HWC",
+        "test_y_channel": false
+      }
+    },
+    "calculate_topiq": {
+      "params": {
+        "dataset": "kadid"
+      }
+    }
+  },
   "metric_lower": [
     "calculate_dists",
     "calculate_lpips"
@@ -3208,10 +3365,77 @@
     "adan_sf",
     "nadam"
   ],
+  "optimizer_params": {
+    "adam": {
+      "external": "torch.optim.Adam"
+    },
+    "adamw": {
+      "external": "torch.optim.AdamW"
+    },
+    "adamw_sf": {
+      "params": {
+        "lr": 0.0008,
+        "betas": [
+          0.9,
+          0.99
+        ],
+        "eps": 1e-08,
+        "weight_decay": 0.0,
+        "warmup_steps": 0.0,
+        "r": 0.0,
+        "weight_lr_power": 2.0,
+        "schedule_free": true,
+        "foreach": true
+      }
+    },
+    "adan": {
+      "params": {
+        "lr": 0.0005,
+        "betas": [
+          0.98,
+          0.92,
+          0.99
+        ],
+        "eps": 1e-08,
+        "weight_decay": 0.02,
+        "max_grad_norm": 0.0,
+        "no_prox": true,
+        "foreach": true
+      }
+    },
+    "adan_sf": {
+      "params": {
+        "lr": 0.0016,
+        "betas": [
+          0.98,
+          0.92,
+          0.99
+        ],
+        "eps": 1e-08,
+        "weight_decay": 0.02,
+        "max_grad_norm": 0.0,
+        "warmup_steps": 0,
+        "r": 0.0,
+        "weight_lr_power": 2.0,
+        "schedule_free": true
+      }
+    },
+    "nadam": {
+      "external": "torch.optim.NAdam"
+    }
+  },
   "schedulers": [
     "cosineannealing",
     "multisteplr"
   ],
+  "scheduler_params": {
+    "cosineannealing": {
+      "external": "torch.optim.lr_scheduler.CosineAnnealingLR"
+    },
+    "multisteplr": {
+      "external": "torch.optim.lr_scheduler.MultiStepLR"
+    }
+  },
   "models": [
     "image",
     "otf"
