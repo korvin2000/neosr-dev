@@ -35,6 +35,7 @@
               <span class="gan__hint faint">adds a discriminator and its optimizer</span>
             </label>
             <app-loss-editor
+              data-field="losses"
               [rows]="lossRowsOf(v.node)"
               [phases]="phases()"
               [activePhaseId]="activePhase()?.id ?? null"
@@ -44,7 +45,7 @@
             />
           }
           @case ('val-datasets') {
-            <app-val-datasets-editor [rows]="valRowsOf(v.node)" (rowsChange)="setValRows(v.node, $event)" />
+            <app-val-datasets-editor data-field="datasets" [rows]="valRowsOf(v.node)" (rowsChange)="setValRows(v.node, $event)" />
           }
           @case ('phases') {
             <app-phases-editor [phases]="phases()" (phasesChange)="setPhases($event)" />
@@ -54,7 +55,7 @@
 
       @for (f of v.basics; track f.field.key) {
         @if (isArchField(v, f)) {
-          <app-arch-select [field]="f.field" [value]="'' + (f.value ?? '')" [changed]="f.changed" [baseline]="f.baseline" [scale]="scale()" (valueChange)="set(v, f, $event)" (reset)="reset(v, f)" />
+          <app-arch-select [attr.data-field]="f.field.key" [field]="f.field" [value]="'' + (f.value ?? '')" [changed]="f.changed" [baseline]="f.baseline" [scale]="scale()" (valueChange)="set(v, f, $event)" (reset)="reset(v, f)" />
           @for (p of f.problems; track p.id) {
             <p class="node-problem" [class.node-problem--warn]="p.severity !== 'blocker'"><app-icon name="alert-triangle" [size]="13" /><span>{{ p.message }}</span></p>
           }
@@ -79,7 +80,7 @@
 
       @for (editor of v.part.custom ?? []; track editor) {
         @if (editor === 'arch-params') {
-          <app-disclosure title="Architecture options" [summary]="archParamsOf(v.node).length ? archParamsOf(v.node).length + ' options' : 'none'" [open]="isMoreOpen(v)" (openChange)="setMoreOpen(v, $event)">
+          <app-disclosure title="Architecture options" data-field="params" [summary]="archParamsOf(v.node).length ? archParamsOf(v.node).length + ' options' : 'none'" [open]="isMoreOpen(v)" (openChange)="setMoreOpen(v, $event)">
             <app-arch-params-editor [params]="archParamsOf(v.node)" [value]="paramsOf(v.node)" (valueChange)="setParams(v.node, $event)" />
           </app-disclosure>
         }

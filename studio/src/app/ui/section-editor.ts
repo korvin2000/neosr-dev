@@ -259,7 +259,7 @@ export class SectionEditor {
 
   private openMoreFor(key: string): void {
     for (const view of this.views()) {
-      if (view.more.some((f) => f.field.key === key)) {
+      if (view.more.some((f) => f.field.key === key) || (key === 'params' && view.part.custom?.includes('arch-params'))) {
         this.disclosure.set(view.moreKey, true);
       }
     }
@@ -271,7 +271,8 @@ export class SectionEditor {
       el.scrollIntoView({ block: 'center', behavior: 'smooth' });
       el.classList.add('flash');
       setTimeout(() => el.classList.remove('flash'), 1600);
-      el.querySelector<HTMLElement>('app-field-widget input, app-field-widget select, app-field-widget [type="checkbox"], .current')?.focus({ preventScroll: true });
+      const target = el.querySelector<HTMLElement>('app-field-widget input, app-field-widget select, app-field-widget [type="checkbox"], .current') ?? el.querySelector<HTMLElement>('input, select, button');
+      target?.focus({ preventScroll: true });
     }
   }
 }

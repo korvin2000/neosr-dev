@@ -93,6 +93,24 @@
       color: var(--text);
     }
   }
+
+  // A native radio inside a label item: arrow keys move the choice, Tab stops once.
+  label.seg__item {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+
+    &:has(:focus-visible) {
+      box-shadow: var(--focus-ring);
+    }
+  }
+
+  &__radio {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+  }
 }
 
 .speed {

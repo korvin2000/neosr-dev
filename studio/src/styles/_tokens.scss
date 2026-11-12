@@ -147,7 +147,8 @@
   --accent-soft: rgba(31, 111, 235, 0.12);
   --accent-text: #1554c0;
   --selection: #1f6feb;
-  --focus-ring: 0 0 0 2px rgba(31, 111, 235, 0.5);
+  // Opaque: the ring is the only focus indicator, and it holds 5.2:1 on every light surface (WCAG 1.4.11).
+  --focus-ring: 0 0 0 2px #1554c0;
 
   --ok: #11653c;
   --ok-soft: rgba(17, 101, 60, 0.12);
