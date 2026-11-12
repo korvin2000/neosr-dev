@@ -6,7 +6,8 @@
 import { ARCH_BY_TYPE } from '../catalog/archs';
 import { DISCRIMINATORS } from '../catalog/discriminators';
 import { LOSS_SCHEDULE_PARAMS, LOSSES } from '../catalog/losses';
-import { NODE_TYPES, nodeSpec } from '../catalog/node-catalog';
+import { METRIC_TYPES } from '../catalog/metrics';
+import { metricFieldKey, NODE_TYPES, nodeSpec } from '../catalog/node-catalog';
 import { OPTIMIZERS } from '../catalog/optimizers';
 import { fieldVisible, portVisible } from '../catalog/types';
 import { phaseRanges, type Recipe, type RecipeNode } from '../recipe.model';
@@ -324,6 +325,15 @@ export function validateRecipe(recipe: Recipe, ctx: PlanContext, options: Valida
     if (sets.every((s) => s.type === 'single') && Array.isArray(metrics) && metrics.length) {
       add('info', 'native', 'Metrics are skipped for visual-only ("single") validation sets.', { nodeId: ctx.val.id, fieldKey: 'metrics' });
     }
+    for (const m of METRIC_TYPES.filter((m) => Array.isArray(metrics) && metrics.includes(m.name))) {
+      for (const p of m.params) {
+        const key = metricFieldKey(m.name, p.key);
+        const want = vv[key] === undefined ? undefined : metricParamDomain(p, vv[key]);
+        if (want) {
+          add('blocker', 'native', `val.metrics.${m.name}.${p.key} must be ${want} (got ${JSON.stringify(vv[key])}).`, { nodeId: ctx.val.id, fieldKey: key });
+        }
+      }
+    }
     const best = String(vv['save_best'] ?? '');
     const extraMetrics = (recipe.nativeExtras['val'] as { metrics?: Record<string, unknown> } | undefined)?.metrics ?? {};
     if (best && !(Array.isArray(metrics) && metrics.includes(best)) && !(best in extraMetrics)) {
@@ -436,6 +446,20 @@ export function validateRecipe(recipe: Recipe, ctx: PlanContext, options: Valida
   walk(recipe.nativeExtras as Record<string, unknown>, []);
 
   return problems;
+}
+
+/** What a metric keyword must be when `value` is not that (build_metric `choices`, calculate.py `_prep_pt`). */
+function metricParamDomain(p: ParamInfo, value: unknown): string | undefined {
+  if (p.options) {
+    return typeof value === 'string' && p.options.includes(value) ? undefined : `one of ${p.options.join(', ')}`;
+  }
+  if (p.type === 'bool') {
+    return typeof value === 'boolean' ? undefined : 'true or false';
+  }
+  if (p.type === 'int') {
+    return Number.isInteger(value) && (value as number) >= 0 ? undefined : 'an integer ≥ 0'; // crop_border
+  }
+  return p.key === 'input_order' && value !== 'HWC' && value !== 'CHW' ? 'HWC or CHW' : undefined;
 }
 
 /** Native numeric rules NeoSR enforces at load time (config.py validate_train, train.py). */

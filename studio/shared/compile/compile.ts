@@ -8,7 +8,7 @@
 import { ARCH_BY_TYPE } from '../catalog/archs';
 import { LOSSES } from '../catalog/losses';
 import { METRIC_TYPES } from '../catalog/metrics';
-import { NODE_TYPES, nodeSpec } from '../catalog/node-catalog';
+import { metricFieldKey, NODE_TYPES, nodeSpec } from '../catalog/node-catalog';
 import { OPTIMIZERS } from '../catalog/optimizers';
 import { fieldVisible, type NodeSpec } from '../catalog/types';
 import { phaseRanges, type Phase, type Recipe, type RecipeNode } from '../recipe.model';
@@ -287,9 +287,10 @@ function buildDoc(
           type: annotate(info.type, origin(ctx.val, 'metrics')),
           better: annotate(info.better === 'lower' ? 'lower' : undefined, origin(ctx.val, 'metrics')),
         };
-        for (const p of info.params.filter((p) => p.options)) {
-          const value = nodeValues(ctx.val)[`${name}_${p.key}`];
-          entries[p.key] = annotate(value !== p.default ? value : undefined, origin(ctx.val, `${name}_${p.key}`));
+        for (const p of info.params) {
+          const key = metricFieldKey(name, p.key);
+          const value = nodeValues(ctx.val)[key];
+          entries[p.key] = annotate(value === p.default || value === '' ? undefined : value, origin(ctx.val, key));
         }
         sections.push({ path: `val.metrics.${name}`, origin: origin(ctx.val, 'metrics'), entries });
       }

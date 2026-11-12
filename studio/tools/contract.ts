@@ -29,7 +29,7 @@ function optionsRecipe(): Recipe {
   recipe = withValues(recipe, NODE_TYPES.plan, { clamp: 'true', grad_clip: 'norm', grad_clip_norm: 0.5, max_skip_streak: 5, keep_exports: 2 });
   recipe = withValues(recipe, NODE_TYPES.runtime, { deterministic: true, detect_anomaly: true, fp16_accumulation: true, manual_seed: 7 });
   recipe = withValues(recipe, NODE_TYPES.trainDataset, { aug_multi_prob: 0.5, aug_antialias: true, tight_canvas: true });
-  recipe = withValues(recipe, NODE_TYPES.validation, { metrics: ['psnr', 'topiq', 'lpips'], save_best: 'lpips', topiq_dataset: 'pipal', lpips_net: 'vgg' });
+  recipe = withValues(recipe, NODE_TYPES.validation, { metrics: ['psnr', 'topiq', 'lpips'], save_best: 'lpips', topiq_dataset: 'pipal', lpips_net: 'vgg', psnr_crop_border: 0, psnr_test_y_channel: true, psnr_input_order: 'CHW' });
   recipe = withValues(recipe, NODE_TYPES.generator, { params: { layer_norm: true, icnr: true } });
   recipe = withValues(recipe, NODE_TYPES.discriminator, { type: 'r3gan' });
   const rows = lossRows(recipe.nodes.find((n) => n.type === NODE_TYPES.losses)).map((row) =>

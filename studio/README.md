@@ -46,7 +46,7 @@ See `DEVELOPING.md` for the store/command API and conventions, and `server/API.m
 - Browser walkthrough of every page against the simulated backend, including launch → live cockpit → graceful stop → resume.
 - Visual QA pass with pixel captures at 1440×900 and 390×844 (`tools/shot.mjs`, Chrome DevTools protocol so phone widths are exact) of every screen and every Build section; captures live in `../design/screenshots/qa/` and `qa-phone/`.
 
-Known limitations left open on purpose: the simulator keeps full-resolution series in memory until a run ends (snapshots are downsampled), and the TOML importer models metrics by name plus their fixed choices (TOPIQ `dataset`, LPIPS `net`); other metric parameters (`crop_border`, `test_y_channel`) are preserved as extras rather than edited in the Validation node.
+Known limitations left open on purpose: the simulator keeps full-resolution series in memory until a run ends (snapshots are downsampled). The Validation node models every metric keyword the trainer takes (`crop_border`, `test_y_channel`, `input_order`, TOPIQ `dataset`, LPIPS `net`); a metric table under another name (`[val.metrics.psnr_y]`) or with a key the trainer does not know is preserved as extras.
 
 ## Facts the UI is built on
 

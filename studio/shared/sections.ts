@@ -6,7 +6,8 @@
  */
 import { ARCH_BY_TYPE } from './catalog/archs';
 import { LOSSES } from './catalog/losses';
-import { NODE_TYPES, nodeSpec } from './catalog/node-catalog';
+import { METRIC_TYPES } from './catalog/metrics';
+import { metricFieldKey, NODE_TYPES, nodeSpec } from './catalog/node-catalog';
 import { defaultValues, fieldVisible, type FieldSpec } from './catalog/types';
 import { activeLossRows, lossRows, nodeValues, planContext, valDatasets, type PlanContext } from './compile/graph';
 import type { Problem } from './compile/problems';
@@ -151,7 +152,7 @@ export const SECTIONS: readonly SectionDef[] = [
     title: 'Validation & saving',
     icon: 'check-image',
     parts: [
-      { nodeType: NODE_TYPES.validation, basics: ['val_freq', 'metrics'], more: ['save_best', 'topiq_dataset', 'lpips_net', 'save_img', 'tile', 'tile_overlap', 'save_lq'], custom: ['val-datasets'], addLabel: 'Add validation' },
+      { nodeType: NODE_TYPES.validation, basics: ['val_freq', 'metrics'], more: ['save_best', ...METRIC_TYPES.flatMap((m) => m.params.map((p) => metricFieldKey(m.name, p.key))), 'save_img', 'tile', 'tile_overlap', 'save_lq'], custom: ['val-datasets'], addLabel: 'Add validation' },
       { nodeType: NODE_TYPES.plan, title: 'Saving', basics: ['save_checkpoint_freq'], more: ['keep_states', 'keep_exports', 'print_freq', 'use_tb_logger', 'save_tb_img', 'wandb_project'] },
     ],
     summary: (recipe, ctx) => {

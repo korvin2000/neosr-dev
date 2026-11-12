@@ -252,6 +252,23 @@ save_checkpoint_freq = 500
     expect(compileRecipe(result.recipe).problems.filter((p) => p.severity === 'blocker')).toEqual([]);
   });
 
+  it('models metric parameters in the Validation node, validates them and keeps unknown metric keys as extras', () => {
+    const extended = toml.replace('[val.metrics.psnr]\ntype = "calculate_psnr"', '[val.metrics.psnr]\ntype = "calculate_psnr"\ncrop_border = 0\ntest_y_channel = true\nmystery = 1');
+    const result = importToml(extended, emptyRecipe('t'));
+    const val = result.recipe.nodes.find((n) => n.type === NODE_TYPES.validation)!;
+    expect(val.values).toMatchObject({ metrics: ['psnr'], psnr_crop_border: 0, psnr_test_y_channel: true });
+    expect(result.preserved).toEqual(expect.arrayContaining(['val.metrics.psnr.mystery']));
+    expect(result.preserved.filter((p) => p.startsWith('val.metrics.psnr.') && p !== 'val.metrics.psnr.mystery')).toEqual([]);
+    const text = compileRecipe(result.recipe).phases[0].text;
+    expect(text).toContain('[val.metrics.psnr]\ntype = "calculate_psnr"\ncrop_border = 0\ntest_y_channel = true');
+    expect(text).toContain('mystery = 1');
+    expect(blockers(result.recipe)).toEqual([]);
+    const bad = commands.setValues(val.id, { psnr_crop_border: -1, psnr_input_order: 'NHWC' }).apply(result.recipe);
+    expect(blockers(bad).map((p) => p.fieldKey)).toEqual(['psnr_crop_border', 'psnr_input_order']);
+    const defaults = commands.setValues(val.id, { psnr_crop_border: 4, psnr_test_y_channel: false, psnr_input_order: '' }).apply(result.recipe);
+    expect(compileRecipe(defaults).phases[0].text).toContain('[val.metrics.psnr]\ntype = "calculate_psnr"\nmystery = 1');
+  });
+
   it('round-trips: compiled output keeps the imported values and the extras', () => {
     const result = importToml(toml, emptyRecipe('t'));
     const compiled = compileRecipe(result.recipe, { platform: 'windows' });

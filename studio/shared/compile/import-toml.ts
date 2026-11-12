@@ -5,7 +5,7 @@
 import { parse } from 'smol-toml';
 import { LOSSES } from '../catalog/losses';
 import { METRIC_TYPES } from '../catalog/metrics';
-import { NODE_TYPES, nodeSpec } from '../catalog/node-catalog';
+import { metricFieldKey, NODE_TYPES, nodeSpec } from '../catalog/node-catalog';
 import type { LossRow, Recipe } from '../recipe.model';
 import { newId } from '../recipe.model';
 import { applyDraft, type RecipeDraft } from '../recipe-builder';
@@ -154,18 +154,18 @@ export function importToml(text: string, base: Recipe, name?: string): ImportRes
         const betterMatches = better === undefined || better === info?.better;
         if (info && info.name === mName && betterMatches) {
           names.push(info.name);
-          for (const p of info.params.filter((p) => p.options && p.key in mv)) {
-            values[`${mName}_${p.key}`] = take(mv, p.key);
+          for (const p of info.params.filter((p) => p.key in mv)) {
+            values[metricFieldKey(mName, p.key)] = take(mv, p.key);
           }
           const extraKeys = Object.keys(mv).filter((k) => k !== 'type' && k !== 'better');
           if (extraKeys.length === 0) {
             // Exactly what the Validation node would write: model it.
             delete metricsTable[mName];
           } else {
-            // Known metric with other parameters: model the name, keep the parameters as extras.
+            // Known metric with keys the trainer does not know: model the rest, keep those as extras.
             delete mv['type'];
             delete mv['better'];
-            warnings.push(`Metric "${mName}" keeps its parameters (${extraKeys.join(', ')}) as preserved extras.`);
+            warnings.push(`Metric "${mName}" keeps unknown keys (${extraKeys.join(', ')}) as preserved extras.`);
           }
         } else {
           warnings.push(`Metric "${mName}" (${type}) is not one the Validation node models; its table is preserved verbatim.`);

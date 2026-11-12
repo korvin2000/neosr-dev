@@ -10,7 +10,7 @@ import { LOSSES } from './losses';
 import { METRIC_TYPES } from './metrics';
 import { OPTIMIZERS } from './optimizers';
 import { SCHEDULERS } from './schedulers';
-import type { DegradationFieldInfo, OptimizerInfo } from './data-types';
+import type { DegradationFieldInfo, OptimizerInfo, ParamInfo } from './data-types';
 import type { FieldSpec, NodeSpec, SelectOption, Widget } from './types';
 
 export const NODE_TYPES = {
@@ -193,23 +193,33 @@ const degradationFields: FieldSpec[] = DEGRADATION_FIELDS.map((f) => ({
   group: f.stage === 'final' ? 'Final' : `Stage ${f.stage} · ${f.group}`,
 }));
 
-/** One select per metric keyword with fixed choices (`[val.metrics.<name>] <key>`), shown while that metric is on. */
-function metricChoiceFields(): FieldSpec[] {
+/** The Validation node's field for a metric keyword (`[val.metrics.<metric>] <param>`). */
+export const metricFieldKey = (metric: string, param: string) => `${metric}_${param}`;
+
+function metricWidget(p: ParamInfo): Widget {
+  if (p.options) {
+    return { kind: 'select', options: p.options.map((o) => ({ value: o, label: o })) };
+  }
+  return p.type === 'bool' ? { kind: 'toggle' } : p.type === 'int' ? { kind: 'number', min: 0, step: 1 } : { kind: 'text', monospace: true };
+}
+
+const METRIC_PARAM_LABELS: Readonly<Record<string, string>> = { crop_border: 'border crop', test_y_channel: 'Y channel only' };
+
+/** One field per metric keyword, shown while that metric is on. */
+function metricParamFields(): FieldSpec[] {
   return METRIC_TYPES.flatMap((m) =>
-    m.params
-      .filter((p) => p.options)
-      .map(
-        (p): FieldSpec => ({
-          key: `${m.name}_${p.key}`,
-          label: `${m.label} ${p.key}`,
-          help: p.help ?? '',
-          tomlKey: `val.metrics.${m.name}.${p.key}`,
-          widget: { kind: 'select', options: (p.options ?? []).map((o) => ({ value: o, label: o })) },
-          default: p.default,
-          level: 'advanced',
-          showWhen: { key: 'metrics', values: [m.name] },
-        }),
-      ),
+    m.params.map(
+      (p): FieldSpec => ({
+        key: metricFieldKey(m.name, p.key),
+        label: `${m.label} ${METRIC_PARAM_LABELS[p.key] ?? p.key.replace(/_/g, ' ')}`,
+        help: p.help ?? '',
+        tomlKey: `val.metrics.${m.name}.${p.key}`,
+        widget: metricWidget(p),
+        default: p.default,
+        level: 'advanced',
+        showWhen: { key: 'metrics', values: [m.name] },
+      }),
+    ),
   );
 }
 
@@ -522,7 +532,7 @@ export const NODE_CATALOG: readonly NodeSpec[] = [
         default: '',
         level: 'advanced',
       },
-      ...metricChoiceFields(),
+      ...metricParamFields(),
       {
         key: 'save_img',
         label: 'Save images',

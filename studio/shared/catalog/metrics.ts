@@ -1,6 +1,6 @@
 import type { MetricTypeInfo } from './data-types';
 
-/** `[val.metrics.<name>]` types (design/neosr_config_surface.md section 8.2). */
+/** `[val.metrics.<name>]` types (design/neosr_config_surface.md section 8.2); `params` are all keywords the trainer takes. */
 export const METRIC_TYPES: readonly MetricTypeInfo[] = [
   {
     type: 'calculate_psnr',
@@ -8,9 +8,9 @@ export const METRIC_TYPES: readonly MetricTypeInfo[] = [
     label: 'PSNR',
     better: 'higher',
     params: [
-      { key: 'crop_border', type: 'int', default: 4 },
-      { key: 'input_order', type: 'str', default: 'HWC' },
-      { key: 'test_y_channel', type: 'bool', default: false },
+      { key: 'crop_border', type: 'int', default: 4, help: 'Pixels cropped from every edge before scoring; usually the scale (0: none).' },
+      { key: 'test_y_channel', type: 'bool', default: false, help: 'Score the luma (Y of YCbCr) only, the usual SR benchmark convention.' },
+      { key: 'input_order', type: 'str', default: 'HWC', help: 'HWC or CHW: the layout of numpy inputs; validation passes tensors, so it only has to be valid.' },
     ],
     description: 'Peak signal-to-noise ratio between the output and the ground truth.',
   },
@@ -20,9 +20,9 @@ export const METRIC_TYPES: readonly MetricTypeInfo[] = [
     label: 'SSIM',
     better: 'higher',
     params: [
-      { key: 'crop_border', type: 'int', default: 4 },
-      { key: 'input_order', type: 'str', default: 'HWC' },
-      { key: 'test_y_channel', type: 'bool', default: false },
+      { key: 'crop_border', type: 'int', default: 4, help: 'Pixels cropped from every edge before scoring; usually the scale (0: none).' },
+      { key: 'test_y_channel', type: 'bool', default: false, help: 'Score the luma (Y of YCbCr) only, the usual SR benchmark convention.' },
+      { key: 'input_order', type: 'str', default: 'HWC', help: 'HWC or CHW: the layout of numpy inputs; validation passes tensors, so it only has to be valid.' },
     ],
     description: 'Structural similarity; needs at least 11x11 pixels after the border crop.',
   },
