@@ -49,7 +49,7 @@ src/app/
   core/api.service.ts        ApiService (typed HTTP), RecipeSummary, ModelFile, DatasetInfo, ScanReport, LaunchRejected
   core/run-store.ts          RunStore (list, refresh, active) and LiveRun (SSE-backed signals for one run)
   core/settings.service.ts   SettingsService.settings() { platform, neosrRoot, experimentsRoot, optionsDir, simSpeed, showNativeFields, inspectorDocked, theme }
-  core/theme.service.ts      ThemeService.theme(): 'light' | 'dark' — the Settings choice (system · light · dark) resolved and set as `data-theme` on <html>
+  core/theme.service.ts      ThemeService.theme(): 'light' | 'dark' — the Settings choice (system · light · dark) resolved; light is `data-theme="light"` on <html>, dark sets no attribute
   core/environment.service.ts EnvironmentService.info()
   core/preset.service.ts     PresetService: node presets (built-in + localStorage): presets(), byType(type), save(name, node), remove(id)
   ui/icon.ts                 <app-icon name size weight> — names listed in ICON_NAMES (add new ones there)
@@ -130,7 +130,7 @@ The design is `../design/NeoSR_Studio_UI_Concept_v2.md` (final; §1 rules, §2 s
 - No permanent hint paragraphs, no suggestion chip rows, no uppercase micro-labels, no mono TOML keys next to headings (keys appear in ⓘ and when `showKeys`). Badges only for status and the global "Simulated" marker. "≈" marks estimates.
 - Default state of a screen shows the summary tier only; details open on click; "More options" is remembered per section.
 - Every hover/right-click/drag gesture has a visible twin (⋯ menus, ⓘ, + buttons, pickers).
-- Validate on commit; blockers inline under the field; the primary button reads "Launch · n to fix" and jumps to the first one (`BuildPage.focusProblem` navigates to `/build/list?section=&node=&field=` or `/build/graph?node=&field=`).
+- Validate on commit; blockers inline under the field; the primary button reads "Launch · n to fix" and jumps to the first one (`BuildPage.focusProblem` navigates to `/build/list?section=&node=&field=`, `/build/graph?node=&field=` or, from the TOML view, `/build/toml?node=&field=`, which opens the inspector drawer over the code).
 - Phone (≤ 720 px): single column, drawers become sheets, inputs 16 px, targets ≥ 44 px, nothing hidden behind hover. Test at 390 × 844.
 - Keep the v1 visual tokens (chaiNNer greys in the dark theme, their light counterparts in the light one) but use colour for status only; node family colour only as a 3 px stripe / port colour.
 

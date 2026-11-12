@@ -5,8 +5,9 @@
 // Sass does the build-time work (accent and port maps).
 //
 // Two themes share every token name: `:root` is the dark set, `:root[data-theme='light']` the
-// light one (ThemeService sets the attribute from the Settings choice or the system). A colour
-// that differs between the themes is a token here, never a literal in a component.
+// light one (ThemeService sets the attribute from the Settings choice or the system; dark sets
+// none). A colour that differs between the themes is a token here, never a literal in a
+// component.
 //
 // The dark greys are the chaiNNer-sampled set used by the reference node UI, which is why the
 // canvas reads right next to ComfyUI/chaiNNer rather than merely "dark".

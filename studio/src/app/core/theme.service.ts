@@ -5,9 +5,10 @@ export type Theme = 'light' | 'dark';
 
 /**
  * The colour theme: the Settings choice, or the system's `prefers-color-scheme` when that is
- * "system". It is applied as `data-theme` on `<html>`, where the tokens switch
- * (`styles/_tokens.scss`). `theme()` changes after the attribute is set, so code that reads
- * computed styles (the charts) can depend on it.
+ * "system". Dark is the tokens' default; light is `data-theme="light"` on `<html>`
+ * (`styles/_tokens.scss`). Dark sets no attribute: Foblex reads `data-theme="dark"` as its own
+ * switch and would repaint the canvas. `theme()` changes after the attribute does, so code that
+ * reads computed styles (the charts) can depend on it.
  */
 @Injectable({ providedIn: 'root' })
 export class ThemeService {
@@ -26,7 +27,11 @@ export class ThemeService {
     light.addEventListener('change', follow);
     effect(() => {
       const theme = this.wanted();
-      document.documentElement.dataset['theme'] = theme;
+      if (theme === 'light') {
+        document.documentElement.dataset['theme'] = theme;
+      } else {
+        delete document.documentElement.dataset['theme'];
+      }
       this.theme.set(theme);
     });
   }
