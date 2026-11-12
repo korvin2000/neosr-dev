@@ -2,6 +2,7 @@ import { NgTemplateOutlet } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
 import { ARCHS, ARCH_BY_TYPE } from '@shared/catalog/archs';
 import type { ArchInfo, SizeClass } from '@shared/catalog/data-types';
+import { no_onnx, onnx_static_only } from '@shared/catalog/neosr-surface.json';
 import type { FieldSpec } from '@shared/catalog/types';
 import { Drawer } from './drawer';
 import { HelpPopover } from './help-popover';
@@ -29,6 +30,17 @@ const SIZE_LABEL: Record<SizeClass, string> = {
   'ultra-heavy': 'very large',
 };
 
+interface OnnxGap {
+  readonly label: string;
+  readonly help: string;
+}
+
+const NO_ONNX: OnnxGap = { label: 'no ONNX', help: 'neosr-convert cannot export this architecture to ONNX. It trains normally; the weights stay PyTorch-only.' };
+const STATIC_ONLY: OnnxGap = { label: 'ONNX static only', help: 'Exports to ONNX only with a fixed input shape (neosr-convert -static C H W): the exported model accepts that one image size.' };
+
+/** Export gaps from the trainer's `convert.py` tables (via the surface); an arch in neither exports freely. */
+const ONNX_GAPS: ReadonlyMap<string, OnnxGap> = new Map([...no_onnx.map((t) => [t, NO_ONNX] as const), ...onnx_static_only.map((t) => [t, STATIC_ONLY] as const)]);
+
 /** Four safe starting points, shown first; everything else is one search away. */
 const RECOMMENDED = ['compact', 'span', 'realplksr', 'hat_s'];
 
@@ -55,6 +67,9 @@ const RECOMMENDED = ['compact', 'span', 'realplksr', 'hat_s'];
         <button type="button" class="reset" (click)="reset.emit()" [appTooltip]="'Preset: ' + baselineLabel()" aria-label="Reset to preset"><app-icon name="undo" [size]="13" /></button>
       }
     </div>
+    @if (onnxGap(value()); as gap) {
+      <app-help class="onnx" [label]="gap.label" [help]="gap.help" />
+    }
 
     <app-drawer [open]="open()" title="Choose a model" [width]="460" (closed)="open.set(false)">
       <input class="input search" type="search" placeholder="Search by name or family…" [value]="query()" (input)="query.set($any($event.target).value)" autofocus aria-label="Search architectures" />
@@ -93,16 +108,21 @@ const RECOMMENDED = ['compact', 'span', 'realplksr', 'hat_s'];
     </app-drawer>
 
     <ng-template #row let-a>
-      <button type="button" class="arch" [class.arch--active]="a.type === value()" (click)="pick(a)">
-        <span class="arch__name">{{ a.label }}<span class="arch__family faint"> · {{ a.family }}</span></span>
-        <span class="arch__meta">{{ meta(a) }}</span>
-        @if (a.note) {
-          <span class="arch__note faint">{{ a.note }}</span>
+      <div class="arch" [class.arch--active]="a.type === value()">
+        <button type="button" class="arch__pick" (click)="pick(a)">
+          <span class="arch__name">{{ a.label }}<span class="arch__family faint"> · {{ a.family }}</span></span>
+          <span class="arch__meta">{{ meta(a) }}</span>
+          @if (a.note) {
+            <span class="arch__note faint">{{ a.note }}</span>
+          }
+        </button>
+        @if (onnxGap(a.type); as gap) {
+          <app-help class="arch__onnx" [label]="gap.label" [help]="gap.help" />
         }
         @if (a.type === value()) {
           <app-icon name="check" [size]="14" class="arch__check" />
         }
-      </button>
+      </div>
     </ng-template>
   `,
   styles: `
@@ -117,17 +137,23 @@ const RECOMMENDED = ['compact', 'span', 'realplksr', 'hat_s'];
     .current__chev { color: var(--text-faint); }
     .reset { display: inline-flex; color: var(--text-faint); padding: 4px; border-radius: 50%; }
     .reset:hover { color: var(--text); background: var(--panel-raised); }
+    .onnx { grid-column: -2 / -1; justify-self: start; margin-top: 6px; }
     .search { margin-bottom: 10px; }
     .facets { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 12px; }
     .facets__group { display: flex; gap: 4px; }
     .chip--toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
     .group { margin: 10px 0 4px; color: var(--text-faint); font-size: var(--fs-sm); }
-    .arch { position: relative; display: grid; grid-template-columns: 1fr; gap: 2px; width: 100%; padding: 8px 32px 8px 10px; border-radius: var(--radius); text-align: left; color: var(--text); }
+    .arch { position: relative; border-radius: var(--radius); }
     .arch:hover { background: var(--panel-raised); }
     .arch--active { background: var(--accent-soft); }
+    .arch__pick { display: grid; grid-template-columns: 1fr; gap: 2px; width: 100%; padding: 8px 32px 8px 10px; border-radius: var(--radius); text-align: left; color: var(--text); }
+    /* The whole row picks; the badge sits above that target, and above later rows' badges while its popover is open. */
+    .arch__pick::after { content: ''; position: absolute; inset: 0; }
+    .arch__onnx { z-index: 1; margin: -4px 10px 8px; }
+    .arch__onnx.open { z-index: 2; }
     .arch__meta { color: var(--text-muted); font-size: var(--fs-sm); }
     .arch__note { font-size: var(--fs-sm); }
-    .arch__check { position: absolute; right: 10px; top: 12px; color: var(--accent-text); }
+    .arch__check { position: absolute; right: 10px; top: 12px; color: var(--accent-text); pointer-events: none; }
     .empty { padding: 12px; }
     @media (max-width: 720px) { :host { grid-template-columns: 1fr; row-gap: 6px; } .current { max-width: none; } }
   `,
@@ -190,6 +216,8 @@ export class ArchSelect {
   });
 
   protected readonly recommended = computed(() => RECOMMENDED.map((t) => ARCH_BY_TYPE.get(t)).filter((a): a is ArchInfo => !!a && (!this.scale() || !this.onlyScale() || a.scales.includes(this.scale()!))));
+
+  protected readonly onnxGap = (type: string) => ONNX_GAPS.get(type);
 
   protected meta(a: ArchInfo | undefined): string {
     if (!a) {
