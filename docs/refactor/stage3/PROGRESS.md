@@ -462,3 +462,22 @@ and 14:41 (the queue tail, the LDL flip held). Source log: `experiments/s9_ab/NO
 - **Not done / pending:** the CI workflow has not run; `compile = true` in the CNN templates waits for the owner
   (`../stage2/DECISIONS.md` 18).
 
+
+### Session 10 (2026-11-11 evening to 2026-11-12 night, Linux machine): D10, the hold, strategy-independent work
+- **Runs:** the s10 queue (`experiments/s10/`, `NOTES.md`): 20k extensions, the DISTS arms, the owner's recipe ported,
+  the compile pair. **D10** accepted (`../DECISIONS.md`): window-mean gate with a noise-based tau (c4a29305).
+- **Hold (owner, 2026-11-12):** no selection or tuning of strategies or tactics until the owner's community material
+  is studied; the D10 arms are held (`experiments/s10/queue2.held.txt`). Work list: `next_tasks.md` ranks 1-9.
+- **Compile pair:** TIE at 12k-20k on two seeds; `scripts/compile_parity.py` PASS on its first GPU run. Real runs gain
+  nothing consistent from compile (10.5-11.0 vs 10.5-11.7 it/s) while bench.py says -18 %: bench's eager path is
+  slower than the trainer's loop (open).
+- **Measured:** 4K validation (3.0 s, 9.02 GiB; DISTS 8.59 / TOPIQ 5.97 GiB above their nets); batch 8/16/32
+  (76/99/99 img/s, 3.19/5.88/11.2 GiB); bf16 autocast gives realplksr inference no speed-up (T-05); a save costs
+  <= 0.9 s (T-12).
+- **Code (each lane: Codex review, findings checked, fixed):** queue.sh line check + file lock, done.json
+  `run_peak_gib`/`steady_mem_gib` (8cea4fa1-683b2433); save before validation (d3e45167, 60e4b977); `weights`
+  test marker, LPIPS-VGG parity, real torchprofile test (91e49ab1, 403d1113); Studio: ast constructor signatures,
+  metric parameters, ONNX badges, light theme, TOML links, dead `onnx` flag removed (788001f8-4d4a3ec6); the D8 GPU
+  lifecycle run PASS, log lines stamped with their own update (c3451d87, b87da21b).
+- **Checks:** fast CPU subset 1887 passed, 18 skipped, 0 failed (after the core lanes); Studio typecheck, 43 + 37
+  tests, contract, surface current. The full CPU + CUDA suite was not rerun.
