@@ -342,6 +342,9 @@ better = "lower"          # default "higher" ("lower" for calculate_dists, calcu
 
 `val.save_best = "<metric key>"` exports the evaluated generator when that metric matches or improves its best
 (see checkpoints).
+Memory: DISTS and TOPIQ score the full-size image on the GPU; at 3840x2160 they take ~8.6 and ~6.0 GiB above
+their nets, and a 4K pass with all five metrics peaks at ~9 GiB (RTX 4090). `val.tile` does not lower this; on a
+smaller card a learned metric that runs out of memory scores that image on the CPU (slower, warned once).
 Judge GAN runs by a metric that is not one of their training losses ([docs/training_guide.md](docs/training_guide.md)).
 
 Validation runs on rank 0 with the EMA (or evaluation) weights and leaves the training RNG streams untouched.

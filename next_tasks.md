@@ -23,17 +23,17 @@ long pair) until the owner hands over the community material on photoreal traini
 `experiments/s10/queue2.held.txt` (T_DISTS_s2, T_DISTS_noFDL), sections 3.1-3.2 below, D10 ranks 4-5. Work only on
 what does not depend on the recipe (sweep of all open items, 2026-11-12: 39 independent, 23 borderline, 12 tactic):
 
-| rank | task | GPU | source |
-|---|---|---|---|
-| 1 | Compile pair (queue 1, last arms, ends ~03:15): read with `--window` (D2, D10 rule 8); move `compile_parity.py` from `experiments/s10/` to `scripts/`; the compiled metagan D draws another Dropout/DropPath stream (document, or `fallback_random`: owner) | running | `experiments/s10/NOTES.md` |
-| 2 | One measured 4K validation pass; document the metric memory limit for cards under 24 GB | short | D7 |
-| 3 | Batch 8/16/32 at patch 64: ms/update, steady vs start-up VRAM; re-measure the "unverified (needs GPU)" numbers of done rows (T-05 autocast, D-06 uint8 crop, T-12 save stall) | short | D10 rule 9, `stage2/CLOSURE.md:17` |
-| 4 | Studio GPU lifecycle run (launch, live cockpit, stop, resume) through `STUDIO_TRAINER=real` | short | D8 |
-| 5 | A/B tooling: `done.json` `peak_mem_gib` is the start-up transient (rename or add the steady median); the runners refuse a foreign queue-line format (the 18:15 incident); D10 calibration on the finished arms (tool check only, no recipe verdicts) | none | `scripts/ab/run_ab.py:202`, NOTES |
-| 6 | Checkpoints: a hard kill during validation loses that update (T-03 residual); say in the readme whether pre-refactor (format 1) `.state` files load | none | `stage2/CLOSURE.md:101`, `readme.md:287` |
-| 7 | Loader: 16-bit PNG decode costs ~1.65x (bit-exact ANYDEPTH route, or document `extract_subimages --bits8`); worker-sizing advice (D-14, D-06c) | none | `neosr/utils/img_util.py:182` |
-| 8 | Tests: a real torchprofile tracer test (PLAN R1.1); LPIPS-VGG lin-layer parity; a uniform skip for tests that need downloaded weights | none | `STATUS.md` "Needs the Linux machine" 9 |
-| 9 | Studio: ONNX capability badges; the open points of `studio/server/API.md` (stale line 90, Windows graceful stop, orphan pid); ast extraction for optimizer/scheduler/metric constructors; then the deferred UI (`design/NeoSR_Studio_UI_Concept_v2.md:103`) | none | rank 6 of the old table |
+| rank | task | state (2026-11-12 night) |
+|---|---|---|
+| 1 | Compile pair, `compile_parity.py` | **done**: B0_compile+Bc_s2 vs B0+B0s2, window 12k-20k: TIE, all four metrics inside tau (PSNR -0.029, LPIPS -0.0012); `scripts/compile_parity.py` (021b8c36) PASS on its first GPU run, with and without `--fallback-random` (metagan D rho 0.94 vs bound 0.97 without). Real-run speed: compiled 10.5-11.0 it/s vs eager 10.5-11.7 (no consistent gain), bench.py 85.5 vs 104.6 ms (-18 %): bench's eager path is slower than the trainer's loop (open: why) |
+| 2 | 4K validation pass, D7 | **done**: one 4K image, five metrics: 3.0 s, peak 9.02 GiB; DISTS 8.59 / TOPIQ 5.97 GiB above their nets (measured); readme documents the limit |
+| 3 | Batch sweep, unverified numbers | **done**: template eager b8 104.6 ms 3.19 GiB (76 img/s), b16 161.7 ms 5.88 GiB (99 img/s), b32 323 ms 11.2 GiB (99 img/s); warm-up peak = steady peak (no transient without DISTS). T-05: bf16 autocast gives realplksr inference no speed-up (4K: 432 vs 395 ms fp32), -16 % memory. T-12: a save costs <= 0.9 s (<= 0.2 %): async save not needed. D-06 gain not re-measured (needs the old loader path) |
+| 4 | Studio GPU lifecycle run (D8) | **done**: PASS on the 4090 through the HTTP API (launch 3 s, live progress/scalars/`[ mem ]`/validation/checkpoint events, graceful stop at 305 in 2.2 s, resume from 305, finish at 600, lock released); one adapter bug fixed (log lines stamped with the previous update). Lifting the "experimental" label is the owner's call (D8) |
+| 5 | A/B tooling | **done** (8cea4fa1-683b2433): queue.sh checks a line before it leaves the file and flocks the queue file; done.json `run_peak_gib` + `steady_mem_gib`. D10 calibration: no arm dropped at 8k was fine at 20k; 3 of 4 8k TIEs ended LOSS (`experiments/s10/NOTES.md`) |
+| 6 | Checkpoints | **done** (d3e45167, 60e4b977): save before validation when both fall on one update; readme: format-1 states do not resume |
+| 7 | Loader docs | **done** (d3e45167): readme `--bits8`, worker sizing; no code change (ANYDEPTH would not be faster) |
+| 8 | Tests | **done** (91e49ab1, 403d1113): `weights` marker (offline runs skip uniformly), real torchprofile test (skips: not installed), LPIPS-VGG parity verified |
+| 9 | Studio | **done** (788001f8-4d4a3ec6): ast signatures of losses/metrics/optimizers/schedulers in the surface and `--validate`, metric parameters editable, ONNX badges, light theme, TOML links open the drawer; the dead catalog `onnx` flag removed. Left: folder browser, scale-vs-data probe (server), the run screen's export command ignores `no_onnx` |
 | - | Need the owner's word first: an order-exact resume (data cursor; revises decision 8d), async save and the `keep_exports` default (T-12), the first CI run (needs a push), a machine-readable trainer event stream for Studio | - | `DECISIONS.md:36`, `CLOSURE.md:122` |
 | - | Deferred by the owner (arch-specific or parked): A-12, A-17, W-16, W-09, MX-16 manifests, ONNX gaps, pyvips, OTF | - | section 6, `CLOSURE.md` |
 

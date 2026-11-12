@@ -146,22 +146,26 @@ pins its images to the CPU. Before that: 2047 passed, 377 skipped (CPU only, 504
 8. Opt-in switches waiting for an A/B (`stage2/DECISIONS.md`, last section): `tight_canvas`, `aug_antialias`, CRAFT
    `pad_extra_window = false`, span_fast `fan_in_init`, `"spike"` clip, `rpgan`, R1/R2, `fdl_opt.checkpoint`;
    realplksr `layer_norm`/`icnr` speed and 8k A/B (A6).
-9. Unverified offline (A1, A3): official VGG-LPIPS lin parity; DDP with NCCL (only gloo on one GPU is tested).
+9. Unverified offline (A1, A3): DDP with NCCL (only gloo on one GPU is tested). The official VGG-LPIPS lin parity
+   is verified since 2026-11-12 (`tests/test_s3_metrics.py::test_lpips_vgg_matches_the_official_forward`).
    Done 2026-11-11: `save_best` under 2-rank gloo DDP (1951d9f3, `tests/test_ddp_best.py`); r3gan + rpgan + R1/R2
    and the health log under 2-rank gloo DDP (c10b89c5); the session's A/B runs scored TOPIQ-pipal with the
    hub-cached `cfanet_fr_pipal_res50` weights; validation metric memory (CUDA, fp32, through `build_metric`, peak
-   above the resident nets; 4K for DISTS/TOPIQ extrapolated, memory exactly linear in pixels at 1080p, 1440p, 1620p):
+   above the resident nets; 4K measured 2026-11-12, `experiments/s10/gpu/val4k.py`; 1080p-1620p exactly linear in pixels):
 
    | metric | 1080p | 4K |
    |---|---|---|
-   | psnr | 141 MiB, 5 ms | 566 MiB, 7 ms |
-   | ssim | 266 MiB, 0.55 s | 1067 MiB, 2.2 s |
-   | lpips alex | 269 MiB, 19 ms | 1075 MiB, 61 ms |
-   | dists | 2200 MiB, 0.23 s | ~8.6 GiB, ~1.1 s (est., 1061 MiB/Mpx) |
-   | topiq pipal | 1531 MiB, 0.13 s | ~6.0 GiB, ~0.7 s (est., 738 MiB/Mpx) |
+   | psnr | 141 MiB, 5 ms | 0.55 GiB, <5 ms |
+   | ssim | 266 MiB, 0.55 s | 1.04 GiB, 0.93 s |
+   | lpips alex | 269 MiB, 19 ms | 1.05 GiB, 30 ms |
+   | dists | 2200 MiB, 0.23 s | 8.59 GiB, 0.43 s |
+   | topiq pipal | 1531 MiB, 0.13 s | 5.97 GiB, 0.26 s |
 
+   One full 4K validation pass (realplksr x4, LQ 960x540, all five metrics, bf16 or fp32): 3.0 s, peak 9.02 GiB;
+   the generator alone 395 ms fp32 / 432 ms bf16 (autocast gives realplksr no inference speed-up, T-05).
    Tiled validation does not lower these (the learned metrics get the full-size images). A 24 GB card fits 4K; on a
-   12 GB card 4K DISTS would take the CPU fallback of `image._metric` (inferred) and TOPIQ is marginal. No cheap
+   12 GB card 4K DISTS would take the CPU fallback of `image._metric` (inferred) and TOPIQ is marginal (D7: the limit
+   is documented in the readme). No cheap
    exact fix: DISTS needs whole feature maps per stage and is already streamed per stage (MT-13).
 
 ### Possible on the Windows machine (ordered by the compute it needs; least first)
