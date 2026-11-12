@@ -64,8 +64,10 @@ Session 10 (the same evening, running): the owner delegated the open decisions, 
 ("Delegated decisions, 2026-11-11"); the owner's redux recipe is analysed in `stage3/owner_recipe.md`; the GPU
 queue (20k extensions, the DISTS arms, the owner's recipe in neosr terms) runs from `experiments/s10/`. On
 2026-11-12 the owner accepted D10 (`DECISIONS.md`): window-mean verdicts with a noise-based tau
-(`scripts/ab/analyze.py --window/--null`), straight new arms, promote only leaders; the D10 arms
-(`experiments/s10/queue2.txt`) follow the running queue.
+(`scripts/ab/analyze.py --window/--null`), straight new arms, promote only leaders. **Later on 2026-11-12 the
+owner put all selection or tuning of training strategies and tactics on hold** until the community material on
+photoreal training they are gathering has been studied; the D10 arms are held (`experiments/s10/queue2.held.txt`),
+and the work is the strategy-independent list in `next_tasks.md`.
 
 **What "the core" means (owner, 2026-11-10, `DECISIONS.md`):** the training framework and its ecosystem
 (losses, metrics, schedulers, optimizers, the GAN implementations, utilities), its speed and stability, as the
@@ -102,7 +104,7 @@ model to follow.
 | Stage 3 Phase 0 (E0-E5: evaluation protocol, config-only A/Bs) | **not started** (E0 partly covered by the R5 split) | `stage3/CONSENSUS.md` Phase 0 |
 | R3GAN track | code done (R1-R3), data done (R5), qualification R4: bf16 PASS (provisional, no replicate), **cost gate PASS since 2026-11-11** (penalty fix 94c36bde: 122.5 vs template 109.9 ms/update, +11 %; was 732); 8k screen 2026-11-11: R3 LOSS vs B0 on DISTS +0.0017 (1.1x the floor, marginal; PSNR -0.81 dB is not a gate metric), TIE vs A1 (LPIPS -0.0067 better), the fewest late G-gradient spikes of the changed-D arms; an 8k fine-tune does not judge R6; **A/B (R6) not run**: a 20k round now takes ~4 GPU-h (was ~21) | `stage3/r3gan/RESULTS.md` section 4, `stage3/PROGRESS.md` |
 | Stage 3 Phase B (OTF realism, i-LN, KD/ECO, dynamo exporter, ...) | **parked by the owner (2026-11-10)**. OTF realism: **design draft 2** (Codex-reviewed); steps **O1-O3 done** (antialiased resampler and `resize_mode*` keys; per-sample `noise_prob*` / `jpeg_prob*` gates, `blur_prob`, the clean path; the unsharp mask `sharpen_*` at LQ scale; all opt-in, defaults bitwise unchanged), O4 (`degrade.py`) and O5 (readme, templates, Studio fields) open; the owner's answers Q1-Q4 open. The rest not started; the owner ordered Phase B after R3GAN | `stage3/otf/DESIGN.md`, `stage3/REVIEW.md` "Final list" |
-| Registries (design T7) | **done on Windows, waits for the Linux suite** | `design/T7_registration.md`, `neosr/utils/registry.py`, `tests/test_registry.py` |
+| Registries (design T7) | **done** (Linux full suite passed at 100a5881) | `design/T7_registration.md`, `neosr/utils/registry.py`, `tests/test_registry.py` |
 | Stage-2 audit closure | matrix done; 2026-11-10: A-11 and the metrics sub-items done, 7 arch-specific findings deferred (owner's goal); 2026-11-11: T-11 rejected, ST-14 and L-16 deferred (owner); session 9 added measurements and 8k screens to T-02, L-03, L-07, L-08, A-04, ST-06, GP-04 (`stage2/DECISIONS.md` 14-17); **4 open** (the LDL flip failed its seed replicate): A-04 and L-07 (8k screens done, both wait on >= 20k runs), L-15, D-16 (parked OTF track) | `stage2/CLOSURE.md` |
 | NeoSR Studio (`studio/`) | prototype: real recipe model, TOML compiler and validator. Training is simulated by default; **real-trainer mode experimental** (`STUDIO_TRAINER=real`, e97902ba: spawns `train.py`, streams its log as run events, stop/resume tested end to end on the CPU; `/api/environment` reports the real machine, 587cbdb2). Arch constructor parameters in the surface contract (S.11 done: 176990cc, 2ede3c2e) | `studio/README.md`, `studio/server/API.md`, "Studio contract" below |
 | A/B harness (`scripts/ab/`) | done 2026-11-11 (c03c44f0, f2f7d917): `run_ab.py`, `analyze.py` (paired CI over source groups, the gate), `queue.sh`; data and runs stay in `experiments/` | `scripts/ab/README.md` |
@@ -175,8 +177,8 @@ The order of work is "Owner priorities" above; this list only says what fits thi
    (`stage2/CLOSURE.md`).
 3. **Penalty-pass cost: done 2026-11-11** on the Linux machine (Needs the Linux machine, item 2).
 4. **Studio, next steps** (Node only): arch constructor parameters in the surface contract and the real adapter
-   are done (2026-11-11; real mode experimental, open owner question: fixed params shown disabled rather than
-   hidden); left: ONNX capability badges from `no_onnx`/`onnx_static_only`, the review leftovers in
+   are done (2026-11-11; real mode experimental until one GPU lifecycle run passes, preset-bound params visible
+   and disabled with inline "fixed by preset": D8, 6cbc4ae9); left: ONNX capability badges from `no_onnx`/`onnx_static_only`, the review leftovers in
    `studio/server/API.md`.
 5. **A/B harness into the repository: done 2026-11-11** (`scripts/ab/`).
 

@@ -15,18 +15,27 @@ pixel + colour anchor, a weak slow D; half its listed losses were inert). The GP
 `experiments/s10/` (`run.sh`, `queue.txt`, `queue_s10.log`; arms from `mkcfg.py`).
 
 **D10 (owner, 2026-11-12, `DECISIONS.md`):** verdicts on window means with tau = max(1 %, 3 x null RMS) (TOPIQ:
-3 x null RMS), `analyze.py --window 12000:20000 --null A0/B0,B0/B0s2,U_unet01/U_unet01s2 A0+B0+B0s2 <arms>`;
-straight new arms; promote only leaders; one factor per arm. Read the queue's arms under both D9 (reported) and
-D10 (the calibration of the 8k screen: does any 4k-8k window verdict flip by 12k-20k?).
+3 x null RMS), `analyze.py --window 12000:20000 --null A0/B0,B0/B0s2,U_unet01/U_unet01s2 A0+B0+B0s2 <arms>`.
 
-| rank | task | kind | GPU | section |
-|---|---|---|---|---|
-| 1 | The s10 queue (`queue.txt`, ends ~03:00 2026-11-12): ranks 1-2 done (20k, D10 reading: T_DISTS WIN on TOPIQ+LPIPS, unet LOSS (mixed), no-GAN LOSS); OWN, M@0.03, U_spike, R3 gamma 1, B2/B2s2, the compile pair still run. Gate each with `--window` and record the calibration | quality A/B | hours | D1-D10 |
-| 2 | `queue2.txt` (`run2.sh`, code2 = the D10 commit): T_DISTS seed 2, then T_DISTS_noFDL (DISTS replaces FDL), both straight 0 -> 20k | quality A/B | ~1.5 h | D10 |
-| 3 | Short measurements: batch 8/16/32 at patch 64 with and without DISTS (ms/update, steady vs start-up VRAM, images/s), the DISTS profile (channels_last / compile, exact), one measured 4K validation pass, the Studio GPU lifecycle run | speed, Studio | short | D7, D8, D10 |
-| 4 | The long pair 20k -> 100k: A0 + the finalist (compiled if D10 rule 8 holds; states every 4k; checks at 40k/60k), then the confirmation set and the visual set | acceptance | ~5 h | D10 |
-| 5 | Deferred by D10: E2, E5, R3 gamma 3 / round 2, spike clip from a fresh G, an LDL long run, U+DISTS | - | - | D10 |
-| 6 | Studio: the deferred UI items (`design/NeoSR_Studio_UI_Concept_v2.md` section 7) | Studio | none | 5 |
+**On hold (owner, 2026-11-12):** no selection or tuning of training strategies or tactics (losses and weights, D and
+GAN type, R1/R2, clip mode, LDL, DISTS/FDL, LR, pretrain policy, `wavelet_init`, template defaults, recipe A/Bs, the
+long pair) until the owner hands over the community material on photoreal training and it is studied. Held:
+`experiments/s10/queue2.held.txt` (T_DISTS_s2, T_DISTS_noFDL), sections 3.1-3.2 below, D10 ranks 4-5. Work only on
+what does not depend on the recipe (sweep of all open items, 2026-11-12: 39 independent, 23 borderline, 12 tactic):
+
+| rank | task | GPU | source |
+|---|---|---|---|
+| 1 | Compile pair (queue 1, last arms, ends ~03:15): read with `--window` (D2, D10 rule 8); move `compile_parity.py` from `experiments/s10/` to `scripts/`; the compiled metagan D draws another Dropout/DropPath stream (document, or `fallback_random`: owner) | running | `experiments/s10/NOTES.md` |
+| 2 | One measured 4K validation pass; document the metric memory limit for cards under 24 GB | short | D7 |
+| 3 | Batch 8/16/32 at patch 64: ms/update, steady vs start-up VRAM; re-measure the "unverified (needs GPU)" numbers of done rows (T-05 autocast, D-06 uint8 crop, T-12 save stall) | short | D10 rule 9, `stage2/CLOSURE.md:17` |
+| 4 | Studio GPU lifecycle run (launch, live cockpit, stop, resume) through `STUDIO_TRAINER=real` | short | D8 |
+| 5 | A/B tooling: `done.json` `peak_mem_gib` is the start-up transient (rename or add the steady median); the runners refuse a foreign queue-line format (the 18:15 incident); D10 calibration on the finished arms (tool check only, no recipe verdicts) | none | `scripts/ab/run_ab.py:202`, NOTES |
+| 6 | Checkpoints: a hard kill during validation loses that update (T-03 residual); say in the readme whether pre-refactor (format 1) `.state` files load | none | `stage2/CLOSURE.md:101`, `readme.md:287` |
+| 7 | Loader: 16-bit PNG decode costs ~1.65x (bit-exact ANYDEPTH route, or document `extract_subimages --bits8`); worker-sizing advice (D-14, D-06c) | none | `neosr/utils/img_util.py:182` |
+| 8 | Tests: a real torchprofile tracer test (PLAN R1.1); LPIPS-VGG lin-layer parity; a uniform skip for tests that need downloaded weights | none | `STATUS.md` "Needs the Linux machine" 9 |
+| 9 | Studio: ONNX capability badges; the open points of `studio/server/API.md` (stale line 90, Windows graceful stop, orphan pid); ast extraction for optimizer/scheduler/metric constructors; then the deferred UI (`design/NeoSR_Studio_UI_Concept_v2.md:103`) | none | rank 6 of the old table |
+| - | Need the owner's word first: an order-exact resume (data cursor; revises decision 8d), async save and the `keep_exports` default (T-12), the first CI run (needs a push), a machine-readable trainer event stream for Studio | - | `DECISIONS.md:36`, `CLOSURE.md:122` |
+| - | Deferred by the owner (arch-specific or parked): A-12, A-17, W-16, W-09, MX-16 manifests, ONNX gaps, pyvips, OTF | - | section 6, `CLOSURE.md` |
 
 Parked by the owner: OTF realism (`docs/refactor/stage3/otf/DESIGN.md`), all of stage-3 Phase B. Deferred:
 section 6 (pyvips), L-16, ST-14 (trigger: a run past `wavelet_init`), D-16 (with OTF).
@@ -123,7 +132,7 @@ helps all three perceptual metrics), unet@0.1 TIE (LPIPS -0.0080, its D clipped 
 detectable quality difference at 8k). No default changed (`stage2/DECISIONS.md` 15, 17, 18).
 
 ## 3. Next session: what to run
-### 3.1 Hours of GPU (one per session or overnight; use `scripts/ab/`)
+### 3.1 Hours of GPU (on hold since 2026-11-12: tactic selection waits for the community material)
 1. **R6, R3GAN A/B** (`stage3/PROGRESS.md` "PAUSED" has the arm list): with the penalty fix the R arms cost
    +11 % over the template; run round 1 at 20k (arms A0, A1, R1-R5), then round 2 on the best R, seed 2, the
    confirmation set. The harness now lives in `scripts/ab/`; point it at the checkout, not a frozen copy.
@@ -140,7 +149,7 @@ detectable quality difference at 8k). No default changed (`stage2/DECISIONS.md` 
   updates (both seeds); find the cause before the A-04 round at >= 20k.
 - No 8k screen is pending: compile ran (TIE), the moved arms got their second seed (B2s2, U_unet01s2).
 ### 3.3 No GPU
-- Metric memory at 4K (table in `STATUS.md`): decide between a documented limit and an exact chunked DISTS.
+- Metric memory at 4K: decided (D7, document the limit; one measured 4K pass, rank 2 above).
 - Research candidates still open (`stage3/discriminator/RESEARCH_REVIEW.md`): DR-06 (hinge arm), DR-09 (R1 on
   the template D), DR-10 (joint RGB+HF view) wait for the screens; DR-08 (metagan internals) is arch work.
 
