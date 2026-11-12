@@ -890,10 +890,42 @@ def test_validation_failure_saves_the_update_first(tmp_path, data, monkeypatch):
     assert "validation failed: saving update 2 first" in logs(tmp_path)
 
 
+def _scripted_psnr(monkeypatch, psnr):
+    """validate() records psnr[(set, update)] (an exception is raised); the rest of validation()
+    (preserved RNG, save_best, rollback) is real."""
+
+    def validate(self, loader, u, *_a, **_k):
+        v = psnr[loader.dataset.opt["name"], u]
+        if isinstance(v, Exception):
+            raise v
+        self.update_best(loader.dataset.opt["name"], "psnr", v, u)
+
+    monkeypatch.setattr(image_mod.image, "validate", validate)
+
+
+def _save_best(f: Path) -> Path:
+    text = f.read_text(encoding="utf-8")
+    f.write_text(
+        text.replace("pbar = false", 'pbar = false\nsave_best = "psnr"'),
+        encoding="utf-8",
+    )
+    return f
+
+
+def _best(tmp: Path, u: int, ds="valset") -> tuple[float, int]:
+    rec = torch.load(
+        run_dir(tmp) / "training_states" / f"{u}.state", weights_only=True
+    )["best"][ds]["psnr"]
+    return rec["val"], rec["iter"]
+
+
 @pytest.mark.parametrize("save_best", [True, False])
 def test_periodic_save_precedes_validation(tmp_path, data, monkeypatch, save_best):  # noqa: F811
-    """T-03: a kill during validation keeps update u; a new best is saved into the state again."""
+    """T-03: a kill during validation keeps update u; a changed best is saved into the state again
+    (first record at 2, in-place improvement at 4, unchanged at 6)."""
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    psnr = {2: 30, 4: 32, 6: 31, 8: 31}
+    _scripted_psnr(monkeypatch, {("valset", u): v for u, v in psnr.items()})
     events = []
     real_save, real_val = base.save, base.validation
 
@@ -902,23 +934,38 @@ def test_periodic_save_precedes_validation(tmp_path, data, monkeypatch, save_bes
         real_save(self, **k)
 
     def validation(self, *a, **k):
-        events.append(("val", self.update, states(tmp_path)))
+        events.append(("val", self.update, states(tmp_path)[-1]))
         real_val(self, *a, **k)
 
     monkeypatch.setattr(base, "save", save)
     monkeypatch.setattr(base, "validation", validation)
-    f = toml(tmp_path, data, total=4, save=2, val_freq=2)
-    if save_best:
-        text = f.read_text(encoding="utf-8")
-        f.write_text(text.replace("pbar = false", 'pbar = false\nsave_best = "psnr"'))
-    assert train_py.main(["-opt", str(f)]) == 0
-    at2 = [e for e in events if e[1] == 2]
-    # the first validation always sets the best
-    assert at2 == [("save", 2), ("val", 2, [2])] + [("save", 2)] * save_best
-    state = torch.load(
-        run_dir(tmp_path) / "training_states" / "2.state", weights_only=True
-    )
-    assert ("valset" in state["best"]) == save_best
+    f = toml(tmp_path, data, total=8, save=2, val_freq=2)
+    assert train_py.main(["-opt", str(_save_best(f) if save_best else f)]) == 0
+    for u, changed in ((2, True), (4, True), (6, False)):
+        again = [("save", u)] * (save_best and changed)
+        assert [e for e in events if e[1] == u] == [("save", u), ("val", u, u), *again]
+    assert _best(tmp_path, 4) == ((32.0, 4) if save_best else (30.0, 2))
+    assert _best(tmp_path, 6) == (32.0, 4)
+
+
+def test_validation_failure_keeps_the_bests_of_passed_sets(tmp_path, data, monkeypatch):  # noqa: F811
+    """valset improves (and save_best exports it), then val2 fails at a save update: the state is
+    saved again, so a resume cannot overwrite that export with a worse best."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    psnr = {("valset", 2): 30, ("val2", 2): 20, ("valset", 4): 32}
+    _scripted_psnr(monkeypatch, psnr | {("val2", 4): OSError("val disk full")})
+    second = f"""
+[datasets.val_1]
+name = "val2"
+type = "paired"
+dataroot_gt = "{data / "val" / "gt"}"
+dataroot_lq = "{data / "val" / "lq"}"
+"""
+    f = _save_best(toml(tmp_path, data, total=6, save=2, val_freq=2, extra=second))
+    assert train_py.main(["-opt", str(f)]) == 1
+    assert states(tmp_path) == [2, 4]
+    assert _best(tmp_path, 4) == (32.0, 4)
+    assert _best(tmp_path, 4, "val2") == (20.0, 2)  # the failed event recorded nothing
 
 
 def test_loaders_are_built_before_the_model(tmp_path, data, monkeypatch):  # noqa: F811

@@ -276,8 +276,8 @@ def train(cfg: dict[str, Any], rt: Runtime) -> None:
                         for vl in val_loaders:
                             model.validation(vl, u, tb_logger, save_img)
                     except Exception:
-                        # keep this update before the run dies
-                        if model.saved_update != u:
+                        # keep update u and the passed sets' bests before the run dies
+                        if model.saved_update != u or model.best_metric_results != best:
                             log.error(f"validation failed: saving update {u} first")
                             model.save()
                         raise

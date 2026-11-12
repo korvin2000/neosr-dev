@@ -312,7 +312,7 @@ Files under `experiments/<name>/`:
   0.0001)`). A resume continues stochastically, not order-exactly: nets, EMA, optimizers, schedulers,
   scalers and counters are exact; the model-side RNG (dropout, DropPath) is restored on rank 0 only (other DDP
   ranks start fresh streams); data order, augmentations and the OTF pool restart. Pre-refactor (format 1)
-  `.state` files do not resume: a configuration error names the matching `pretrain_network_g` for a new run.
+  `.state` files do not resume: start a new run with `pretrain_network_g = models/net_g_<iter>.pth` (and `_d`).
 - **Pretrained weights**: `path.pretrain_network_g`/`_d` (ignored while resuming), `param_key_g`/`_d` (default:
   `params_ema`, `params-ema`, `params`, or a bare state dict), `strict_load_g`/`_d` (default true; false skips
   shape mismatches and logs one summary: the loaded share and up to 10 skipped, missing and unexpected keys).
