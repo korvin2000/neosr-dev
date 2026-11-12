@@ -48,7 +48,8 @@ src/app/
   core/commands.ts           every edit is a Command; see list below
   core/api.service.ts        ApiService (typed HTTP), RecipeSummary, ModelFile, DatasetInfo, ScanReport, LaunchRejected
   core/run-store.ts          RunStore (list, refresh, active) and LiveRun (SSE-backed signals for one run)
-  core/settings.service.ts   SettingsService.settings() { platform, neosrRoot, experimentsRoot, optionsDir, simSpeed, showNativeFields, inspectorDocked }
+  core/settings.service.ts   SettingsService.settings() { platform, neosrRoot, experimentsRoot, optionsDir, simSpeed, showNativeFields, inspectorDocked, theme }
+  core/theme.service.ts      ThemeService.theme(): 'light' | 'dark' — the Settings choice (system · light · dark) resolved and set as `data-theme` on <html>
   core/environment.service.ts EnvironmentService.info()
   core/preset.service.ts     PresetService: node presets (built-in + localStorage): presets(), byType(type), save(name, node), remove(id)
   ui/icon.ts                 <app-icon name size weight> — names listed in ICON_NAMES (add new ones there)
@@ -61,7 +62,7 @@ src/app/
   app.ts/.html/.scss         shell: top bar (recipe name, Wizard/Graph/TOML switch), left nav, toasts
   build/build-page.*         hosts the three build views; status bar (derived numbers, Problems popover), undo/redo, Save, Launch
   build/wizard/  build/graph/  build/toml/   runs/  compare/  library/  home/  settings/   ← feature folders (stubs exist)
-src/styles/_tokens.scss      CSS custom properties (colours, geometry, motion), `.accent-<family>` and `.port-<PortType>` classes
+src/styles/_tokens.scss      CSS custom properties (colours for the dark and the light theme, geometry, motion), `.accent-<family>` and `.port-<PortType>` classes
 src/styles.scss              reset, `.btn .btn--primary/--ghost/--sm/--icon/--danger`, `.input .select .textarea`, `.badge .badge--ok/--warn/--danger/--running/--accent/--native/--orchestrated/--estimate`, `.chip .chip--active`, `.card`, `.row`, `.spacer`, `.muted`, `.faint`, `.mono`, `.kbd`, Foblex connection styles
 ```
 
@@ -93,7 +94,7 @@ Visibility: `fieldVisible(field, values)` / `portVisible(port, values)` from `@s
 ## Conventions
 
 - Standalone components, `ChangeDetectionStrategy.OnPush`, `input()`/`output()`/`computed()`/`signal()`; no `ngModel`, no NgRx, no Material. Use `@if/@for/@switch` control flow. Templates in `.html` files for anything over ~30 lines, SCSS in `.scss` next to the component.
-- Styling: only the tokens and primitives in `src/styles`; no hard-coded colours except via `color-mix` on tokens. Dark theme only. Density: 13 px base, 12 px in dense tables/nodes. Everything keyboard-reachable; buttons have `title`/`aria-label`.
+- Styling: only the tokens and primitives in `src/styles`; no hard-coded colours except via `color-mix` on tokens. Two themes, dark and light, share every token name (`:root` and `:root[data-theme='light']` in `_tokens.scss`): a colour that differs between them is a token, and a new token gets a value in both, with text at WCAG AA (4.5:1) on the surfaces it sits on. Canvas code (the charts) reads the tokens through `getComputedStyle` and repaints on `ThemeService.theme()`. Density: 13 px base, 12 px in dense tables/nodes. Everything keyboard-reachable; buttons have `title`/`aria-label`.
 - Family accent for a node: `class="accent-{{ FAMILY_ACCENT[spec.family] }}"` then use `var(--accent-node)`, `var(--accent-node-header)`, `var(--accent-node-dim)`. Port colour: `class="port-{{ port.type }}"` then `var(--port-colour)`.
 - Never write backslash-containing literals inside Angular templates (Windows paths): build them in TS (`['C:', 'datasets'].join('\\')`) and bind.
 - Labels and copy: short, factual, NeoSR terms (`patch_size`, updates, `net_g_latest.pth`). Suggestions are heuristics — say where they come from (template / wiki / studio).
@@ -131,7 +132,7 @@ The design is `../design/NeoSR_Studio_UI_Concept_v2.md` (final; §1 rules, §2 s
 - Every hover/right-click/drag gesture has a visible twin (⋯ menus, ⓘ, + buttons, pickers).
 - Validate on commit; blockers inline under the field; the primary button reads "Launch · n to fix" and jumps to the first one (`BuildPage.focusProblem` navigates to `/build/list?section=&node=&field=` or `/build/graph?node=&field=`).
 - Phone (≤ 720 px): single column, drawers become sheets, inputs 16 px, targets ≥ 44 px, nothing hidden behind hover. Test at 390 × 844.
-- Keep the v1 visual tokens (dark, chaiNNer greys) but use colour for status only; node family colour only as a 3 px stripe / port colour.
+- Keep the v1 visual tokens (chaiNNer greys in the dark theme, their light counterparts in the light one) but use colour for status only; node family colour only as a 3 px stripe / port colour.
 
 ## Running several dev servers
 `ng serve` instances share `.angular/cache/**/vite/deps`; two at once keep invalidating each other ("504 Outdated Optimize Dep"). Run one dev server at a time, or give the second one its own cache: `NG_PERSISTENT_BUILD_CACHE=0` is not enough — use `npx ng serve --port 4302` only after the other has finished its first build, and prefer `ng build --output-path dist/check-<name>` for verification.

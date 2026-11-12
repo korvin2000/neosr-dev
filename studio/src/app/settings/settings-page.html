@@ -40,6 +40,15 @@
           </span>
         </label>
       }
+      <div class="field">
+        <span class="field__label">Theme</span>
+        <div class="seg field__control" role="radiogroup" aria-label="Theme">
+          @for (t of themes; track t) {
+            <button type="button" role="radio" class="seg__item" [class.seg__item--on]="s().theme === t" [attr.aria-checked]="s().theme === t" (click)="patch({ theme: t })">{{ t }}</button>
+          }
+        </div>
+        <span class="field__help">System follows the operating system's light or dark mode.</span>
+      </div>
     </div>
   </app-disclosure>
 

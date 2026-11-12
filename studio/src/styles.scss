@@ -23,11 +23,17 @@
   --ff-flow-font-family: inherit;
   --ff-flow-font-size: 13px;
   --ff-color-accent: var(--accent);
-  --ff-connection-color: #9aa4b8;
+  --ff-connection-color: var(--info);
   --ff-connection-color-selected: var(--selection);
   --ff-selection-area-background-color: var(--accent-soft);
   --ff-selection-area-border-color: var(--selection);
   --ff-connection-hit-width: 16;
+}
+
+// Foblex paints the background dots with its own grid colour (black 15 %), fine on the dark canvas
+// but a grey slab on the light one, which takes the canvas-dot token instead.
+:root[data-theme='light'] {
+  --ff-background-dot-color: var(--canvas-dot);
 }
 
 // --- Reset ---------------------------------------------------------------------
@@ -101,7 +107,7 @@ pre,
 // Scrollbars match the panels instead of the OS.
 * {
   scrollbar-width: thin;
-  scrollbar-color: #3a4352 transparent;
+  scrollbar-color: var(--border-strong) transparent;
 }
 
 *::-webkit-scrollbar {
@@ -110,7 +116,7 @@ pre,
 }
 
 *::-webkit-scrollbar-thumb {
-  background: #3a4352;
+  background: var(--border-strong);
   border: 3px solid transparent;
   border-radius: 8px;
   background-clip: padding-box;
@@ -160,7 +166,7 @@ button {
     border-color var(--tempo) var(--ease);
 
   &:hover:not(:disabled) {
-    background: #2d3544;
+    background: color-mix(in srgb, var(--panel-raised) 94%, var(--text));
     border-color: var(--node-border-hover);
   }
 
@@ -248,7 +254,7 @@ button {
 .select {
   appearance: none;
   padding-right: 26px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a9b2c1' stroke-width='1.5'/%3E%3C/svg%3E");
+  background-image: var(--select-chevron);
   background-repeat: no-repeat;
   background-position: right 9px center;
 
@@ -388,7 +394,7 @@ f-flow .f-connection,
   }
 
   .f-connection-path {
-    stroke: var(--port-colour, #9aa4b8);
+    stroke: var(--port-colour, var(--info));
     stroke-width: 2;
     fill: none;
     transition:
@@ -398,7 +404,7 @@ f-flow .f-connection,
   }
 
   &:hover .f-connection-path {
-    stroke: color-mix(in srgb, #fff 35%, var(--port-colour, #9aa4b8));
+    stroke: color-mix(in srgb, var(--text) 35%, var(--port-colour, var(--info)));
     stroke-width: 3;
   }
 
@@ -466,7 +472,7 @@ f-flow.f-connections-dragging .port {
   max-width: 320px;
   padding: 6px 9px;
   border-radius: var(--radius);
-  background: #0f1319;
+  background: var(--tooltip-bg);
   color: var(--text);
   font-size: var(--fs-sm);
   line-height: 1.45;

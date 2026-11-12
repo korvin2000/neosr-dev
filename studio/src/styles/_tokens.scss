@@ -1,10 +1,15 @@
 @use 'sass:color';
+@use 'sass:map';
 
 // Design tokens. Custom properties so node accents and port colours can be bound at runtime;
 // Sass does the build-time work (accent and port maps).
 //
-// Greys are the chaiNNer-sampled set used by the reference node UI, which is why the canvas reads
-// right next to ComfyUI/chaiNNer rather than merely "dark".
+// Two themes share every token name: `:root` is the dark set, `:root[data-theme='light']` the
+// light one (ThemeService sets the attribute from the Settings choice or the system). A colour
+// that differs between the themes is a token here, never a literal in a component.
+//
+// The dark greys are the chaiNNer-sampled set used by the reference node UI, which is why the
+// canvas reads right next to ComfyUI/chaiNNer rather than merely "dark".
 
 :root {
   color-scheme: dark;
@@ -52,6 +57,25 @@
   --running-soft: rgba(66, 153, 225, 0.16);
   --info: #9aa4b8;
 
+  // --- Data and code --------------------------------------------------------
+  // Chart series (run-format SERIES_PALETTE) and TOML syntax; the header takes --accent-text.
+  --series-1: #8fbdff;
+  --series-2: #e3a86d;
+  --series-3: #6cc5a0;
+  --series-4: #c9a6ff;
+  --series-5: #c9b458;
+  --series-6: #f2b8c6;
+  --code-key: #cfd5df;
+  --code-str: #6cc5a0;
+  --code-num: #e3a86d;
+  --code-bool: #c9a6ff;
+
+  // --- Controls ---------------------------------------------------------------
+  --switch-track: #3a4352;
+  --switch-thumb: #cfd5df;
+  --tooltip-bg: #0f1319;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a9b2c1' stroke-width='1.5'/%3E%3C/svg%3E");
+
   // --- Geometry -----------------------------------------------------------
   --radius-sm: 4px;
   --radius: 6px;
@@ -82,6 +106,7 @@
   --tempo-slow: 300ms;
   --ease: cubic-bezier(0.3, 0.8, 0.4, 1);
 
+  --shadow-raised: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-node: 0 5px 18px rgba(0, 0, 0, 0.5);
   --shadow-node-selected: 0 8px 26px rgba(0, 0, 0, 0.6);
   --shadow-panel: 0 8px 30px rgba(0, 0, 0, 0.5);
@@ -90,9 +115,73 @@
   font-synthesis-weight: none;
 }
 
-// Node family accents. The catalog names the accent; the stylesheet owns what it looks like.
-$node-header-base: #3a4152;
+// Light theme. Text tokens hold WCAG AA (4.5:1) on every surface and on their own soft fills;
+// series, family accents and ports hold 3:1 against the surfaces they are drawn on.
+:root[data-theme='light'] {
+  color-scheme: light;
 
+  --ground: #e9ecf0;
+  --canvas: #e6e9ee;
+  --canvas-dot: #dde1e7;
+  --panel: #f1f3f6;
+  --panel-raised: #ffffff;
+  --panel-sunken: #e3e6ec;
+  --overlay: rgba(233, 236, 240, 0.78);
+
+  --node-body: #ffffff;
+  --node-sunken: #f1f3f6;
+  --node-border: #a7b0bd;
+  --node-border-hover: #76808f;
+
+  --border: #d3d8e0;
+  --border-soft: #dde1e8;
+  --border-strong: #b7bfcb;
+  --text: #18202b;
+  --text-muted: #3f4959;
+  --text-faint: #545d6c;
+  --text-inverse: #ffffff;
+
+  --accent: #1f6feb;
+  --accent-hover: #1a5fd0;
+  --accent-soft: rgba(31, 111, 235, 0.12);
+  --accent-text: #1554c0;
+  --selection: #1f6feb;
+  --focus-ring: 0 0 0 2px rgba(31, 111, 235, 0.5);
+
+  --ok: #11653c;
+  --ok-soft: rgba(17, 101, 60, 0.12);
+  --warn: #7a4f00;
+  --warn-soft: rgba(122, 79, 0, 0.12);
+  --danger: #b02228;
+  --danger-soft: rgba(176, 34, 40, 0.1);
+  --running: #125a9e;
+  --running-soft: rgba(18, 90, 158, 0.12);
+  --info: #556072;
+
+  --series-1: #2f74d0;
+  --series-2: #c2630f;
+  --series-3: #178f74;
+  --series-4: #8b5fd6;
+  --series-5: #7d7a14;
+  --series-6: #cf5a84;
+  --code-key: #2a3442;
+  --code-str: #17633d;
+  --code-num: #8f4708;
+  --code-bool: #6d3fc4;
+
+  --switch-track: #818b9b;
+  --switch-thumb: #ffffff;
+  --tooltip-bg: #ffffff;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%233f4959' stroke-width='1.5'/%3E%3C/svg%3E");
+
+  --shadow-raised: 0 1px 2px rgba(24, 32, 43, 0.16);
+  --shadow-node: 0 4px 14px rgba(24, 32, 43, 0.14);
+  --shadow-node-selected: 0 8px 24px rgba(24, 32, 43, 0.2);
+  --shadow-panel: 0 8px 30px rgba(24, 32, 43, 0.16);
+  --shadow-dialog: 0 24px 70px rgba(24, 32, 43, 0.28);
+}
+
+// Node family accents. The catalog names the accent; the stylesheet owns what it looks like.
 $accents: (
   'rose': #d05463,
   'amber': #d98b45,
@@ -103,20 +192,45 @@ $accents: (
   'slate': #7b8494,
 );
 
+$accents-light: (
+  'rose': #d05463,
+  'amber': #b86a1c,
+  'sky': #3a7cc4,
+  'violet': #8b6ce0,
+  'emerald': #2c8c5a,
+  'teal': #278579,
+  'slate': #6b7484,
+);
+
+@mixin accent($colour, $header-base) {
+  --accent-node: #{$colour};
+  --accent-node-dim: #{rgba($colour, 0.18)};
+  --accent-node-glow: #{rgba($colour, 0.45)};
+  --accent-node-header: #{color.mix($colour, $header-base, 17%)};
+}
+
 @each $name, $colour in $accents {
   .accent-#{$name} {
-    --accent-node: #{$colour};
-    --accent-node-dim: #{rgba($colour, 0.18)};
-    --accent-node-glow: #{rgba($colour, 0.45)};
-    --accent-node-header: #{color.mix($colour, $node-header-base, 17%)};
+    @include accent($colour, #3a4152);
   }
 }
 
+@each $name, $colour in $accents-light {
+  :root[data-theme='light'] .accent-#{$name} {
+    @include accent($colour, #e3e6ec);
+  }
+}
+
+// Without a family class an element reads slate.
 :root {
   --accent-node: #7b8494;
   --accent-node-dim: rgba(123, 132, 148, 0.18);
   --accent-node-glow: rgba(123, 132, 148, 0.45);
   --accent-node-header: #3f4655;
+}
+
+:root[data-theme='light'] {
+  @include accent(map.get($accents-light, 'slate'), #e3e6ec);
 }
 
 // Port colours by type: the same type is the same colour everywhere, and a connection is only
@@ -135,8 +249,28 @@ $port-types: (
   'Runtime': #4a8fd6,
 );
 
+$port-types-light: (
+  'TrainData': #1b7044,
+  'Degradation': #2a8379,
+  'ValSpec': #37936f,
+  'Model': #6f4fd0,
+  'DModel': #9a63e6,
+  'Init': #b25fd0,
+  'Objective': #d05463,
+  'OptimG': #a65a12,
+  'OptimD': #bd7026,
+  'Schedule': #8f7d1c,
+  'Runtime': #3a7cc4,
+);
+
 @each $name, $colour in $port-types {
   .port-#{$name} {
+    --port-colour: #{$colour};
+  }
+}
+
+@each $name, $colour in $port-types-light {
+  :root[data-theme='light'] .port-#{$name} {
     --port-colour: #{$colour};
   }
 }

@@ -30,16 +30,16 @@ interface LineView {
     .code--wrap { white-space: pre-wrap; }
     .line { display: block; padding: 0 12px 0 0; }
     .line--origin { cursor: pointer; }
-    .line--origin:hover { background: rgba(255, 255, 255, 0.04); }
+    .line--origin:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
     .line--hl { background: var(--accent-soft); }
     .ln { display: inline-block; width: 40px; padding-right: 12px; text-align: right; color: var(--text-faint); user-select: none; }
-    .t-header { color: #8fbdff; font-weight: 600; }
+    .t-header { color: var(--accent-text); font-weight: 600; }
     .t-comment { color: var(--text-faint); font-style: italic; }
-    .t-key { color: #cfd5df; }
+    .t-key { color: var(--code-key); }
     .t-eq { color: var(--text-faint); }
-    .t-str { color: #6cc5a0; }
-    .t-num { color: #e3a86d; }
-    .t-bool { color: #c9a6ff; }
+    .t-str { color: var(--code-str); }
+    .t-num { color: var(--code-num); }
+    .t-bool { color: var(--code-bool); }
     .t-punct { color: var(--text-muted); }
     .edit { display: inline-block; margin-left: 12px; min-height: 20px; line-height: 20px; padding: 0 8px; vertical-align: baseline; border-radius: var(--radius-sm); color: var(--text-faint); font-family: var(--font); font-size: var(--fs-xs); }
     .edit:hover, .edit:focus-visible { color: var(--accent-text); background: var(--panel-raised); }

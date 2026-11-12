@@ -33,6 +33,7 @@ export class SettingsPage {
   protected readonly s = this.service.settings;
 
   protected readonly platforms: readonly StudioSettings['platform'][] = ['windows', 'linux'];
+  protected readonly themes: readonly StudioSettings['theme'][] = ['system', 'light', 'dark'];
   protected readonly paths: readonly { key: PathKey; label: string; help: string }[] = [
     { key: 'neosrRoot', label: 'NeoSR root', help: 'Launch commands run from here.' },
     { key: 'experimentsRoot', label: 'Experiments root', help: 'Where NeoSR writes models, states and logs.' },
@@ -52,7 +53,7 @@ export class SettingsPage {
   protected readonly envSummary = computed(() => `${this.s().platform} · ${this.s().neosrRoot}`);
   protected readonly prefSummary = computed(() => {
     const s = this.s();
-    return [s.showKeys ? 'keys shown' : 'keys hidden', s.openSections ? 'sections open' : 'sections folded', s.inspectorDocked ? 'inspector docked' : 'inspector floating'].join(' · ');
+    return [s.showKeys ? 'keys shown' : 'keys hidden', s.openSections ? 'sections open' : 'sections folded', s.inspectorDocked ? 'inspector docked' : 'inspector floating', `${s.theme} theme`].join(' · ');
   });
   protected readonly protoSummary = computed(() => `simulated training · ${this.s().simSpeed.toLocaleString()} updates/s`);
   protected readonly gpu = computed(() => {

@@ -12,6 +12,8 @@ export interface StudioSettings {
   /** Open every Build section by default instead of showing summaries. */
   readonly openSections: boolean;
   readonly inspectorDocked: boolean;
+  /** `system` follows the OS (`prefers-color-scheme`). */
+  readonly theme: 'system' | 'light' | 'dark';
 }
 
 const KEY = 'neosr-studio.settings.v1';
@@ -25,6 +27,7 @@ const DEFAULTS: StudioSettings = {
   showKeys: false,
   openSections: false,
   inspectorDocked: true,
+  theme: 'system',
 };
 
 @Injectable({ providedIn: 'root' })

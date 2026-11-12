@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, afterNextRender, computed, effect, inject, input, output, signal, viewChild } from '@angular/core';
 import type { ScalarPoint } from '@shared/run.model';
+import { ThemeService } from '../core/theme.service';
 import { CustomChart, LineChart, type CustomSeriesOption, type LineSeriesOption } from 'echarts/charts';
 import { DataZoomComponent, GridComponent, MarkAreaComponent, MarkLineComponent, MarkPointComponent, TooltipComponent, type DataZoomComponentOption, type GridComponentOption, type TooltipComponentOption } from 'echarts/components';
 import * as echarts from 'echarts/core';
@@ -38,7 +39,10 @@ interface Prepared {
   readonly smoothValues: readonly number[] | null;
 }
 
-interface Theme {
+/** The tokens a chart draws with, read from the host's computed style. */
+interface Tokens {
+  /** Canvas cannot draw `var(--token)`: a series colour given that way becomes its value. */
+  readonly resolve: (color: string) => string;
   readonly text: string;
   readonly muted: string;
   readonly faint: string;
@@ -103,8 +107,9 @@ export class ScalarChart {
 
   private readonly plot = viewChild.required<ElementRef<HTMLDivElement>>('plot');
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+  private readonly themes = inject(ThemeService);
   private readonly chart = signal<echarts.EChartsType | null>(null);
-  private theme: Theme | null = null;
+  private readonly tokens = signal<Tokens | null>(null);
   private current: readonly Prepared[] = [];
   private domainNow: XRange = [0, 1];
   private appliedRange: XRange | null = null;
@@ -125,7 +130,7 @@ export class ScalarChart {
         return {
           key,
           label: labels[key] ?? key,
-          color: colors?.[key] ?? SERIES_PALETTE[i % SERIES_PALETTE.length] ?? '#8fbdff',
+          color: colors?.[key] ?? SERIES_PALETTE[i % SERIES_PALETTE.length] ?? '',
           points,
           raw: withGaps(points, points.map((p) => p.value), log),
           smooth: smoothValues ? withGaps(points, smoothValues, log) : null,
@@ -140,9 +145,7 @@ export class ScalarChart {
     const destroyRef = inject(DestroyRef);
     afterNextRender(() => {
       const el = this.plot().nativeElement;
-      this.theme = readTheme(this.host.nativeElement);
       const chart = echarts.init(el, undefined, { renderer: 'canvas' });
-      chart.setOption(this.baseOption());
       chart.on('datazoom', (e) => this.onZoom(e));
       const observer = new ResizeObserver(() => chart.resize());
       observer.observe(el);
@@ -153,8 +156,20 @@ export class ScalarChart {
       this.chart.set(chart);
     });
 
+    // The tokens follow the theme; the data effect below repaints with them.
     effect(() => {
       const chart = this.chart();
+      this.themes.theme();
+      if (chart) {
+        const tokens = readTokens(this.host.nativeElement);
+        chart.setOption(this.baseOption(tokens));
+        this.tokens.set(tokens);
+      }
+    });
+
+    effect(() => {
+      const chart = this.chart();
+      const tokens = this.tokens();
       const prepared = this.prepared();
       const markers = this.markers();
       const bands = this.bands();
@@ -163,12 +178,12 @@ export class ScalarChart {
       const direction = this.direction();
       const domain = this.xDomain() ?? dataDomain(prepared);
       const symbols = this.showSymbols();
-      if (!chart) {
+      if (!chart || !tokens) {
         return;
       }
       this.current = prepared;
       this.domainNow = domain;
-      chart.setOption(this.dataOption(prepared, markers, bands, log, yLabel, direction, domain, symbols), { replaceMerge: ['series'] });
+      chart.setOption(this.dataOption(tokens, prepared, markers, bands, log, yLabel, direction, domain, symbols), { replaceMerge: ['series'] });
       if (this.appliedRange) {
         chart.dispatchAction({ type: 'dataZoom', dataZoomIndex: 0, startValue: this.appliedRange[0], endValue: this.appliedRange[1] }, { silent: true });
       }
@@ -204,8 +219,7 @@ export class ScalarChart {
     this.xRangeChange.emit(range);
   }
 
-  private baseOption(): ChartOption {
-    const t = this.theme as Theme;
+  private baseOption(t: Tokens): ChartOption {
     return {
       animation: false,
       textStyle: { fontFamily: t.font },
@@ -226,14 +240,14 @@ export class ScalarChart {
     };
   }
 
-  private dataOption(prepared: readonly Prepared[], markers: readonly ChartMarker[], bands: readonly ChartBand[], log: boolean, yLabel: string, direction: 'higher' | 'lower' | null, domain: XRange, symbols: boolean): ChartOption {
-    const t = this.theme as Theme;
+  private dataOption(t: Tokens, prepared: readonly Prepared[], markers: readonly ChartMarker[], bands: readonly ChartBand[], log: boolean, yLabel: string, direction: 'higher' | 'lower' | null, domain: XRange, symbols: boolean): ChartOption {
     const lines = markers.filter((m) => m.kind === 'phase' || m.kind === 'cursor');
     const ticks = markers.filter((m) => m.kind !== 'phase' && m.kind !== 'cursor');
     const shaded = bands.map((b) => ({ ...b, from: Math.max(b.from, domain[0]), to: Math.min(b.to, domain[1]) })).filter((b) => b.to > b.from);
     const series: (LineSeriesOption | CustomSeriesOption)[] = [];
     prepared.forEach((s, i) => {
       const smoothed = !!s.smooth;
+      const color = t.resolve(s.color);
       const best = i === 0 && direction ? bestOf(s.points, direction, log) : null;
       series.push({
         type: 'line',
@@ -245,8 +259,8 @@ export class ScalarChart {
         symbolSize: 4,
         sampling: symbols ? undefined : 'lttb',
         connectNulls: false,
-        lineStyle: { width: smoothed ? 1 : 1.5, color: s.color, opacity: smoothed ? 0.35 : 1 },
-        itemStyle: { color: s.color, opacity: smoothed ? 0.35 : 1 },
+        lineStyle: { width: smoothed ? 1 : 1.5, color, opacity: smoothed ? 0.35 : 1 },
+        itemStyle: { color, opacity: smoothed ? 0.35 : 1 },
         emphasis: { disabled: true },
         z: 2,
         markLine:
@@ -282,7 +296,7 @@ export class ScalarChart {
               animation: false,
               symbol: 'circle',
               symbolSize: 8,
-              itemStyle: { color: s.color, borderColor: t.surface, borderWidth: 2 },
+              itemStyle: { color, borderColor: t.surface, borderWidth: 2 },
               // Beside the point, facing the plot: never off the canvas edge, never over the phase labels on top.
               label: { show: true, position: best.iter > (domain[0] + domain[1]) / 2 ? 'left' : 'right', distance: 5, color: t.text, fontSize: 10, formatter: `best ${formatValue(best.value)}` },
               data: [{ name: 'best', coord: [best.iter, best.value] }],
@@ -298,8 +312,8 @@ export class ScalarChart {
           showSymbol: false,
           sampling: 'lttb',
           connectNulls: false,
-          lineStyle: { width: 1.5, color: s.color },
-          itemStyle: { color: s.color },
+          lineStyle: { width: 1.5, color },
+          itemStyle: { color },
           emphasis: { disabled: true },
           z: 3,
         });
@@ -347,7 +361,7 @@ export class ScalarChart {
   }
 
   private tooltipHtml(params: unknown): string {
-    const t = this.theme as Theme;
+    const t = this.tokens() as Tokens;
     const first = (Array.isArray(params) ? params[0] : params) as { axisValue?: number | string } | undefined;
     const x = Number(first?.axisValue);
     if (!Number.isFinite(x)) {
@@ -452,10 +466,14 @@ function sameRange(a: XRange | null, b: XRange | null): boolean {
   return Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) < 1e-6;
 }
 
-function readTheme(el: HTMLElement): Theme {
+function readTokens(el: HTMLElement): Tokens {
   const css = getComputedStyle(el);
   const v = (name: string, fallback: string) => css.getPropertyValue(name).trim() || fallback;
   return {
+    resolve: (color) => {
+      const name = /^var\((--[\w-]+)\)$/.exec(color)?.[1];
+      return name ? v(name, color) : color;
+    },
     text: v('--text', '#eaeded'),
     muted: v('--text-muted', '#a9b2c1'),
     faint: v('--text-faint', '#7b8494'),

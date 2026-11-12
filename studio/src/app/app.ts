@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@a
 import { NavigationError, Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { EnvironmentService } from './core/environment.service';
 import { RunStore } from './core/run-store';
+import { ThemeService } from './core/theme.service';
 import { UiModeService } from './core/ui-mode.service';
 import { Icon } from './ui/icon';
 import { ToastService } from './ui/toast.service';
@@ -53,6 +54,7 @@ export class App {
   private readonly router = inject(Router);
 
   constructor() {
+    inject(ThemeService);
     void this.env.load();
     void this.runs.refresh().catch(() => undefined);
     setInterval(() => void this.runs.refresh().catch(() => undefined), 10_000);

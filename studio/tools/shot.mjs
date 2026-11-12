@@ -1,14 +1,15 @@
 // Headless screenshot at an exact viewport (phone sizes included) through the Chrome DevTools
-// protocol. Usage: node tools/shot.mjs <url> <out.png> [width] [height] [waitMs] [scrollY]
+// protocol. Usage: node tools/shot.mjs <url> <out.png> [width] [height] [waitMs] [scrollY] [dark|light]
+// The last argument is the system colour scheme the page sees (the Studio theme follows it by default).
 // Needs Chrome; no npm dependencies (Node ≥ 22 has WebSocket).
 import { spawn } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const [url, out, w = '390', h = '844', waitMs = '4000', scrollY = '0'] = process.argv.slice(2);
+const [url, out, w = '390', h = '844', waitMs = '4000', scrollY = '0', scheme = 'dark'] = process.argv.slice(2);
 if (!url || !out) {
-  console.error('usage: node tools/shot.mjs <url> <out.png> [width] [height] [waitMs] [scrollY]');
+  console.error('usage: node tools/shot.mjs <url> <out.png> [width] [height] [waitMs] [scrollY] [dark|light]');
   process.exit(2);
 }
 const chrome = process.env['CHROME'] ?? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
@@ -56,6 +57,7 @@ async function main() {
     });
   await send('Emulation.setDeviceMetricsOverride', { width: Number(w), height: Number(h), deviceScaleFactor: 2, mobile: Number(w) < 720 });
   await send('Emulation.setTouchEmulationEnabled', { enabled: Number(w) < 720 });
+  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] });
   await send('Page.enable');
   await send('Page.navigate', { url });
   await sleep(Number(waitMs));

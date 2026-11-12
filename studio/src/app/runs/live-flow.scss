@@ -100,7 +100,7 @@
 
     &:hover {
       border-color: var(--border-strong);
-      background: color-mix(in srgb, var(--panel-raised) 92%, #fff);
+      background: color-mix(in srgb, var(--panel-raised) 92%, var(--text));
     }
   }
 

@@ -96,7 +96,7 @@ input[type='range'] {
     width: 32px;
     height: 18px;
     border-radius: 999px;
-    background: #3a4352;
+    background: var(--switch-track);
     transition: background var(--tempo) var(--ease);
   }
 
@@ -107,7 +107,7 @@ input[type='range'] {
     width: 14px;
     height: 14px;
     border-radius: 50%;
-    background: #cfd5df;
+    background: var(--switch-thumb);
     transition: transform var(--tempo) var(--ease);
   }
 

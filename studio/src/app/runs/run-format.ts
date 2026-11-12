@@ -3,10 +3,11 @@ import type { Recipe } from '@shared/recipe.model';
 import { METRIC_INFO, type RunPhaseInfo, type RunStatus, type ScalarPoint } from '@shared/run.model';
 
 /**
- * Categorical series hues (derived from the token set). Order chosen with the dataviz palette
- * validator so adjacent slots stay apart for normal vision; legends always name each series.
+ * Categorical series hues: the `--series-N` tokens, one set per theme (`styles/_tokens.scss`), so
+ * a slot keeps its hue family in both. Order chosen with the dataviz palette validator so adjacent
+ * slots stay apart; legends always name each series. Canvas code resolves the `var()` first.
  */
-export const SERIES_PALETTE: readonly string[] = ['#8fbdff', '#e3a86d', '#6cc5a0', '#c9a6ff', '#c9b458', '#f2b8c6'];
+export const SERIES_PALETTE: readonly string[] = [1, 2, 3, 4, 5, 6].map((n) => `var(--series-${n})`);
 
 export type StatusTone = 'running' | 'ok' | 'warn' | 'danger' | 'neutral';
 
