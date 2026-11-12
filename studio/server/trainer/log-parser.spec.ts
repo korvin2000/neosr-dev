@@ -156,6 +156,17 @@ describe('TrainerLogParser on synthetic lines', () => {
     expect(parser.outcome).toBe('stopped');
   });
 
+  it('stamps a record line with the update it reports, not the previous one', () => {
+    const { events } = parse([
+      `${TS} INFO: [ epoch:   0 ] [ iter:     200 ] [ performance: 9.100 it/s ] [ lr: 2.00e-04 ] [ eta: 0:01:00 ] [ l_g_total: 1.0000e+00 ] `,
+      `${TS} INFO: [ epoch:   0 ] [ iter:     250 ] [ performance: 9.100 it/s ] [ lr: 2.00e-04 ] [ eta: 0:00:55 ] [ l_g_total: 1.0000e+00 ] `,
+      `${TS} INFO: stop requested: saving update 305`,
+      `${TS} INFO: Stopped at update 305. Time consumed: 0:01:17`,
+    ]);
+    expect(ofType(events, 'log').map((e) => e.native)).toEqual([200, 250, 305, 305]);
+    expect(events.findIndex((e) => e.body.type === 'log')).toBe(0); // the line still comes before what it reports
+  });
+
   it('treats "nothing to do" as completed and reports the restored update', () => {
     const { parser, events } = parse([`${TS} INFO: nothing to do: update 20000 >= total_iter 20000`]);
     expect(parser.outcome).toBe('completed');

@@ -87,7 +87,7 @@ Log line → event (the clock is the trainer's update, mapped to the curriculum 
 
 Not in the trainer's console output, so absent from real runs: GPU utilisation (`system.gpuUtil` is null; VRAM comes from `mem` on CUDA runs), validation images and per-image metrics, the current update on validation lines (taken from the last progress line), checkpoint sizes before the first save and for `net_g_best_*`.
 
-Open points of the experimental adapter: Windows has no graceful stop (Node cannot send it SIGINT) and cannot verify an orphan's pid; `num_gpu > 1` is refused instead of launched with `torchrun`; the library, the dataset scan and validation images stay mocked; nothing ran yet against the real `train.py` (only a fake process and recorded output).
+Open points of the experimental adapter: Windows has no graceful stop (Node cannot send it SIGINT) and cannot verify an orphan's pid; `num_gpu > 1` is refused instead of launched with `torchrun`; the library, the dataset scan and validation images stay mocked. Runs against the real `train.py`: stop and resume end to end on the CPU (Windows), and one GPU lifecycle run on the RTX 4090 (2026-11-12: realplksr ×4 + metagan with the template objective, 600 updates, launch, live events, graceful stop at 305, resume from `305.state`, completion, exports, lock released).
 
 ## Procedural validation images
 

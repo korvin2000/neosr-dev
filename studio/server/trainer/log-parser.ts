@@ -80,8 +80,11 @@ export class TrainerLogParser {
       }
       this.closeBlocks(out, level !== 'error');
       this.level = level;
+      // parse first so the line carries the update it reports (`[ iter: 250 ]` is logged at 250), then emit it ahead of its events
+      const reported: ParsedEvent[] = [];
+      this.record(message, level, reported);
       this.emit(out, { type: 'log', level, line: message });
-      this.record(message, level, out);
+      out.push(...reported);
       return out;
     }
     if (!line.trim()) {
