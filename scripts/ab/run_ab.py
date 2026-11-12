@@ -5,7 +5,9 @@ setup_runtime, prepare_run, train) and log, beside the run, what scripts/ab/anal
                      mem_gib = the window's peak allocated VRAM (the [ mem ] of the log line)
     metrics.jsonl    every validation event: dataset means
     per_image.jsonl  every validation event: one row per image (id = path below the dataroot)
-    done.json        only after the final validation of every val dataset: seconds, peak VRAM
+    done.json        only after the final validation of every val dataset: seconds, run_peak_gib
+                     (this process's peak VRAM: the start-up transient), steady_mem_gib (the
+                     median window peak of train.jsonl: the working set; None without mem_gib)
 
     python scripts/ab/run_ab.py <repo> <config.toml> <out_dir> [--resume]
 
@@ -20,6 +22,7 @@ import argparse
 import importlib
 import json
 import os
+import statistics
 import sys
 import time
 from pathlib import Path
@@ -140,6 +143,15 @@ def final_datasets(out: Path, total: int) -> set[str]:
         return {r["dataset"] for r in map(json.loads, f) if r["iter"] == total}
 
 
+def steady_mem(out: Path) -> float | None:
+    """The median of train.jsonl's window peaks (mem_gib): the working set, without the start-up
+    transient that sets the run's peak."""
+    with (out / "train.jsonl").open(encoding="utf-8") as f:
+        rows = map(json.loads, filter(str.strip, f))
+        mem = [r["mem_gib"] for r in rows if "mem_gib" in r]
+    return statistics.median(mem) if mem else None
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="train one A/B arm with per-image logging")
     ap.add_argument("repo", type=Path, help="checkout whose code trains")
@@ -199,11 +211,13 @@ def main(argv=None) -> int:
     done = {
         "seconds": time.time() - rec.t0,
         "update": total,
-        # a trainer that resets the peak per log window keeps the run's peak in run_peak_memory
-        "peak_mem_gib": getattr(
+        # the process's peak, start-up included (a trainer that resets the peak per log window
+        # keeps it in run_peak_memory); done.json of older runs name it peak_mem_gib
+        "run_peak_gib": getattr(
             logger, "run_peak_memory", torch.cuda.max_memory_allocated
         )()
         / 2**30,
+        "steady_mem_gib": steady_mem(out),
     }
     tmp = out / "done.json.tmp"
     tmp.write_text(json.dumps(done), encoding="utf-8")

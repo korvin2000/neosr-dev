@@ -387,6 +387,31 @@ def test_diagnostics_speed_and_memory(tmp_path):
     assert d["mem_gib"] == {"first": 12.5, "steady": 4.7, "max": 12.5}
 
 
+def test_done_json_run_peak_and_steady(tmp_path):
+    """done.json names the run's peak (start-up included) run_peak_gib beside the steady median
+    of the window peaks; analyze reads a finished run's older peak_mem_gib as run_peak_gib."""
+    from scripts.ab.run_ab import steady_mem  # ruff: ignore[import-outside-top-level]
+
+    (tmp_path / "a").mkdir()
+    train = tmp_path / "a" / "train.jsonl"
+    rows = [
+        {"iter": 100, "mem_gib": 12.75},  # the start-up window
+        {"iter": 200, "mem_gib": 4.7},
+        {"iter": 300},
+        {"iter": 400, "mem_gib": 4.71},
+    ]
+    train.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    assert steady_mem(tmp_path / "a") == pytest.approx(4.71)
+    new = {"run_peak_gib": 12.75, "steady_mem_gib": 4.71}
+    for done in ({"peak_mem_gib": 12.75}, new):
+        (tmp_path / "a" / "done.json").write_text(json.dumps(done))
+        d = diagnostics(tmp_path, "a")
+        assert d["run_peak_gib"] == pytest.approx(12.75)
+        assert "peak_mem_gib" not in d
+    train.write_text('{"iter": 100}\n')
+    assert steady_mem(tmp_path / "a") is None
+
+
 def test_run_ab_records_the_window_peak(tmp_path, monkeypatch):
     """run_ab's hooks put the [ mem ] peak train.py reads just before get_current_log into that
     log row, once; every patched attribute is restored after the test."""

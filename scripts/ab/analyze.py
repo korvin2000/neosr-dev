@@ -292,7 +292,11 @@ def diagnostics(runs: Path, arm: str) -> dict:
             "max": max(mem),
         }
     if (done := runs / arm / "done.json").exists():
-        out |= json.loads(done.read_text(encoding="utf-8"))
+        rec = json.loads(done.read_text(encoding="utf-8"))
+        # runs finished before steady_mem_gib name the same run peak peak_mem_gib
+        if "peak_mem_gib" in rec:
+            rec["run_peak_gib"] = rec.pop("peak_mem_gib")
+        out |= rec
     return out
 
 
