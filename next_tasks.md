@@ -28,7 +28,7 @@ what does not depend on the recipe (sweep of all open items, 2026-11-12: 39 inde
 | 1 | Compile pair, `compile_parity.py` | **done**: B0_compile+Bc_s2 vs B0+B0s2, window 12k-20k: TIE, all four metrics inside tau (PSNR -0.029, LPIPS -0.0012); `scripts/compile_parity.py` (021b8c36) PASS on its first GPU run, with and without `--fallback-random` (metagan D rho 0.94 vs bound 0.97 without). Real-run speed: compiled 10.5-11.0 it/s vs eager 10.5-11.7 (no consistent gain), bench.py 85.5 vs 104.6 ms (-18 %): bench's eager path is slower than the trainer's loop (open: why) |
 | 2 | 4K validation pass, D7 | **done**: one 4K image, five metrics: 3.0 s, peak 9.02 GiB; DISTS 8.59 / TOPIQ 5.97 GiB above their nets (measured); readme documents the limit |
 | 3 | Batch sweep, unverified numbers | **done**: template eager b8 104.6 ms 3.19 GiB (76 img/s), b16 161.7 ms 5.88 GiB (99 img/s), b32 323 ms 11.2 GiB (99 img/s); warm-up peak = steady peak (no transient without DISTS). T-05: bf16 autocast gives realplksr inference no speed-up (4K: 432 vs 395 ms fp32), -16 % memory. T-12: a save costs <= 0.9 s (<= 0.2 %): async save not needed. D-06 gain not re-measured (needs the old loader path) |
-| 4 | Studio GPU lifecycle run (D8) | **done**: PASS on the 4090 through the HTTP API (launch 3 s, live progress/scalars/`[ mem ]`/validation/checkpoint events, graceful stop at 305 in 2.2 s, resume from 305, finish at 600, lock released); one adapter bug fixed (log lines stamped with the previous update). Lifting the "experimental" label is the owner's call (D8) |
+| 4 | Studio GPU lifecycle run (D8) | **done**: PASS on the 4090 through the HTTP API (launch 3 s, live progress/scalars/`[ mem ]`/validation/checkpoint events, graceful stop at 305 in 2.2 s, resume from 305, finish at 600, lock released); one adapter bug fixed (log lines stamped with the previous update). the owner dropped the "experimental" label (2026-11-13) |
 | 5 | A/B tooling | **done** (8cea4fa1-683b2433): queue.sh checks a line before it leaves the file and flocks the queue file; done.json `run_peak_gib` + `steady_mem_gib`. D10 calibration: no arm dropped at 8k was fine at 20k; 3 of 4 8k TIEs ended LOSS (`experiments/s10/NOTES.md`) |
 | 6 | Checkpoints | **done** (d3e45167, 60e4b977): save before validation when both fall on one update; readme: format-1 states do not resume |
 | 7 | Loader docs | **done** (d3e45167): readme `--bits8`, worker sizing; no code change (ANYDEPTH would not be faster) |
@@ -158,14 +158,13 @@ detectable quality difference at 8k). No default changed (`stage2/DECISIONS.md` 
 L-15 (only if FDL grid artifacts show), D-16 (with OTF). Deferred: the seven arch-specific findings, ST-14, L-16.
 
 ## 5. Studio (owner priority 2)
-State: recipe model, compiler, validator; an **experimental real mode** (`STUDIO_TRAINER=real`, launched with
+State: recipe model, compiler, validator; a **real mode** (`STUDIO_TRAINER=real`, launched with
 `npm run api:real`; the simulator stays the default) that runs `train.py` per phase in its own
 `<name>_<run id>` folders with a pid lock, graceful stop/resume from the run's own newest state, live log events
 (progress, scalars incl. GAN health, `lr_d`, `[ mem ]` as system events, validation, checkpoints). Verified end to
-end on CPU only. The catalog is checked against the trainer's constructor signatures (S.11), preset-bound
+end on the CPU and on the RTX 4090 (D8, 2026-11-12). The catalog is checked against the trainer's constructor signatures (S.11), preset-bound
 parameters are read-only and blocked by the validator.
-Next: one GPU run through the real mode; the deferred UI items of `design/NeoSR_Studio_UI_Concept_v2.md`
-section 7; ONNX capability badges from `no_onnx` / `onnx_static_only`. The OTF keys stay out (track parked).
+Next: the deferred UI items of `design/NeoSR_Studio_UI_Concept_v2.md` section 7 (ONNX badges done). The OTF keys stay out (track parked).
 Checks: `npm run typecheck`, `npx ng test --watch=false`, `npm run test:server`, `npm run contract`.
 
 ---

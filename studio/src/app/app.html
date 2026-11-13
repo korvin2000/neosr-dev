@@ -6,7 +6,9 @@
 
   <span class="spacer"></span>
 
-  <span class="sim" appTooltip="Training is simulated in this prototype; configs and TOML are real">Simulated</span>
+  @if (env.info()?.simulated !== false) {
+    <span class="sim" appTooltip="Training is simulated in this prototype; configs and TOML are real">Simulated</span>
+  }
 
   @if (activeRuns() > 0) {
     <a class="pill pill--live" routerLink="/runs" [appTooltip]="activeRuns() + ' run(s) in progress'">
