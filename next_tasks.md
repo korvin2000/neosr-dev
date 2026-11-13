@@ -44,6 +44,52 @@ what does not depend on the recipe (sweep of all open items, 2026-11-12: 39 inde
 Parked by the owner: OTF realism (`docs/refactor/stage3/otf/DESIGN.md`), all of stage-3 Phase B. Deferred:
 section 6 (pyvips), L-16, ST-14 (trigger: a run past `wavelet_init`), D-16 (with OTF).
 
+## Where we are (2026-11-13) and what comes next
+
+Read this first. The strategy study is done (`docs/refactor/stage3/strategy/STUDY.md`, session 11 in
+`docs/refactor/stage3/PROGRESS.md`); the next step waits for the owner's answers to STUDY.md section 6. Nothing is
+pushed: every commit after `origin/master` (from b622affe on, 55 with session 11) is local on `master`.
+
+| stage | state |
+|---|---|
+| 1. Stable core and strategy-independent work | mostly done (ranks 1-9 above); the reliability tranche below is open |
+| 2. Study of the community material (`/home/korvin/apps/Trainings`) | **done** 2026-11-13 |
+| 3. Calibration of the judges and zero-training reads | next; waits for the owner's "yes" |
+| 4. A/Bs of tactics | on hold (owner, 2026-11-12) |
+| 5. Long run, default changes | only by the owner |
+
+Proposed order (STUDY.md section 5; each step needs the owner's word):
+
+| step | what | GPU-h | why |
+|---|---|---|---|
+| 0 | zero-training reads: term magnitudes and gradient shares over the kept checkpoints (`scripts/term_grads.py`; G2-Q1), metric agreement inside one run (G5-Q1), null RMS vs set size (G5-Q7) | minutes | every weight question needs the scale; nobody in the KB has measured it |
+| gate | calibration record: FR defect sensitivity on dev GT (G5-Q3) + one blind owner session on the visual set (`docs/refactor/stage3/r3gan/RESULTS.md:17`); tools F2 (offline folder scorer) and F13 (blind crop sheets) | ~0 | all D10 verdicts rest on TOPIQ/LPIPS; dev and val8 rank the arms differently |
+| 1 | the held arms T_DISTS_s2, T_DISTS_noFDL (`experiments/s10/queue2.held.txt`) + FDL off without DISTS | ~2.4 | the strongest local signal; can DISTS replace the costly FDL |
+| 2 | second seed of the finalist if needed, then the matched long pair A0 + finalist 20k -> 100k | 5-6.85 | no default changes without it; tests whether the 12k-20k window predicts a long run |
+| 3 | D regime: D LR (G3-Q4), GAN weight 0.1/0.2 (G3-Q1), slow D x DISTS (G3-Q11) | ~4.0 | config only; release 2x and the owner's run both use a slow D |
+| 4 | pixel anchor (G2-Q5), feature term FDL-DINOv2 / FDL-VGG / VGG / DISTS (G2-Q6) | ~3.0 | the sources split exactly here |
+| parallel | reliability tranche: load audit + run manifest (F14), step-0 validation (F7), resume with changed crop/batch (F21), smoke preset + failure record (F22), export parity (F28), per-image rows from plain runs (F4), config warnings (F8), data preflight + leak detector (F9, F10), the bench.py vs trainer eager gap | 0 | the owner's first priority: a stable, reliable core |
+
+Owner decisions blocking the next step (STUDY.md section 6, short form): (1) data scope: clean x4 only, or a
+resize-only LQ generator, or degraded LQ (the community's main detail lever; touches the parked OTF track);
+(2) how far to lift the hold; (3) reliability tranche vs research tools vs Studio first; (4) final judge: metrics
+or metrics + one blind eye check, one model or a fidelity/detail pair with an alpha dial; (5) which judge decides a
+mixed result; (6) fidelity tolerance (weak or no pixel term allowed?); (7) D regime and what counts as damping;
+(8) long pair across 80k as planned vs wavelet isolated first; LR decay; LDL; (9) protocol extensions (forks,
+ladders, matched budget, "magnitude-matched"); (10) data assets (untiled originals, real LQ, cleaner HR); (11) people
+content: what must stay faithful; (12) new losses/D features now or after measurements.
+
+Facts the study surfaced about neosr-dev (nothing changed; small exact fixes need no prior ask, the rest the
+owner's word): `chc_loss` defaults clip errors below 1/255 and fix eps 1e-12 (`neosr/losses/basic_loss.py:170-172`,
+`:204`); metagan's GroupNorm cancels its spectral norm (`docs/refactor/stage3/discriminator/RESEARCH_REVIEW.md:103-126`);
+A/B arms fine-tune at 2e-4 while `docs/training_guide.md:45` says 1e-4; no template decays the LR; `wavelet_guided`
+(82 templates) never ran past its 80k switch; `ff_loss` `ave_spectrum = true` (upstream false); `ldl_loss` default
+criterion `l1` vs its docstring's huber; validation and exports are EMA-only; per-image rows only via
+`scripts/ab/run_ab.py`; `stage3/competitor/CONSENSUS_DRAFT.md` and `training_infra.md` are out of date.
+
+Local-only material (gitignored, not in any commit): `experiments/study/` (claim JSON, topic bundles: rebuildable
+from the KB), `experiments/s10/` (runs, `NOTES.md`, consults, held queue), `experiments/s9_ab/`.
+
 ## 0. Rules of the house (they caused friction once already)
 - **The owner sets the priorities.** Do not promote a track because a document calls it a goal; when the next step
   is not named here, ask. (`AGENTS.md`, `docs/refactor/STATUS.md` "Owner priorities".)

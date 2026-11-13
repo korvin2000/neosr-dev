@@ -481,3 +481,51 @@ and 14:41 (the queue tail, the LDL flip held). Source log: `experiments/s9_ab/NO
   lifecycle run PASS, log lines stamped with their own update (c3451d87, b87da21b).
 - **Checks:** fast CPU subset 1887 passed, 18 skipped, 0 failed (after the core lanes); Studio typecheck, 43 + 37
   tests, contract, surface current. The full CPU + CUDA suite was not rerun.
+
+### Session 11 (2026-11-13, Linux machine): Studio label, the Trainings knowledge base, the training-strategy study
+- **Owner decisions:** Studio real mode is no longer experimental (D8 lifted; 492d8c89: docs, and the top-bar
+  "Simulated" badge now follows `/api/environment`'s `simulated` flag). The community material lives in the owner's
+  knowledge base `/home/korvin/apps/Trainings` (own `CLAUDE.md`, index, `tools/kb.py`; not a git repo): **linked, not
+  copied** (`AGENTS.md` pointer, def6413b; read it, never edit it from here). "Start studying" (2026-11-13). The hold
+  on tactic selection stays until the owner answers `strategy/STUDY.md` section 6.
+- **The study (9139bb2e):** `stage3/strategy/STUDY.md` (summary, evidence ceiling, community vs local table, framework
+  backlog F1-F34 with a reliability-first lens, research plan in tiers A-D with a calibration gate, 12 owner
+  decisions, Codex review record) and five topic sections `stage3/strategy/topics/g1..g5_*.md` (each with its
+  Verification part). Method, three workflows:
+  1. 7 readers: KB slices A (PG + FOCUS), B (digests PH/RP/SX/SKT, the PH release stacks, SKL/SKG), C (digests
+     RG/DX/PF/FG, numbers re-checked at source), D (DR, NL, NO, SI, SL, TG), E (NP, HB) -> 991 claims; a neosr-dev
+     capability map (93 rows) and a local-evidence map (46 findings, the owner's recipe in 29 components). Claim JSON
+     `experiments/study/claims/`, per-topic bundles `experiments/study/bundles/` (gitignored, local only).
+  2. Per topic: Fable synthesis -> Opus (xhigh) adversarial verifier: ~740 KB anchors and ~300 code/doc claims
+     opened, 108 corrections applied in place.
+  3. Fable writer -> Opus critic -> Codex (gpt-6.1-sol, read-only): 8 findings, 7 applied (STUDY.md section 8).
+  Cost ~5.1 M subagent tokens, ~68 min wall; no GPU.
+- **What the material gives** (details and anchors in STUDY.md sections 1-3): no controlled ablation with numbers
+  anywhere; the hardest facts are three release configs of one author (PH:707-716, PH:604-611, PH:814-823; redux
+  scale, 1x/2x, degraded data; no x4). Portable methods, not recipes: measure per-term magnitude instead of copying
+  weights (agrees with our FDL 0.75 -> 0.02 history); select checkpoints by several metrics plus one blind eye
+  check; score raw and EMA; interpolate weights as a fidelity-detail dial. The community's main detail lever is the
+  degradation (blur_prob 0.85, mild sigma, PH:741-745), which our clean x4 data cannot test (OTF parked). DISTS is the
+  largest perceptual term of the detail release, matching our only positive signal (T_DISTS, one seed). A slow D
+  (2x release D 5x below G, the owner's run 40x) points at a cheap config arm (G3-Q4). No source shows which metric
+  matches the eye on micro-texture.
+- **neosr-dev facts surfaced by the verification** (nothing changed; candidates for the owner): template G gradient
+  is FDL 81.2 % + GAN 16.5 %, LDL 0.000 % (`PROGRESS.md:428-430`); metagan's GroupNorm cancels its spectral norm
+  (`stage3/discriminator/RESEARCH_REVIEW.md:103-126`); `chc_loss` defaults clip errors below 1/255 (not plain
+  Charbonnier, `neosr/losses/basic_loss.py:170-172`) and fix eps 1e-12; every A/B arm fine-tunes at 2e-4 although
+  `docs/training_guide.md:45` says 1e-4; no template decays the LR while every release does; `wavelet_guided` ships in
+  82 templates and no run ever crossed `wavelet_init = 80000`; `ff_loss` defaults `ave_spectrum = true` (upstream
+  false); `ldl_loss` default criterion `l1` (docstring says huber); validation and exports are EMA-only (no raw-G
+  scoring); per-image rows exist only through `scripts/ab/run_ab.py`; no NR metric; `save_best` takes one metric;
+  `stage3/competitor/CONSENSUS_DRAFT.md` and `training_infra.md` list as missing several items that now exist.
+- **Proposal (owner decides):** zero-training reads (term shares via `scripts/term_grads.py`, metric agreement,
+  null vs set size) -> a recorded calibration gate (FR defect sensitivity + one blind owner session on the visual set)
+  -> the two held arms + the FDL-off cell (~2.4 GPU-h) -> confirm the finalist and the matched long pair (5-6 h) ->
+  D regime, pixel anchor, feature term (~7 GPU-h); in parallel the reliability tranche (load audit, manifest, step-0
+  validation, smoke preset, export parity, the bench.py vs trainer eager gap). The decisive strategic question:
+  stay on clean x4 or admit degraded LQ.
+- **Lessons:** a Codex pass on the finished plan caught four real errors the per-topic verifiers could not see (a
+  rank rule biased toward the study's own question list, a "first" calibration step nothing depended on, a wrong
+  confound argument about the 80k wavelet switch, a double-counted A/B cell): keep an independent review on every
+  plan. Workflow mechanics: read results from the run's `journal.jsonl`; pass bulk data between workflows as files
+  (claims, bundles), not as return values; one bundle per topic keeps each synthesis agent under ~90k tokens.
