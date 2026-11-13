@@ -19,7 +19,11 @@ pixel + colour anchor, a weak slow D; half its listed losses were inert). The GP
 
 **On hold (owner, 2026-11-12):** no selection or tuning of training strategies or tactics (losses and weights, D and
 GAN type, R1/R2, clip mode, LDL, DISTS/FDL, LR, pretrain policy, `wavelet_init`, template defaults, recipe A/Bs, the
-long pair) until the owner hands over the community material on photoreal training and it is studied. Held:
+long pair) until the owner hands over the community material on photoreal training and it is studied. **Study
+done 2026-11-13:** `docs/refactor/stage3/strategy/STUDY.md` (the Trainings KB at `/home/korvin/apps/Trainings`
+against neosr-dev's code and A/B evidence; five verified topic sections in `strategy/topics/`; a framework
+backlog F1-F34 with a reliability-first lens, a tiered research plan with a calibration gate, 12 owner decisions
+in its section 6). The hold stays until the owner answers those decisions. Held:
 `experiments/s10/queue2.held.txt` (T_DISTS_s2, T_DISTS_noFDL), sections 3.1-3.2 below, D10 ranks 4-5. Work only on
 what does not depend on the recipe (sweep of all open items, 2026-11-12: 39 independent, 23 borderline, 12 tactic):
 

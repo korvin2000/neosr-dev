@@ -67,7 +67,9 @@ queue (20k extensions, the DISTS arms, the owner's recipe in neosr terms) runs f
 (`scripts/ab/analyze.py --window/--null`), straight new arms, promote only leaders. **Later on 2026-11-12 the
 owner put all selection or tuning of training strategies and tactics on hold** until the community material on
 photoreal training they are gathering has been studied; the D10 arms are held (`experiments/s10/queue2.held.txt`),
-and the work is the strategy-independent list in `next_tasks.md`.
+and the work is the strategy-independent list in `next_tasks.md`. **2026-11-13: the study is done**
+(`stage3/strategy/STUDY.md`: framework backlog, tiered research plan, 12 owner decisions); the hold stays until
+the owner decides.
 
 **What "the core" means (owner, 2026-11-10, `DECISIONS.md`):** the training framework and its ecosystem
 (losses, metrics, schedulers, optimizers, the GAN implementations, utilities), its speed and stability, as the
